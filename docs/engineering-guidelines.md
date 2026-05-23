@@ -19,6 +19,48 @@ When modifying complex systems:
 4. Apply the smallest correct fix.
 5. Run regression tests.
 
+## Next Major Version Guardrails
+
+The next major version is a context-aware visual analytics workspace, not a new app. Preserve FastAPI, Jinja, vanilla JavaScript, SQLite where useful, and the existing CSS architecture.
+
+- Do not introduce React, Vue, Tailwind, or a new visual framework.
+- Do not add IT, security, alert, incident, client, mailbox, vendor, scanner, webhook, escalation, threat, severity, or scoring language.
+- Do not hard-code the current blue theme.
+- Keep the current Apple-glass dashboard personality.
+- Treat widgets, panels, context panels, and command surfaces as universal dashboard objects unless explicitly locked.
+- Keep grid behavior deterministic, sparse, reversible during preview, and committed only at interaction end.
+- Keep context propagation deterministic and testable.
+- Add new systems behind small modules rather than scattered event listeners.
+
+Recommended next-version frontend modules:
+
+- `dashboard-state.js`
+- `widget-registry.js`
+- `widget-renderer.js`
+- `panel-controller.js`
+- `grid-engine.js`
+- `drag-controller.js`
+- `resize-controller.js`
+- `context-engine.js`
+- `filter-engine.js`
+- `data-source-registry.js`
+- `query-engine.js`
+- `computed-field-engine.js`
+- `transform-pipeline.js`
+- `engineer-mode.js`
+- `link-renderer.js`
+- `persistence.js`
+- `toolbar-controller.js`
+
+Recommended future platform modules:
+
+- `auth-service.py`
+- `session-service.py`
+- `permission-service.py`
+- `workspace-membership-service.py`
+- `audit-log-service.py`
+- `sharing-service.py`
+
 ## CSS Architecture
 
 - Keep selector specificity shallow and predictable. Avoid long descendant chains unless matching existing dashboard control patterns.
@@ -66,6 +108,29 @@ When modifying complex systems:
 - Event listeners should have narrow scope, predictable teardown, and no accidental cross-feature coupling.
 - Do not let tool drawers, popovers, or menus implicitly control unrelated dashboard state.
 - Keep localStorage keys centralized and versionable enough to change safely later.
+
+For the context-aware version:
+
+- Keep widget registry definitions separate from widget rendering.
+- Keep context propagation separate from filter application.
+- Keep data adapters separate from widget rendering.
+- Keep query execution separate from visual field-mapping controls.
+- Keep formulas sandboxed; never evaluate arbitrary JavaScript from user input.
+- Keep source credentials and secrets out of browser-visible payloads.
+- Keep Engineer Mode link drawing separate from context state.
+- Keep toolbar command handling separate from persistence.
+- Never let DOM hover state become the source of truth for context, layout, or links.
+
+For the multi-user version:
+
+- Never rely on frontend hiding for permissions.
+- Enforce workspace, role, object, data source, and Engineer Mode permissions server-side.
+- Keep session/auth logic separate from dashboard rendering.
+- Keep permission evaluation centralized and testable.
+- Treat Viewer mode as read-only at the API layer, not just the UI layer.
+- Do not expose credentials, provider secrets, refresh tokens, or data source secrets to the browser.
+- Auth, sharing, and permissions UI must reuse the existing glass controls and avoid generic admin styling.
+- Read `docs/authentication-system.md`, `docs/permissions-model.md`, `docs/workspace-sharing.md`, and `docs/security-guidelines.md` before implementing auth or collaboration.
 
 ## Performance
 

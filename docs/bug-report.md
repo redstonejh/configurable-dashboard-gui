@@ -51,6 +51,17 @@ Use this checklist when filing or closing a UI bug:
 - Menus/popovers are not clipped and layer above panels.
 - Text and icons remain centered at desktop and mobile widths.
 
+## Next Major Version Bug Watchlist
+
+The context-aware visual analytics workspace adds new failure modes. Track any issue here as soon as it is discovered and add a regression test before fixing it.
+
+- Widget registry regressions: wrong default size, wrong capabilities, broken create/delete, or renderer output that drifts from existing widget styling.
+- Context propagation regressions: stale filters, incorrect inheritance, conflicting context precedence, or collapsed panels breaking child context.
+- Panel context attachment regressions: header/chevron drops that corrupt layout, attach invalid context, or leave badges out of sync.
+- Engineer Mode regressions: handles interfering with drag/resize/menu controls, links clipping behind panels, stale link routes after movement, or deleted links continuing to filter targets.
+- Toolbar and command-surface regressions: hard-coded colors, default browser controls, poor dark-mode parity, icon misalignment, or stretched ungrouped controls.
+- Universal object regressions: command surface, graphs, tables, calendars, widgets, and panels not sharing grid occupancy, pinning, sparse placement, save/load, or resize rules.
+
 ## Issue Log
 
 ### Automated Run Summary
@@ -61,11 +72,48 @@ Command:
 .venv\Scripts\python.exe -m pytest -q
 ```
 
-Latest result: 26 passed, 0 failed.
+Latest result: 34 passed, 0 failed.
 
 Previous discovery result: 6 passed, 3 failed.
 
-Passed coverage included app/dashboard/settings load, CSS imports, theme persistence, theme-aware timeframe controls, timeframe resize, small-panel menu overlays, panel placeholder/body sizing, drag ghost creation, ordered drag reflow, local top insertion, reversible collision previews, suppression of underlying hover menus during drag, global widget/panel occupancy, pinned item protection, pin menu close behavior, sparse empty-space placement, grid-bound drag clamping, grid snapping alignment, collision/overlap checks, resize snapping, menu icon alignment, dark-mode panel hover parity, dark-mode panel/widget menu parity, group mode, layout save/load/reset, settings save, mobile overflow checks, console errors, and network errors.
+Passed coverage included app/dashboard/settings load, CSS imports, theme persistence, background preset persistence, secondary surface glass-language screenshots, workspace toolbar command-island screenshots, toolbar mode toggles, generic Add Widget menu options, theme-aware timeframe controls, timeframe resize, timeframe minimum resize clamping, exact layout save/load round trips, small-panel menu overlays, panel placeholder/body sizing, drag ghost creation, ordered drag reflow, local top insertion, reversible collision previews, suppression of underlying hover menus during drag, global widget/panel occupancy, pinned item protection, pin menu close behavior, sparse empty-space placement, grid-bound drag clamping, grid snapping alignment, collision/overlap checks, resize snapping, menu icon alignment, dark-mode panel hover parity, dark-mode panel/widget menu parity, group multi-selection, grouped drag, grouped proportional resize, pinned items inside groups, mixed widget/panel group transforms, group mode, layout save/load/reset, settings save, mobile overflow checks, console errors, and network errors.
+
+### BUG-023: Secondary App Surfaces Felt Disconnected From Dashboard Glass Language
+
+- Status: Verified
+- Area: Theme / settings / forms / menus / popovers
+- Severity: Medium
+- Environment: Chromium via Playwright, 1440x1000 viewport, light and dark themes with background presets
+- Observed: Dashboard widgets and top-bar controls had a stronger visual language than settings forms, secondary controls, utility sections, dropdowns, popovers, and modal-like dialogs. Those surfaces felt flatter and less integrated.
+- Expected: Settings pages, forms, dropdowns, submenus, popovers, dialogs, utility panels, save bars, and secondary cards use the same Apple-glass surface language, spacing rhythm, shadow treatment, rounded geometry, theme-aware hover/focus behavior, and tactile control polish as the dashboard.
+- Suspected cause: Earlier polish focused on dashboard widgets/panels and top toolbar controls, while generic form/menu styles still used flatter surface and input rules.
+- Fix notes: Added shared glass/field/control tokens, unified secondary surface styling, polished settings form sections and save bar, upgraded dialog/menu/dropdown surfaces, and added a background tone picker that separates accent color, background tone, and light/dark mode.
+- Screenshots: `test-results/workspace-visual-language/dashboard-light-blue-mist.png`, `test-results/workspace-visual-language/dashboard-add-menu-glass.png`, `test-results/workspace-visual-language/settings-light-blue-mist.png`, `test-results/workspace-visual-language/settings-dark-midnight-blue.png`, `test-results/workspace-visual-language/dashboard-dark-midnight-blue.png`
+- Validation: Added `test_background_presets_and_secondary_surfaces_share_glass_language`. `.venv\Scripts\python.exe -m pytest -q` passed with 29 tests.
+
+### BUG-021: Layout Save/Load Did Not Round-Trip Exact Item State
+
+- Status: Verified
+- Area: Dashboard grid / layout persistence
+- Severity: High
+- Environment: Chromium via Playwright, 1440x1000 viewport, light theme
+- Observed: A saved sparse layout with pinned items could reload with positions rewritten by the default dashboard grid sync. In the reported pattern `A* - B - C - D - E*`, the stored data preserved the pinned flags, but load-time grid synchronization could make the visual state appear shifted and could rewrite sparse positions.
+- Expected: Save/load is a true round trip. Item id, type, grid position, grid size, order/index, pinned state, collapsed state, color/theme, widget config, panel membership, child order, locked/resizable flags, and future context attachments/links must restore by item id without compaction or inferred state.
+- Suspected cause: `syncDefaultDashboardGrid` always reassigned dashboard grid positions after saved item state was applied. One initialization path still called it in forced/default mode, so sparse saved coordinates were compacted on load.
+- Fix notes: Changed dashboard grid sync so normal initialization only fills missing coordinates and reserves existing saved coordinates globally. Reset/default layout is now the only path that forces default placement. Save payloads now include collapsed state plus neutral capability metadata, and widget resize honors explicit `minW`/`minH` metadata.
+- Validation: Added `test_layout_save_load_round_trips_exact_item_state`, which creates five widget items, pins A and E, saves, inspects stored localStorage payloads, resets, loads, and asserts exact ids, order, grid positions, sparse rows, pinned flags, mixed panel/widget state, collapsed panel state, and resized panel state. `.venv\Scripts\python.exe -m pytest -q` passed with 28 tests.
+
+### BUG-022: Content-Filled Widgets Could Resize Below Their Usable Control Width
+
+- Status: Verified
+- Area: Widgets / resize
+- Severity: Medium
+- Environment: Chromium via Playwright, 1440x1000 viewport, light theme
+- Observed: The timeframe command widget could be resized below the width needed to display preset pills, active timeframe capsule, utility icon controls, and the settings button cleanly.
+- Expected: Widget types define a minimum viable grid size. Resize snaps to grid intervals and clamps to the next valid size when a smaller size would clip, hide, stack awkwardly, or make controls unreadable.
+- Suspected cause: Widget resize logic used a hard minimum span of `1` for every widget type and did not consider content-heavy controls.
+- Fix notes: Added per-item minimum span metadata through `data-min-w`, gave the timeframe command widget `data-min-w="4"`, and routed widget/panel span application plus live resize/release snapping through a shared `gridItemMinimumSpan` helper.
+- Validation: Added `test_timeframe_resize_clamps_to_content_minimum`, which attempts to shrink the timeframe widget below its usable width and asserts it clamps to span 4 with no visible control clipping. `.venv\Scripts\python.exe -m pytest -q` passed with 28 tests.
 
 ### BUG-012: Timeframe Control Used Plain Search-Input Styling Instead Of Dashboard Glass Controls
 
@@ -178,6 +226,31 @@ Passed coverage included app/dashboard/settings load, CSS imports, theme persist
 - Fix notes: Added a final dark custom-panel control rule that matches the widget settings computed background, border, shadow, and outline state, and reduced the dark open-panel border away from white-tinted ring colors.
 - Screenshots: `test-results/dark-menu-parity/panel-open-dark.png`, `test-results/dark-menu-parity/widget-open-dark.png`
 - Validation: `.venv\Scripts\python.exe -m pytest -q` passed with 26 tests.
+
+### BUG-021: Top Toolbar Felt Like A Button Row Instead Of A Workspace Command Surface
+
+- Status: Superseded by BUG-024
+- Area: Top bar / visual language
+- Severity: Medium
+- Environment: Chromium via Playwright, 1440x1000 viewport, light and dark themes
+- Observed: The top toolbar used correct glass materials and controls, but the controls read as a flat row of equally weighted actions.
+- Expected: At the time, the toolbar was explored as modular workspace orchestration UI. That command-island direction has since been rejected; BUG-024 defines the current spatial workspace chrome direction.
+- Suspected cause: Existing toolbar markup grouped actions mostly by page region rather than task family, and the Add control was too small for the composition workflow.
+- Fix notes: Historical note only. The six-island implementation was removed from the visual cascade during BUG-024 and should not be reintroduced.
+- Screenshots: `test-results/workspace-toolbar/toolbar-light-command-islands.png`, `test-results/workspace-toolbar/toolbar-dark-command-islands.png`
+- Validation: `.venv\Scripts\python.exe -m pytest -q` passed with 30 tests.
+
+### BUG-022: Grouping Behaved Like Rigid Same-Type Layout Resizing
+
+- Status: Verified
+- Area: Dashboard grid / grouping
+- Severity: High
+- Environment: Chromium via Playwright, 1440x1000 viewport, light theme
+- Observed: Group interactions were biased by the active item and same-type peers. Group resize applied equal span deltas and release-to-row behavior, which could stop too early or force selected items toward uniform sizing. Group movement did not act like a shared transform across panels and widgets.
+- Expected: Grouping behaves like multi-selection. Dragging one selected movable item moves the selected movable set while preserving relative offsets and sparse gaps. Resizing uses a temporary shared boundary, scales items proportionally, and clamps each object to its own minimum size.
+- Suspected cause: The old implementation filtered peers by kind/layout and reused individual resize math plus group fill-span helpers instead of computing transforms from the selected set's bounds.
+- Fix notes: Added cross-type selected transform members, group drag delta resolution against global occupancy, pinned selected item reservations, proportional group resize from a shared bounding box, and per-item minimum clamps. Group selection visuals were softened to a subtle glass-native outline/glow.
+- Validation: `.venv\Scripts\python.exe -m pytest -q` passed with 32 tests.
 
 ### BUG-004: Legacy Drag And Resize Collision Solver Allowed Non-Deterministic Movement
 
@@ -340,6 +413,66 @@ Passed coverage included app/dashboard/settings load, CSS imports, theme persist
 - Likely source: `app/static/app.js` widget initialization around `.panel-delete-handle`, widget tool open/close behavior, and `showDeleteDialog`; `app/templates/base.html` shared `#panel-delete-dialog`; `app/static/dashboard-grid.css` widget tool drawer layering.
 - Fix notes: Widget deletion now uses the existing shared confirmation dialog path instead of deleting immediately. The confirm handler branches between panel and widget targets while preserving custom-item removal, hidden draft lists, group-selection cleanup, layout saving, and toast feedback.
 - Validation: `.venv\Scripts\python.exe -m pytest -q` passed with 9 tests.
+
+### BUG-024: Top Bar Command Islands Felt Crowded And Admin-Like
+
+- Status: Fixed, pending full regression validation
+- Area: Top bar / workspace chrome / settings / modal surfaces
+- Severity: Medium
+- Environment: Dashboard workspace, light and dark themes
+- Observed: The previous toolbar redesign rendered six bordered command islands, a loud Add Widget button, and several equal-weight utility controls. It felt crowded, repetitive, and closer to generic admin software than a calm spatial workspace.
+- Expected: The toolbar should feel like one atmospheric Apple-glass workspace chrome layer with a clear workspace anchor, subtle creation control, lower-weight secondary controls, and floating glass menus. Settings and delete confirmation surfaces should share the same premium glass language.
+- Suspected cause: The toolbar implementation solved information architecture by adding more bordered capsules and equal visual weight instead of reducing persistent chrome and using spatial hierarchy.
+- Fix notes: `dashboard.html` now marks the top bar as `.workspace-chrome` and changes the creation affordance to a compact plus control. `themes.css` neutralizes the rejected command-island visual treatment, adds a single floating chrome layer, soft ghost controls, a restrained add control, spatial menu surfaces, and matching settings/dialog glass refinements.
+- Validation: Added Playwright coverage for the new chrome hierarchy, menu behavior, mode toggles, settings surface glass, and delete dialog glass. `.venv\Scripts\python.exe -m pytest -q` passed with 33 tests.
+
+### BUG-025: Workspace Chrome Still Read As A Toolbar On A Card
+
+- Status: Verified
+- Area: Top bar / workspace chrome
+- Severity: Medium
+- Environment: Dashboard workspace, light and dark themes
+- Observed: The improved chrome still had a large glass slab behind the controls, which made the top surface read as a web app header or toolbar card instead of spatial workspace chrome.
+- Expected: The workspace should remain primary. Controls should appear as floating atmospheric surfaces with hierarchy from depth, position, opacity, and interaction state, not from a giant persistent toolbar container.
+- Suspected cause: The `.workspace-chrome` container carried too much border, background, shadow, and uniform horizontal rhythm.
+- Fix notes: The `.workspace-chrome` container is now visually transparent with only ambient glow/guide layers. Depth moved to the workspace anchor, compact creation lens, quiet appearance edge controls, and hover/active states. Persistence controls are lower-opacity and less prominent until interaction.
+- Validation: Updated Playwright coverage to assert the chrome container is not a visible slab while the floating anchor and create affordance retain glass/depth treatment. `.venv\Scripts\python.exe -m pytest -q` passed with 33 tests.
+
+### BUG-026: Dark Mode Drifted Into Neon / Cyberpunk Edge Lighting
+
+- Status: Verified
+- Area: Theme / visual language / dashboard surfaces
+- Severity: Medium
+- Environment: Dashboard workspace, dark theme
+- Observed: Dark mode used overly bright blue borders, high-contrast outlines, and saturated glow shadows that made the product feel cyberpunk/gamer instead of Apple-like midnight glass.
+- Expected: Dark mode should feel like the same product at night: restrained, cinematic, glass-like, and premium. Depth should come from layered surfaces, translucency, blur, soft gradients, and shadow hierarchy, not electric glowing edges.
+- Suspected cause: Older dark-mode rules used bright `#67a9ff`, `#75b9ff`, high-alpha accent borders, and outer `rgba(103, 169, 255, ...)` glow shadows across cards, controls, menus, active states, group selection, and chrome.
+- Fix notes: Dark tokens now use a calmer accent and softer material border. A final midnight-glass calibration layer reduces glow intensity, lowers accent border saturation, softens hover/active/group/drag/placeholder states, and shifts depth back to shadows and inner highlights.
+- Validation: Added Playwright coverage asserting dark mode uses the calmer accent token and avoids the previous bright-blue neon shadow values on dashboard hover/chrome surfaces. `.venv\Scripts\python.exe -m pytest -q` passed with 34 tests.
+
+### BUG-027: Dark Mode Borders Too Neon On Dashboard Controls
+
+- Status: Verified
+- Area: Theme / dashboard surfaces / workspace chrome
+- Severity: Medium
+- Environment: Dashboard workspace, dark theme
+- Observed: Some dashboard surfaces still inherited older bright blue border and glow treatment, especially panel headers, table rows, empty states, timeframe clusters, panel/widget controls, and the workspace chrome accent.
+- Expected: Dark mode borders and hover/focus states remain visible but read as muted glass rims rather than electric blue outlines.
+- Suspected cause: Earlier dark-mode cascade layers still contained saturated border and `0 0 ...` glow rules, and the final dark polish layer did not explicitly cover every dashboard surface.
+- Fix notes: Added a final dark-only border refinement for panel headers, table panel rows, empty states, timeframe command clusters, panel/widget controls, and workspace chrome accent surfaces. The refinement keeps light mode untouched and does not change layout, drag, resize, grid placement, save/load, pinning, collapse, or grouping behavior.
+- Validation: Expanded `test_dark_mode_uses_midnight_glass_not_neon_edges` to cover table, empty-state, timeframe, and workspace chrome surfaces. `.venv\Scripts\python.exe -m pytest -q` passed with 34 tests.
+
+### BUG-028: Top Navigation Visual Drift
+
+- Status: Verified
+- Area: Theme / navigation polish
+- Severity: Medium
+- Environment: Dashboard workspace, light and dark themes
+- Observed: The top navigation/header did not visually match the rest of the dashboard. In light mode it appeared washed out and hard to distinguish; in dark mode it felt detached from the dashboard surface language.
+- Expected: The top nav uses the same polished glass/card language as dashboard controls, with visible but subtle borders, restrained shadows, coherent toolbar grouping, and no neon dark-mode edges.
+- Suspected cause: Recent workspace chrome layers made the nav container and controls too transparent, so the top bar lost connection with the grey/blue dashboard cards and panels.
+- Fix notes: Added a focused top-nav polish layer for `.app-nav.workspace-chrome`, dashboard switcher, layout slot controls, add button, reset/undo/group/mode/status controls, theme/background controls, settings link, and nav menus. This is a contained polish bug fix, not a redesign; markup, class names, dashboard layout, drag, resize, save/load, pin, collapse, and group behavior are unchanged.
+- Validation: Updated `test_workspace_chrome_is_spatial_and_modes_still_work` to assert visible light/dark chrome surfaces and preserve layout slot/add menu behavior. Manual Playwright smoke checked `/dashboard`, light and dark top nav, theme toggle, layout slot dropdown, add menu, reset/undo/group controls, and settings link. `.venv\Scripts\python.exe -m pytest -q` passed with 34 tests.
 
 ## Entry Template
 

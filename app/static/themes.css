@@ -3115,42 +3115,45 @@ body.group-select-active .panel-layout > .db-panel {
 
 .widget-layout > .widget-card.group-selected,
 .panel-layout > .db-panel.group-selected {
-  outline: 3px solid color-mix(in srgb, var(--panel-accent, var(--blue)) 76%, #ffffff);
-  outline-offset: 4px;
+  outline: 1.5px solid color-mix(in srgb, var(--panel-accent, var(--blue)) 62%, rgba(255, 255, 255, .72));
+  outline-offset: 5px;
   box-shadow:
     var(--shadow-card),
-    0 0 0 1px rgba(var(--panel-accent-rgb, 37, 99, 235), .2),
-    0 12px 28px rgba(var(--panel-accent-rgb, 37, 99, 235), .18) !important;
+    0 0 0 1px rgba(var(--panel-accent-rgb, 37, 99, 235), .18),
+    0 0 22px rgba(var(--panel-accent-rgb, 37, 99, 235), .14) !important;
 }
 
 .widget-layout > .widget-card.active.group-selected,
 .widget-layout > .widget-card.db-panel-custom-color.active.group-selected {
-  outline: 4px solid color-mix(in srgb, var(--panel-accent, var(--blue)) 88%, #ffffff) !important;
-  outline-offset: 5px !important;
+  outline: 2px solid color-mix(in srgb, var(--panel-accent, var(--blue)) 72%, rgba(255, 255, 255, .78)) !important;
+  outline-offset: 6px !important;
   box-shadow:
     var(--shadow-card),
-    0 0 0 2px rgba(var(--panel-accent-rgb, 37, 99, 235), .26),
-    0 0 0 7px rgba(var(--panel-accent-rgb, 37, 99, 235), .10),
-    0 14px 32px rgba(var(--panel-accent-rgb, 37, 99, 235), .20) !important;
+    0 0 0 1px rgba(var(--panel-accent-rgb, 37, 99, 235), .26),
+    0 0 28px rgba(var(--panel-accent-rgb, 37, 99, 235), .20) !important;
 }
 
 html[data-theme="dark"] .widget-layout > .widget-card.group-selected,
 html[data-theme="dark"] .panel-layout > .db-panel.group-selected {
-  outline-color: color-mix(in srgb, var(--panel-accent, #93c5fd) 70%, #dbeafe);
+  outline-color: color-mix(in srgb, var(--panel-accent, #93c5fd) 58%, rgba(219, 234, 254, .62));
   box-shadow:
     var(--shadow-card),
-    0 0 0 1px rgba(var(--panel-accent-rgb, 147, 197, 253), .24),
-    0 14px 30px rgba(var(--panel-accent-rgb, 147, 197, 253), .22) !important;
+    0 0 0 1px rgba(var(--panel-accent-rgb, 147, 197, 253), .18),
+    0 0 26px rgba(var(--panel-accent-rgb, 147, 197, 253), .18) !important;
 }
 
 html[data-theme="dark"] .widget-layout > .widget-card.active.group-selected,
 html[data-theme="dark"] .widget-layout > .widget-card.db-panel-custom-color.active.group-selected {
-  outline-color: color-mix(in srgb, var(--panel-accent, #93c5fd) 82%, #ffffff) !important;
+  outline-color: color-mix(in srgb, var(--panel-accent, #93c5fd) 68%, rgba(255, 255, 255, .74)) !important;
   box-shadow:
     var(--shadow-card),
-    0 0 0 2px rgba(var(--panel-accent-rgb, 147, 197, 253), .30),
-    0 0 0 7px rgba(var(--panel-accent-rgb, 147, 197, 253), .14),
-    0 14px 32px rgba(var(--panel-accent-rgb, 147, 197, 253), .22) !important;
+    0 0 0 1px rgba(var(--panel-accent-rgb, 147, 197, 253), .24),
+    0 0 32px rgba(var(--panel-accent-rgb, 147, 197, 253), .24) !important;
+}
+
+body.group-transform-active .group-transform-member {
+  outline-style: solid;
+  transform-origin: center;
 }
 
 @media (max-width: 980px) {
@@ -3255,5 +3258,2056 @@ html[data-theme="dark"] .db-panel.db-panel-custom-color.db-panel-tools-open:focu
   .panel-layout > .db-panel {
     flex-basis: 100% !important;
   }
+}
+
+/* Unified workspace polish layer for secondary app surfaces. */
+body {
+  background: linear-gradient(180deg, var(--bg) 0%, var(--bg-end, var(--bg)) 100%) fixed !important;
+}
+
+.app-nav,
+.form-section,
+.table-section,
+.settings-save-bar,
+.sync-note,
+.confirm-dialog,
+.layout-slot-menu,
+.panel-add-menu,
+.dash-switch-menu,
+.nav-status-popover,
+.panel-color-menu,
+.background-tone-popover {
+  border-color: var(--glass-border);
+  background: var(--glass-surface-strong);
+  box-shadow: var(--shadow-glass);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+}
+
+.settings-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 74px;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--glass-border);
+  border-radius: 18px;
+  background: var(--glass-surface-strong);
+  box-shadow: var(--shadow-glass);
+}
+
+.settings-nav .app-nav-brand-group,
+.settings-nav .app-nav-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-nav .app-nav-brand-group > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-nav .app-nav-brand-group strong {
+  color: var(--ink-strong);
+  font-size: 20px;
+  font-weight: 820;
+  line-height: 1.1;
+}
+
+.settings-nav .app-nav-brand-group small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.settings-brand-switch,
+.dash-switch-hero,
+.cmd-btn,
+.cmd-btn-icon-only {
+  border: 1.5px solid color-mix(in srgb, var(--blue) 46%, var(--glass-border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--blue) 90%, white), var(--blue));
+  color: #fff;
+  box-shadow:
+    0 12px 28px color-mix(in srgb, var(--blue) 28%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, .26);
+}
+
+.settings-brand-switch:hover,
+.settings-brand-switch:focus-visible,
+.cmd-btn:hover,
+.cmd-btn:focus-visible {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--blue) 42%, white);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--blue) 78%, white), var(--blue-hover));
+  box-shadow:
+    0 14px 32px color-mix(in srgb, var(--blue) 34%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, .30);
+}
+
+.theme-toggle,
+.background-tone-trigger,
+.panel-reset-button,
+.panel-undo-button,
+.panel-add-button,
+.layout-slot-button,
+.layout-slot-trigger,
+.confirm-dialog-close,
+.confirm-dialog-btn,
+.panel-add-action,
+.widget-add-action,
+.layout-slot-menu button,
+.background-tone-option {
+  border: 1.5px solid var(--glass-border);
+  background: color-mix(in srgb, var(--glass-surface-strong) 86%, var(--surface-soft));
+  color: var(--muted-strong);
+  box-shadow: var(--shadow-control);
+  transition:
+    transform var(--motion-fast),
+    border-color var(--motion-fast),
+    background var(--motion-fast),
+    color var(--motion-fast),
+    box-shadow var(--motion-fast);
+}
+
+.theme-toggle:hover,
+.theme-toggle:focus-visible,
+.background-tone-trigger:hover,
+.background-tone-trigger:focus-visible,
+.panel-reset-button:hover,
+.panel-undo-button:hover,
+.panel-add-button:hover,
+.layout-slot-button:hover,
+.layout-slot-trigger:hover,
+.confirm-dialog-close:hover,
+.confirm-dialog-btn:hover,
+.panel-add-action:hover,
+.widget-add-action:hover,
+.layout-slot-menu button:hover,
+.background-tone-option:hover,
+.background-tone-option:focus-visible {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--blue) 48%, var(--glass-border));
+  background: color-mix(in srgb, var(--glass-surface-strong) 78%, var(--blue-soft));
+  color: var(--blue);
+  box-shadow:
+    0 12px 26px color-mix(in srgb, var(--blue) 16%, transparent),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
+.form-section,
+.table-section {
+  padding: 24px;
+  border: 1.5px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--glass-surface-strong) 88%, var(--surface-soft));
+}
+
+.section-heading {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.section-heading h2 {
+  font-size: 20px;
+  font-weight: 780;
+}
+
+.section-heading p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.form-grid input,
+.form-grid select,
+.form-grid textarea {
+  border: 1.5px solid var(--field-border);
+  border-radius: 14px;
+  background: var(--field-bg);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    0 8px 20px rgba(15, 23, 42, .045);
+  transition:
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast),
+    background var(--motion-fast),
+    color var(--motion-fast);
+}
+
+.form-grid input:hover,
+.form-grid select:hover,
+.form-grid textarea:hover {
+  border-color: color-mix(in srgb, var(--blue) 28%, var(--field-border));
+  background: color-mix(in srgb, var(--field-bg) 88%, var(--surface-raised));
+}
+
+.form-grid input:focus,
+.form-grid select:focus,
+.form-grid textarea:focus {
+  border-color: color-mix(in srgb, var(--blue) 72%, var(--field-border));
+  background: color-mix(in srgb, var(--field-bg) 82%, var(--surface-raised));
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--blue) 14%, transparent),
+    0 12px 26px color-mix(in srgb, var(--blue) 10%, transparent),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
+.settings-save-bar {
+  position: sticky;
+  bottom: 18px;
+  z-index: calc(var(--z-header) - 1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 12px 10px 16px;
+  border: 1.5px solid var(--glass-border);
+  border-radius: 999px;
+}
+
+.settings-save-bar span {
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.sync-note,
+.notice.error {
+  border: 1.5px solid color-mix(in srgb, var(--blue) 34%, var(--glass-border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--glass-surface-strong) 82%, var(--blue-soft));
+  color: var(--ink-strong);
+  box-shadow: var(--shadow-control);
+}
+
+.confirm-dialog {
+  border: 1.5px solid var(--glass-border);
+  border-radius: 20px;
+  padding: 20px;
+}
+
+.confirm-dialog::backdrop {
+  background: rgba(15, 23, 42, .28);
+  backdrop-filter: blur(8px);
+}
+
+.confirm-dialog-head {
+  color: var(--muted-strong);
+  letter-spacing: .03em;
+}
+
+.confirm-dialog-danger {
+  border-color: color-mix(in srgb, var(--red) 46%, var(--glass-border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--red) 82%, white), var(--red));
+  color: #fff;
+}
+
+.appearance-controls {
+  display: grid;
+  gap: 14px;
+}
+
+.appearance-control-group {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1.5px solid var(--glass-border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--glass-surface) 82%, transparent);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+.background-preset-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.background-tone-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.background-tone-menu > summary {
+  list-style: none;
+}
+
+.background-tone-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.background-tone-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 14px;
+  cursor: pointer;
+}
+
+.background-tone-dot {
+  width: 19px;
+  height: 19px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--bg), var(--bg-end, var(--surface-soft)));
+  box-shadow:
+    inset 0 0 0 1px var(--glass-border),
+    0 6px 12px rgba(15, 23, 42, .12);
+}
+
+.background-tone-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: var(--z-dropdown);
+  display: grid;
+  gap: 10px;
+  width: 244px;
+  padding: 12px;
+  border: 1.5px solid var(--glass-border);
+  border-radius: 18px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-6px) scale(.96);
+  transform-origin: top right;
+  transition:
+    opacity .16s ease,
+    transform .20s cubic-bezier(.2, .8, .2, 1),
+    visibility 0s linear .20s;
+}
+
+.background-tone-menu[open] .background-tone-popover {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+  transition-delay: 0s;
+}
+
+.background-tone-group {
+  display: grid;
+  gap: 8px;
+}
+
+html:not([data-theme="dark"]) .background-tone-group-dark,
+html[data-theme="dark"] .background-tone-group-light {
+  display: none;
+}
+
+.background-tone-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.background-tone-option {
+  min-height: 34px;
+  justify-content: flex-start;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1;
+  text-align: left;
+}
+
+.background-tone-option.is-selected {
+  border-color: color-mix(in srgb, var(--blue) 62%, var(--glass-border));
+  background: color-mix(in srgb, var(--blue) 16%, var(--glass-surface-strong));
+  color: var(--blue);
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--blue) 18%, transparent),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
+.layout-slot-menu,
+.panel-add-menu,
+.dash-switch-menu,
+.nav-status-popover,
+.panel-color-menu {
+  border-radius: 18px;
+}
+
+.layout-slot-menu button,
+.panel-add-action,
+.widget-add-action,
+.dash-switch-opt {
+  border-radius: 12px;
+}
+
+html[data-theme="dark"] .settings-nav,
+html[data-theme="dark"] .form-section,
+html[data-theme="dark"] .table-section,
+html[data-theme="dark"] .settings-save-bar,
+html[data-theme="dark"] .sync-note,
+html[data-theme="dark"] .confirm-dialog,
+html[data-theme="dark"] .layout-slot-menu,
+html[data-theme="dark"] .panel-add-menu,
+html[data-theme="dark"] .dash-switch-menu,
+html[data-theme="dark"] .nav-status-popover,
+html[data-theme="dark"] .panel-color-menu,
+html[data-theme="dark"] .background-tone-popover {
+  border-color: var(--glass-border);
+  background: var(--glass-surface-strong);
+  box-shadow: var(--shadow-glass);
+}
+
+html[data-theme="dark"] .form-grid input,
+html[data-theme="dark"] .form-grid select,
+html[data-theme="dark"] .form-grid textarea {
+  border-color: var(--field-border);
+  background: var(--field-bg);
+  color: var(--ink-strong);
+}
+
+html[data-theme="dark"] .background-tone-option.is-selected,
+html[data-theme="dark"] .layout-group-button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--blue) 58%, var(--glass-border));
+  background: color-mix(in srgb, var(--blue) 24%, var(--glass-surface-strong));
+  color: var(--blue-hover);
+}
+
+@media (max-width: 720px) {
+  .settings-nav,
+  .settings-save-bar {
+    align-items: stretch;
+    flex-wrap: wrap;
+    border-radius: 18px;
+  }
+
+  .settings-save-bar {
+    position: static;
+  }
+
+  .background-tone-popover {
+    right: auto;
+    left: 0;
+    transform-origin: top left;
+  }
+}
+
+/* Spatial workspace chrome: calm floating operating surface. */
+.app-nav.workspace-chrome {
+  position: sticky;
+  top: 12px;
+  z-index: var(--z-header);
+  display: grid;
+  grid-template-columns: minmax(210px, max-content) minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: clamp(12px, 2vw, 26px);
+  margin: 0 auto 22px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--glass-border) 48%, transparent);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at 16% 0%, color-mix(in srgb, var(--blue) 11%, transparent) 0 42%, transparent 58%),
+    linear-gradient(180deg, color-mix(in srgb, var(--glass-surface-strong) 82%, white), color-mix(in srgb, var(--glass-surface) 70%, transparent));
+  box-shadow:
+    0 22px 60px rgba(15, 23, 42, .10),
+    0 2px 10px rgba(15, 23, 42, .05),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 72%, transparent);
+  backdrop-filter: blur(26px) saturate(1.18);
+  -webkit-backdrop-filter: blur(26px) saturate(1.18);
+}
+
+.app-nav.workspace-chrome::before {
+  content: "";
+  position: absolute;
+  inset: 1px 22px auto;
+  height: 1px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--glass-highlight) 78%, transparent), transparent);
+  pointer-events: none;
+}
+
+.app-nav.workspace-chrome > .app-nav-brand-group,
+.app-nav.workspace-chrome > .app-nav-status,
+.app-nav.workspace-chrome > .app-nav-actions {
+  min-width: 0;
+}
+
+.app-nav.workspace-chrome > .app-nav-brand-group {
+  justify-content: flex-start;
+}
+
+.app-nav.workspace-chrome > .app-nav-status {
+  display: flex;
+  justify-content: center;
+  gap: clamp(10px, 1.6vw, 20px);
+  min-width: 0;
+}
+
+.app-nav.workspace-chrome > .app-nav-actions {
+  justify-content: flex-end;
+}
+
+.app-nav.workspace-chrome .workspace-command-island {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.app-nav.workspace-chrome .workspace-identity-island {
+  gap: 8px;
+}
+
+.app-nav.workspace-chrome .workspace-accent-marker {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--blue);
+  box-shadow:
+    0 0 18px color-mix(in srgb, var(--blue) 40%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--blue) 10%, transparent);
+}
+
+.app-nav.workspace-chrome .dash-switcher {
+  min-width: 0;
+}
+
+.app-nav.workspace-chrome button.dash-switch-hero {
+  min-height: 42px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--glass-surface-strong) 42%, transparent);
+  color: var(--ink-strong);
+  box-shadow: none;
+  font-size: 14px;
+  font-weight: 820;
+}
+
+.app-nav.workspace-chrome button.dash-switch-hero:hover,
+.app-nav.workspace-chrome button.dash-switch-hero:focus-visible {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--glass-surface-strong) 64%, var(--blue-soft));
+  box-shadow:
+    0 12px 28px color-mix(in srgb, var(--blue) 10%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 72%, transparent);
+}
+
+.app-nav.workspace-chrome .layout-slot-controls {
+  gap: 5px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-nav.workspace-chrome .layout-slot-trigger,
+.app-nav.workspace-chrome .layout-slot-button,
+.app-nav.workspace-chrome .panel-undo-button,
+.app-nav.workspace-chrome .panel-reset-button,
+.app-nav.workspace-chrome .workspace-mode-button,
+.app-nav.workspace-chrome .theme-toggle,
+.app-nav.workspace-chrome .background-tone-trigger,
+.app-nav.workspace-chrome .nav-status-icon-only,
+.app-nav.workspace-chrome .cmd-btn-icon-only {
+  height: 38px;
+  min-height: 38px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--muted-strong);
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.app-nav.workspace-chrome .layout-slot-trigger {
+  min-width: 80px;
+  color: var(--ink-strong);
+}
+
+.app-nav.workspace-chrome .layout-slot-button,
+.app-nav.workspace-chrome .panel-undo-button,
+.app-nav.workspace-chrome .panel-reset-button,
+.app-nav.workspace-chrome .workspace-mode-button {
+  min-width: auto;
+  padding-inline: 10px;
+}
+
+.app-nav.workspace-chrome .composition-command-island {
+  isolation: isolate;
+}
+
+.app-nav.workspace-chrome .composition-add-button {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  min-height: 42px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 24%, color-mix(in srgb, white 42%, transparent), transparent 38%),
+    color-mix(in srgb, var(--blue) 18%, var(--glass-surface-strong));
+  color: color-mix(in srgb, var(--blue) 82%, var(--ink-strong));
+  box-shadow:
+    0 14px 34px color-mix(in srgb, var(--blue) 18%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 82%, transparent);
+  font-size: 22px;
+  font-weight: 580;
+}
+
+.app-nav.workspace-chrome .chrome-add-glyph {
+  display: block;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
+.app-nav.workspace-chrome .composition-add-button:hover,
+.app-nav.workspace-chrome .composition-add-button:focus-visible {
+  transform: translateY(-1px) scale(1.03);
+  background:
+    radial-gradient(circle at 35% 24%, color-mix(in srgb, white 50%, transparent), transparent 38%),
+    color-mix(in srgb, var(--blue) 28%, var(--glass-surface-strong));
+  color: color-mix(in srgb, var(--blue) 92%, var(--ink-strong));
+  box-shadow:
+    0 18px 42px color-mix(in srgb, var(--blue) 24%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 88%, transparent);
+}
+
+.app-nav.workspace-chrome .workspace-mode-button[aria-pressed="true"],
+.app-nav.workspace-chrome .layout-group-button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--blue) 13%, transparent);
+  color: color-mix(in srgb, var(--blue) 86%, var(--ink-strong));
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--blue) 54%, transparent);
+}
+
+.app-nav.workspace-chrome .engineer-mode-button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--blue) 16%, transparent);
+  color: color-mix(in srgb, var(--blue) 88%, var(--ink-strong));
+}
+
+.app-nav.workspace-chrome .theme-toggle {
+  width: 52px;
+}
+
+.app-nav.workspace-chrome .background-tone-trigger,
+.app-nav.workspace-chrome .nav-status-icon-only,
+.app-nav.workspace-chrome .cmd-btn-icon-only {
+  width: 38px;
+  min-width: 38px;
+}
+
+.app-nav.workspace-chrome .theme-toggle:hover,
+.app-nav.workspace-chrome .theme-toggle:focus-visible,
+.app-nav.workspace-chrome .background-tone-trigger:hover,
+.app-nav.workspace-chrome .background-tone-trigger:focus-visible,
+.app-nav.workspace-chrome .panel-reset-button:hover,
+.app-nav.workspace-chrome .panel-reset-button:focus-visible,
+.app-nav.workspace-chrome .panel-undo-button:hover,
+.app-nav.workspace-chrome .panel-undo-button:focus-visible,
+.app-nav.workspace-chrome .layout-slot-button:hover,
+.app-nav.workspace-chrome .layout-slot-button:focus-visible,
+.app-nav.workspace-chrome .layout-slot-trigger:hover,
+.app-nav.workspace-chrome .layout-slot-trigger:focus-visible,
+.app-nav.workspace-chrome .workspace-mode-button:hover,
+.app-nav.workspace-chrome .workspace-mode-button:focus-visible,
+.app-nav.workspace-chrome .nav-status-icon-only:hover,
+.app-nav.workspace-chrome .nav-status-icon-only:focus-visible,
+.app-nav.workspace-chrome .cmd-btn-icon-only:hover,
+.app-nav.workspace-chrome .cmd-btn-icon-only:focus-visible {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--glass-surface-strong) 62%, var(--blue-soft));
+  color: var(--ink-strong);
+  box-shadow:
+    0 12px 28px color-mix(in srgb, var(--blue) 10%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 74%, transparent);
+}
+
+.app-nav.workspace-chrome .panel-add-menu,
+.app-nav.workspace-chrome .layout-slot-menu,
+.app-nav.workspace-chrome .dash-switch-menu,
+.app-nav.workspace-chrome .nav-status-popover,
+.app-nav.workspace-chrome .background-tone-popover {
+  border-color: color-mix(in srgb, var(--glass-border) 62%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--glass-surface-strong) 88%, white), color-mix(in srgb, var(--glass-surface) 90%, transparent));
+  box-shadow:
+    0 24px 68px rgba(15, 23, 42, .16),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 80%, transparent);
+  backdrop-filter: blur(24px) saturate(1.16);
+  -webkit-backdrop-filter: blur(24px) saturate(1.16);
+}
+
+.app-nav.workspace-chrome .panel-add-menu {
+  right: 50%;
+  min-width: 184px;
+  transform: translate(50%, 8px) scale(.98);
+}
+
+.app-nav.workspace-chrome .panel-add-menu-label {
+  padding: 4px 8px 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 820;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.app-nav.workspace-chrome .panel-add-menu.open {
+  transform: translate(50%, 0) scale(1);
+}
+
+.app-nav.workspace-chrome .panel-add-action,
+.app-nav.workspace-chrome .widget-add-action,
+.app-nav.workspace-chrome .layout-slot-menu button,
+.app-nav.workspace-chrome .dash-switch-opt {
+  border-radius: 13px;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 12px;
+  z-index: var(--z-header);
+  margin-bottom: 24px;
+  border-color: color-mix(in srgb, var(--glass-border) 54%, transparent);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--blue) 10%, transparent) 0 38%, transparent 58%),
+    linear-gradient(180deg, color-mix(in srgb, var(--glass-surface-strong) 84%, white), color-mix(in srgb, var(--glass-surface) 76%, transparent));
+  box-shadow:
+    0 20px 56px rgba(15, 23, 42, .10),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 74%, transparent);
+  backdrop-filter: blur(24px) saturate(1.14);
+  -webkit-backdrop-filter: blur(24px) saturate(1.14);
+}
+
+.settings-nav .settings-brand-switch,
+.settings-nav .cmd-btn,
+.settings-nav .theme-toggle,
+.settings-nav .background-tone-trigger {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.settings-nav .settings-brand-switch:hover,
+.settings-nav .settings-brand-switch:focus-visible,
+.settings-nav .cmd-btn:hover,
+.settings-nav .cmd-btn:focus-visible,
+.settings-nav .theme-toggle:hover,
+.settings-nav .theme-toggle:focus-visible,
+.settings-nav .background-tone-trigger:hover,
+.settings-nav .background-tone-trigger:focus-visible {
+  background: color-mix(in srgb, var(--glass-surface-strong) 62%, var(--blue-soft));
+  box-shadow:
+    0 12px 28px color-mix(in srgb, var(--blue) 10%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 74%, transparent);
+}
+
+.settings-form {
+  gap: 22px;
+}
+
+.form-section,
+.appearance-control-group,
+.settings-save-bar {
+  border-color: color-mix(in srgb, var(--glass-border) 58%, transparent);
+  border-radius: 26px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--glass-surface-strong) 82%, white), color-mix(in srgb, var(--glass-surface) 82%, transparent));
+  box-shadow:
+    0 22px 58px rgba(15, 23, 42, .09),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 78%, transparent);
+  backdrop-filter: blur(24px) saturate(1.12);
+  -webkit-backdrop-filter: blur(24px) saturate(1.12);
+}
+
+.form-section {
+  padding: clamp(22px, 3vw, 30px);
+}
+
+.section-heading {
+  margin-bottom: 18px;
+}
+
+.fl-wrap input {
+  min-height: 48px;
+  border-color: color-mix(in srgb, var(--glass-border) 68%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--glass-surface-strong) 58%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 68%, transparent),
+    0 10px 26px rgba(15, 23, 42, .04);
+}
+
+.fl-wrap input:focus {
+  border-color: color-mix(in srgb, var(--blue) 42%, var(--glass-border));
+  background: color-mix(in srgb, var(--glass-surface-strong) 78%, white);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--blue) 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 78%, transparent);
+}
+
+.appearance-control-group {
+  padding: 16px;
+}
+
+.settings-save-bar {
+  bottom: 18px;
+  padding: 12px 14px;
+}
+
+.confirm-dialog {
+  border-color: color-mix(in srgb, var(--glass-border) 60%, transparent);
+  border-radius: 28px;
+  padding: 22px;
+  background:
+    radial-gradient(circle at 16% 0%, color-mix(in srgb, var(--red) 8%, transparent) 0 36%, transparent 58%),
+    linear-gradient(180deg, color-mix(in srgb, var(--glass-surface-strong) 88%, white), color-mix(in srgb, var(--glass-surface) 88%, transparent));
+  box-shadow:
+    0 32px 90px rgba(15, 23, 42, .22),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 82%, transparent);
+  backdrop-filter: blur(26px) saturate(1.16);
+  -webkit-backdrop-filter: blur(26px) saturate(1.16);
+}
+
+.confirm-dialog::backdrop {
+  background:
+    radial-gradient(circle at 50% 22%, rgba(255, 255, 255, .16), transparent 42%),
+    rgba(15, 23, 42, .30);
+  backdrop-filter: blur(10px) saturate(1.08);
+  -webkit-backdrop-filter: blur(10px) saturate(1.08);
+}
+
+.confirm-dialog-head {
+  margin-bottom: 14px;
+  letter-spacing: .05em;
+}
+
+.confirm-dialog-close,
+.confirm-dialog-btn {
+  border-color: color-mix(in srgb, var(--glass-border) 62%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--glass-surface-strong) 64%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 66%, transparent);
+}
+
+.confirm-dialog-danger {
+  border-color: color-mix(in srgb, var(--red) 26%, var(--glass-border));
+  background: color-mix(in srgb, var(--red) 14%, var(--glass-surface-strong));
+  color: color-mix(in srgb, var(--red) 74%, var(--ink-strong));
+  box-shadow:
+    0 12px 30px color-mix(in srgb, var(--red) 16%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 58%, transparent);
+}
+
+.confirm-dialog-danger:hover,
+.confirm-dialog-danger:focus-visible {
+  border-color: color-mix(in srgb, var(--red) 36%, var(--glass-border));
+  background: color-mix(in srgb, var(--red) 20%, var(--glass-surface-strong));
+  color: color-mix(in srgb, var(--red) 82%, var(--ink-strong));
+  box-shadow:
+    0 16px 36px color-mix(in srgb, var(--red) 20%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 64%, transparent);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome,
+html[data-theme="dark"] .settings-nav {
+  border-color: color-mix(in srgb, var(--glass-border) 60%, transparent);
+  background:
+    radial-gradient(circle at 16% 0%, color-mix(in srgb, var(--blue) 14%, transparent) 0 42%, transparent 60%),
+    linear-gradient(180deg, color-mix(in srgb, var(--glass-surface-strong) 92%, #263852), color-mix(in srgb, var(--glass-surface) 86%, transparent));
+  box-shadow:
+    0 26px 72px rgba(0, 0, 0, .34),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 54%, transparent);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome button.dash-switch-hero {
+  color: var(--ink-strong);
+  background: color-mix(in srgb, var(--glass-surface-strong) 46%, transparent);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-trigger,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-button,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-undo-button,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-reset-button,
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-mode-button,
+html[data-theme="dark"] .app-nav.workspace-chrome .theme-toggle,
+html[data-theme="dark"] .app-nav.workspace-chrome .background-tone-trigger,
+html[data-theme="dark"] .app-nav.workspace-chrome .nav-status-icon-only,
+html[data-theme="dark"] .app-nav.workspace-chrome .cmd-btn-icon-only {
+  color: var(--muted-strong);
+  background: transparent;
+  box-shadow: none;
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .composition-add-button {
+  background:
+    radial-gradient(circle at 35% 24%, color-mix(in srgb, white 24%, transparent), transparent 38%),
+    color-mix(in srgb, var(--blue) 20%, var(--glass-surface-strong));
+  color: color-mix(in srgb, var(--blue-hover) 82%, #eef6ff);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .theme-toggle:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .theme-toggle:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .background-tone-trigger:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .background-tone-trigger:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-reset-button:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-reset-button:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-undo-button:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-undo-button:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-button:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-button:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-trigger:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-trigger:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-mode-button:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-mode-button:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .nav-status-icon-only:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .nav-status-icon-only:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .cmd-btn-icon-only:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .cmd-btn-icon-only:focus-visible {
+  background: color-mix(in srgb, var(--glass-surface-strong) 68%, var(--blue-soft));
+  color: var(--ink-strong);
+  box-shadow:
+    0 14px 34px color-mix(in srgb, var(--blue) 14%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 54%, transparent);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-mode-button[aria-pressed="true"],
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-group-button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--blue) 18%, transparent);
+  color: var(--blue-hover);
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--blue) 58%, transparent);
+}
+
+html[data-theme="dark"] .form-section,
+html[data-theme="dark"] .appearance-control-group,
+html[data-theme="dark"] .settings-save-bar,
+html[data-theme="dark"] .confirm-dialog {
+  border-color: color-mix(in srgb, var(--glass-border) 62%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--glass-surface-strong) 92%, #263852), color-mix(in srgb, var(--glass-surface) 88%, transparent));
+  box-shadow:
+    0 26px 72px rgba(0, 0, 0, .30),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 54%, transparent);
+}
+
+html[data-theme="dark"] .fl-wrap input {
+  background: color-mix(in srgb, var(--glass-surface-strong) 62%, transparent);
+}
+
+html[data-theme="dark"] .fl-wrap input:focus {
+  background: color-mix(in srgb, var(--glass-surface-strong) 78%, #263852);
+}
+
+html[data-theme="dark"] .confirm-dialog-danger {
+  border-color: color-mix(in srgb, var(--red) 34%, var(--glass-border));
+  background: color-mix(in srgb, var(--red) 18%, var(--glass-surface-strong));
+  color: color-mix(in srgb, #fee2e2 86%, var(--red));
+}
+
+@media (max-width: 1180px) {
+  .app-nav.workspace-chrome {
+    grid-template-columns: 1fr auto;
+  }
+
+  .app-nav.workspace-chrome > .app-nav-status {
+    grid-column: 1 / -1;
+    order: 3;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-nav.workspace-chrome {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    border-radius: 24px;
+  }
+
+  .app-nav.workspace-chrome > .app-nav-brand-group,
+  .app-nav.workspace-chrome > .app-nav-status,
+  .app-nav.workspace-chrome > .app-nav-actions {
+    width: 100%;
+  }
+
+  .app-nav.workspace-chrome > .app-nav-status {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .app-nav.workspace-chrome .workspace-command-island {
+    width: auto;
+    flex-wrap: nowrap;
+  }
+
+  .app-nav.workspace-chrome .layout-command-island {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+
+  .app-nav.workspace-chrome .layout-slot-controls {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .app-nav.workspace-chrome .appearance-command-island {
+    margin-left: 0;
+    justify-content: flex-end;
+  }
+}
+
+/* Atmospheric chrome evolution: remove the slab, keep the workspace first. */
+.app-nav.workspace-chrome {
+  gap: clamp(18px, 3vw, 42px);
+  margin: 0 auto 30px;
+  padding: 2px 8px 18px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  isolation: isolate;
+}
+
+.app-nav.workspace-chrome::before {
+  inset: -22px 12% auto;
+  height: 88px;
+  border-radius: 999px;
+  background:
+    radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--blue) 13%, transparent), transparent 64%),
+    linear-gradient(90deg, transparent, color-mix(in srgb, var(--glass-highlight) 28%, transparent), transparent);
+  filter: blur(18px);
+  opacity: .72;
+  transform: translateZ(0);
+}
+
+.app-nav.workspace-chrome::after {
+  content: "";
+  position: absolute;
+  left: 24%;
+  right: 24%;
+  bottom: 2px;
+  height: 1px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--blue) 24%, transparent), transparent);
+  opacity: .64;
+  pointer-events: none;
+}
+
+.app-nav.workspace-chrome > .app-nav-brand-group,
+.app-nav.workspace-chrome > .app-nav-status,
+.app-nav.workspace-chrome > .app-nav-actions {
+  position: relative;
+  z-index: 1;
+}
+
+.app-nav.workspace-chrome > .app-nav-status {
+  align-items: center;
+  gap: clamp(12px, 2.5vw, 32px);
+}
+
+.app-nav.workspace-chrome .workspace-identity-island {
+  padding: 4px 6px 4px 5px;
+  border: 1px solid color-mix(in srgb, var(--glass-border) 42%, transparent);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 18% 12%, color-mix(in srgb, white 28%, transparent), transparent 44%),
+    color-mix(in srgb, var(--glass-surface-strong) 54%, transparent);
+  box-shadow:
+    0 18px 44px rgba(15, 23, 42, .09),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 60%, transparent);
+  backdrop-filter: blur(22px) saturate(1.12);
+  -webkit-backdrop-filter: blur(22px) saturate(1.12);
+}
+
+.app-nav.workspace-chrome .workspace-accent-marker {
+  width: 9px;
+  height: 9px;
+  margin-left: 6px;
+  box-shadow:
+    0 0 22px color-mix(in srgb, var(--blue) 46%, transparent),
+    0 0 0 7px color-mix(in srgb, var(--blue) 9%, transparent);
+}
+
+.app-nav.workspace-chrome button.dash-switch-hero {
+  min-height: 40px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-nav.workspace-chrome button.dash-switch-hero:hover,
+.app-nav.workspace-chrome button.dash-switch-hero:focus-visible {
+  background: color-mix(in srgb, var(--glass-surface-strong) 38%, var(--blue-soft));
+}
+
+.app-nav.workspace-chrome .layout-command-island {
+  opacity: .62;
+  transform: translateY(-5px);
+  transition:
+    opacity var(--motion-fast),
+    transform var(--motion-fast);
+}
+
+.app-nav.workspace-chrome .layout-command-island:hover,
+.app-nav.workspace-chrome .layout-command-island:focus-within {
+  opacity: 1;
+  transform: translateY(-6px);
+}
+
+.app-nav.workspace-chrome .layout-slot-controls {
+  gap: 2px;
+}
+
+.app-nav.workspace-chrome .layout-slot-trigger,
+.app-nav.workspace-chrome .layout-slot-button,
+.app-nav.workspace-chrome .panel-undo-button {
+  height: 34px;
+  min-height: 34px;
+  padding-inline: 8px;
+  border-radius: 13px;
+  font-size: 11px;
+}
+
+.app-nav.workspace-chrome .layout-slot-button,
+.app-nav.workspace-chrome .panel-undo-button {
+  color: color-mix(in srgb, var(--muted-strong) 78%, transparent);
+}
+
+.app-nav.workspace-chrome .composition-command-island {
+  transform: translateY(9px);
+}
+
+.app-nav.workspace-chrome .composition-add-button {
+  position: relative;
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  min-height: 48px;
+  overflow: visible;
+  background:
+    radial-gradient(circle at 34% 24%, color-mix(in srgb, white 48%, transparent), transparent 38%),
+    radial-gradient(circle at 50% 70%, color-mix(in srgb, var(--blue) 26%, transparent), transparent 58%),
+    color-mix(in srgb, var(--glass-surface-strong) 62%, transparent);
+  color: color-mix(in srgb, var(--blue) 80%, var(--ink-strong));
+  box-shadow:
+    0 20px 52px color-mix(in srgb, var(--blue) 24%, transparent),
+    0 8px 18px rgba(15, 23, 42, .08),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 84%, transparent);
+  backdrop-filter: blur(22px) saturate(1.2);
+  -webkit-backdrop-filter: blur(22px) saturate(1.2);
+}
+
+.app-nav.workspace-chrome .composition-add-button::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--blue) 16%, transparent), transparent 68%);
+  opacity: .82;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.app-nav.workspace-chrome .composition-add-button:hover,
+.app-nav.workspace-chrome .composition-add-button:focus-visible,
+.app-nav.workspace-chrome .panel-add-picker:focus-within .composition-add-button {
+  transform: translateY(-2px) scale(1.045);
+}
+
+.app-nav.workspace-chrome .chrome-add-glyph {
+  font-size: 26px;
+  font-weight: 480;
+  transform: translateY(-2px);
+}
+
+.app-nav.workspace-chrome .mode-command-island {
+  gap: 3px;
+  opacity: .78;
+  transform: translateY(1px);
+}
+
+.app-nav.workspace-chrome .context-command-island {
+  opacity: .62;
+  transform: translateY(-8px);
+}
+
+.app-nav.workspace-chrome .appearance-command-island {
+  gap: 2px;
+  opacity: .78;
+  padding: 3px;
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--glass-surface-strong) 24%, transparent);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+}
+
+.app-nav.workspace-chrome .appearance-command-island:hover,
+.app-nav.workspace-chrome .appearance-command-island:focus-within,
+.app-nav.workspace-chrome .mode-command-island:hover,
+.app-nav.workspace-chrome .mode-command-island:focus-within,
+.app-nav.workspace-chrome .context-command-island:hover,
+.app-nav.workspace-chrome .context-command-island:focus-within {
+  opacity: 1;
+}
+
+.app-nav.workspace-chrome .workspace-mode-button,
+.app-nav.workspace-chrome .theme-toggle,
+.app-nav.workspace-chrome .background-tone-trigger,
+.app-nav.workspace-chrome .nav-status-icon-only,
+.app-nav.workspace-chrome .cmd-btn-icon-only,
+.app-nav.workspace-chrome .panel-reset-button {
+  border-radius: 14px;
+}
+
+.app-nav.workspace-chrome .panel-reset-button {
+  color: color-mix(in srgb, var(--muted-strong) 66%, transparent);
+}
+
+.app-nav.workspace-chrome .theme-toggle,
+.app-nav.workspace-chrome .background-tone-trigger,
+.app-nav.workspace-chrome .cmd-btn-icon-only {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+}
+
+.app-nav.workspace-chrome .workspace-mode-button {
+  height: 35px;
+  min-height: 35px;
+  padding-inline: 9px;
+  font-size: 11px;
+}
+
+.app-nav.workspace-chrome .workspace-mode-button[aria-pressed="true"],
+.app-nav.workspace-chrome .layout-group-button[aria-pressed="true"] {
+  background:
+    radial-gradient(circle at 50% 100%, color-mix(in srgb, var(--blue) 18%, transparent), transparent 70%),
+    color-mix(in srgb, var(--glass-surface-strong) 34%, transparent);
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--blue) 10%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--blue) 42%, transparent);
+}
+
+.app-nav.workspace-chrome .panel-add-menu {
+  margin-top: 8px;
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome::before {
+  background:
+    radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--blue) 18%, transparent), transparent 64%),
+    linear-gradient(90deg, transparent, color-mix(in srgb, var(--glass-highlight) 18%, transparent), transparent);
+  opacity: .82;
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-identity-island {
+  border-color: color-mix(in srgb, var(--glass-border) 42%, transparent);
+  background:
+    radial-gradient(circle at 18% 12%, color-mix(in srgb, white 12%, transparent), transparent 44%),
+    color-mix(in srgb, var(--glass-surface-strong) 56%, transparent);
+  box-shadow:
+    0 20px 52px rgba(0, 0, 0, .28),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 44%, transparent);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .appearance-command-island {
+  background: color-mix(in srgb, var(--glass-surface-strong) 28%, transparent);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .composition-add-button {
+  background:
+    radial-gradient(circle at 34% 24%, color-mix(in srgb, white 22%, transparent), transparent 38%),
+    radial-gradient(circle at 50% 70%, color-mix(in srgb, var(--blue) 34%, transparent), transparent 58%),
+    color-mix(in srgb, var(--glass-surface-strong) 64%, transparent);
+  box-shadow:
+    0 22px 58px color-mix(in srgb, var(--blue) 22%, transparent),
+    0 12px 28px rgba(0, 0, 0, .26),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 52%, transparent);
+}
+
+@media (max-width: 1180px) {
+  .app-nav.workspace-chrome {
+    padding-bottom: 14px;
+  }
+
+  .app-nav.workspace-chrome > .app-nav-status {
+    gap: 14px;
+  }
+
+  .app-nav.workspace-chrome .layout-command-island,
+  .app-nav.workspace-chrome .composition-command-island,
+  .app-nav.workspace-chrome .context-command-island {
+    transform: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-nav.workspace-chrome {
+    padding: 0 0 18px;
+  }
+
+  .app-nav.workspace-chrome::before {
+    inset: -20px 0 auto;
+  }
+
+  .app-nav.workspace-chrome .workspace-identity-island,
+  .app-nav.workspace-chrome .appearance-command-island {
+    width: 100%;
+  }
+
+  .app-nav.workspace-chrome .layout-command-island {
+    opacity: .9;
+  }
+}
+
+/* Premium midnight glass calibration: dark mode keeps depth without neon edges. */
+html[data-theme="dark"] {
+  --blue: #86acd2;
+  --blue-hover: #c6d8ea;
+  --blue-soft: #17273c;
+  --glass-border: rgba(82, 96, 118, .58);
+  --glass-highlight: rgba(255, 255, 255, .065);
+  --field-border: rgba(82, 96, 118, .64);
+  --line: #33445d;
+  --line-soft: #22324a;
+  --shadow-card: 0 24px 58px rgba(0, 0, 0, .44), 0 1px 0 rgba(255, 255, 255, .035) inset;
+  --shadow-soft: 0 14px 32px rgba(0, 0, 0, .30), 0 1px 0 rgba(255, 255, 255, .03) inset;
+  --shadow-glass: 0 24px 58px rgba(0, 0, 0, .40), inset 0 1px 0 var(--glass-highlight);
+  --shadow-control: 0 12px 28px rgba(0, 0, 0, .28), inset 0 1px 0 var(--glass-highlight);
+  --panel-hover-inset: rgba(255, 255, 255, .06);
+}
+
+html[data-theme="dark"] ::selection {
+  background: rgba(134, 172, 210, .22);
+}
+
+html[data-theme="dark"] .app-nav,
+html[data-theme="dark"] .settings-nav,
+html[data-theme="dark"] .range-bar,
+html[data-theme="dark"] .stat-card,
+html[data-theme="dark"] .db-panel,
+html[data-theme="dark"] .nav-status-item,
+html[data-theme="dark"] .form-section,
+html[data-theme="dark"] .settings-save-bar,
+html[data-theme="dark"] .confirm-dialog,
+html[data-theme="dark"] .layout-slot-menu,
+html[data-theme="dark"] .panel-add-menu,
+html[data-theme="dark"] .dash-switch-menu,
+html[data-theme="dark"] .nav-status-popover,
+html[data-theme="dark"] .panel-color-menu,
+html[data-theme="dark"] .background-tone-popover,
+html[data-theme="dark"] .widget-tool-drawer,
+html[data-theme="dark"] .panel-tool-drawer {
+  border-color: rgba(92, 107, 131, .46);
+  box-shadow: var(--shadow-glass);
+  outline-color: rgba(192, 207, 226, .045);
+}
+
+html[data-theme="dark"] .stat-card,
+html[data-theme="dark"] .db-panel,
+html[data-theme="dark"] .range-bar {
+  background:
+    linear-gradient(180deg, rgba(25, 35, 53, .88), rgba(15, 24, 40, .88)),
+    var(--glass-surface);
+}
+
+html[data-theme="dark"] .stat-card,
+html[data-theme="dark"] .db-panel {
+  box-shadow:
+    0 24px 58px rgba(0, 0, 0, .42),
+    inset 0 1px 0 rgba(255, 255, 255, .045);
+}
+
+html[data-theme="dark"] .stat-card:hover,
+html[data-theme="dark"] .db-panel:hover,
+html[data-theme="dark"] .db-panel:focus-within,
+html[data-theme="dark"] .range-bar.widget-card:hover,
+html[data-theme="dark"] .range-bar.widget-card:focus-within {
+  border-color: rgba(126, 144, 170, .56);
+  box-shadow:
+    0 28px 66px rgba(0, 0, 0, .46),
+    inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+
+html[data-theme="dark"] .stat-card.active,
+html[data-theme="dark"] .widget-card.active,
+html[data-theme="dark"] .widget-card.db-panel-custom-color.active,
+html[data-theme="dark"] .db-panel.db-panel-custom-color:focus-within {
+  border-color: color-mix(in srgb, var(--panel-accent, var(--blue)) 34%, rgba(128, 145, 170, .56));
+  box-shadow:
+    0 28px 66px rgba(0, 0, 0, .46),
+    0 0 0 1px color-mix(in srgb, var(--panel-accent, var(--blue)) 13%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+
+html[data-theme="dark"] .widget-card.db-panel-custom-color,
+html[data-theme="dark"] .db-panel.db-panel-custom-color {
+  background: color-mix(in srgb, #121c2d 90%, var(--panel-accent, var(--blue)) 10%) !important;
+  border-color: color-mix(in srgb, var(--panel-accent, var(--blue)) 24%, rgba(94, 108, 132, .58)) !important;
+  box-shadow:
+    0 24px 58px rgba(0, 0, 0, .44),
+    0 0 0 1px rgba(var(--panel-accent-rgb, 134, 172, 210), .055),
+    inset 0 1px 0 rgba(255, 255, 255, .045) !important;
+}
+
+html[data-theme="dark"] .widget-card.db-panel-custom-color:hover,
+html[data-theme="dark"] .db-panel.db-panel-custom-color:hover,
+html[data-theme="dark"] .db-panel.db-panel-custom-color:focus-within {
+  background: color-mix(in srgb, #142033 88%, var(--panel-accent, var(--blue)) 12%) !important;
+  border-color: color-mix(in srgb, var(--panel-accent, var(--blue)) 32%, rgba(122, 138, 164, .62)) !important;
+  box-shadow:
+    0 28px 66px rgba(0, 0, 0, .46),
+    0 0 0 1px rgba(var(--panel-accent-rgb, 134, 172, 210), .075),
+    inset 0 1px 0 rgba(255, 255, 255, .06) !important;
+}
+
+html[data-theme="dark"] .widget-card.db-panel-pinned::after,
+html[data-theme="dark"] .db-panel.db-panel-pinned::after {
+  border-color: rgba(232, 238, 246, .54);
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, .24),
+    0 6px 14px rgba(0, 0, 0, .26);
+}
+
+html[data-theme="dark"] .widget-placeholder,
+html[data-theme="dark"] .panel-placeholder {
+  border-color: rgba(134, 172, 210, .40);
+  background: rgba(134, 172, 210, .075);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, .055),
+    0 18px 42px rgba(0, 0, 0, .24);
+}
+
+html[data-theme="dark"] .widget-dragging,
+html[data-theme="dark"] .db-panel.panel-dragging {
+  box-shadow:
+    0 32px 76px rgba(0, 0, 0, .54),
+    0 0 0 1px rgba(180, 195, 214, .12),
+    inset 0 1px 0 rgba(255, 255, 255, .06) !important;
+}
+
+html[data-theme="dark"] .theme-toggle,
+html[data-theme="dark"] .background-tone-trigger,
+html[data-theme="dark"] .panel-reset-button,
+html[data-theme="dark"] .panel-undo-button,
+html[data-theme="dark"] .panel-add-button,
+html[data-theme="dark"] .layout-slot-button,
+html[data-theme="dark"] .layout-slot-trigger,
+html[data-theme="dark"] .workspace-mode-button,
+html[data-theme="dark"] .nav-status-icon-only,
+html[data-theme="dark"] .cmd-btn,
+html[data-theme="dark"] .cmd-btn-icon-only,
+html[data-theme="dark"] .panel-add-action,
+html[data-theme="dark"] .widget-add-action,
+html[data-theme="dark"] .layout-slot-menu button,
+html[data-theme="dark"] .background-tone-option,
+html[data-theme="dark"] .range-custom-trigger,
+html[data-theme="dark"] .preset-btn,
+html[data-theme="dark"] .range-icon-button {
+  border-color: rgba(92, 107, 131, .48);
+  background: color-mix(in srgb, var(--glass-surface-strong) 76%, transparent);
+  color: var(--muted-strong);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, .26),
+    inset 0 1px 0 rgba(255, 255, 255, .055);
+  outline-color: rgba(192, 207, 226, .04);
+}
+
+html[data-theme="dark"] .theme-toggle:hover,
+html[data-theme="dark"] .theme-toggle:focus-visible,
+html[data-theme="dark"] .background-tone-trigger:hover,
+html[data-theme="dark"] .background-tone-trigger:focus-visible,
+html[data-theme="dark"] .panel-reset-button:hover,
+html[data-theme="dark"] .panel-reset-button:focus-visible,
+html[data-theme="dark"] .panel-undo-button:hover,
+html[data-theme="dark"] .panel-undo-button:focus-visible,
+html[data-theme="dark"] .panel-add-button:hover,
+html[data-theme="dark"] .panel-add-button:focus-visible,
+html[data-theme="dark"] .layout-slot-button:hover,
+html[data-theme="dark"] .layout-slot-button:focus-visible,
+html[data-theme="dark"] .layout-slot-trigger:hover,
+html[data-theme="dark"] .layout-slot-trigger:focus-visible,
+html[data-theme="dark"] .workspace-mode-button:hover,
+html[data-theme="dark"] .workspace-mode-button:focus-visible,
+html[data-theme="dark"] .nav-status-icon-only:hover,
+html[data-theme="dark"] .nav-status-icon-only:focus-visible,
+html[data-theme="dark"] .cmd-btn:hover,
+html[data-theme="dark"] .cmd-btn:focus-visible,
+html[data-theme="dark"] .cmd-btn-icon-only:hover,
+html[data-theme="dark"] .cmd-btn-icon-only:focus-visible,
+html[data-theme="dark"] .panel-add-action:hover,
+html[data-theme="dark"] .panel-add-action:focus-visible,
+html[data-theme="dark"] .widget-add-action:hover,
+html[data-theme="dark"] .widget-add-action:focus-visible,
+html[data-theme="dark"] .layout-slot-menu button:hover,
+html[data-theme="dark"] .layout-slot-menu button:focus-visible,
+html[data-theme="dark"] .background-tone-option:hover,
+html[data-theme="dark"] .background-tone-option:focus-visible,
+html[data-theme="dark"] .range-custom-trigger:hover,
+html[data-theme="dark"] .range-custom-trigger:focus-visible,
+html[data-theme="dark"] .preset-btn:hover,
+html[data-theme="dark"] .preset-btn:focus-visible,
+html[data-theme="dark"] .range-icon-button:hover,
+html[data-theme="dark"] .range-icon-button:focus-visible {
+  border-color: rgba(132, 148, 174, .58);
+  background: color-mix(in srgb, var(--glass-surface-strong) 82%, rgba(134, 172, 210, .10));
+  color: #e5edf7;
+  box-shadow:
+    0 16px 36px rgba(0, 0, 0, .32),
+    inset 0 1px 0 rgba(255, 255, 255, .07);
+}
+
+html[data-theme="dark"] .workspace-mode-button[aria-pressed="true"],
+html[data-theme="dark"] .layout-group-button[aria-pressed="true"],
+html[data-theme="dark"] .background-tone-option.is-selected,
+html[data-theme="dark"] .preset-btn.active,
+html[data-theme="dark"] .range-custom-trigger.active {
+  border-color: rgba(142, 160, 186, .62);
+  background:
+    linear-gradient(180deg, rgba(43, 58, 80, .68), rgba(26, 38, 58, .72)),
+    color-mix(in srgb, var(--blue) 10%, transparent);
+  color: #edf4fb;
+  box-shadow:
+    0 16px 38px rgba(0, 0, 0, .34),
+    inset 0 1px 0 rgba(255, 255, 255, .075),
+    inset 0 -1px 0 rgba(134, 172, 210, .16);
+}
+
+html[data-theme="dark"] .range-bar.widget-card {
+  --range-control-fg: #eef5fb;
+  --range-button-fg: #f6f9fd;
+  --range-search-fg: #f6f9fd;
+  --range-search-muted: #b8c6d8;
+  --range-control-bg: color-mix(in srgb, var(--surface-raised) 88%, var(--range-control-accent) 12%);
+  --range-control-border: color-mix(in srgb, var(--range-control-accent) 24%, rgba(92, 107, 131, .56));
+  --range-control-active-bg: color-mix(in srgb, var(--surface-raised) 84%, var(--range-control-accent) 16%);
+  --range-control-active-border: color-mix(in srgb, var(--range-control-accent) 34%, rgba(142, 160, 186, .64));
+  --range-control-glow: rgba(var(--panel-accent-rgb, 134, 172, 210), .035);
+}
+
+html[data-theme="dark"] .range-bar.widget-card .range-search-input,
+html[data-theme="dark"] .range-bar.widget-card .preset-btn,
+html[data-theme="dark"] .range-bar.widget-card .range-custom-trigger,
+html[data-theme="dark"] .range-bar.widget-card .range-display,
+html[data-theme="dark"] .range-bar.widget-card .range-icon-button {
+  box-shadow:
+    0 8px 18px rgba(0, 0, 0, .22),
+    inset 0 1px 0 rgba(255, 255, 255, .065);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome::before {
+  background:
+    radial-gradient(ellipse at 50% 32%, rgba(134, 172, 210, .10), transparent 66%),
+    linear-gradient(90deg, transparent, rgba(255, 255, 255, .045), transparent);
+  opacity: .66;
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome::after {
+  background: linear-gradient(90deg, transparent, rgba(134, 172, 210, .12), transparent);
+  opacity: .46;
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-accent-marker {
+  background: color-mix(in srgb, var(--blue) 78%, #dbe7f5);
+  box-shadow:
+    0 0 14px rgba(134, 172, 210, .20),
+    0 0 0 6px rgba(134, 172, 210, .045);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-identity-island,
+html[data-theme="dark"] .app-nav.workspace-chrome .composition-add-button,
+html[data-theme="dark"] .app-nav.workspace-chrome .appearance-command-island {
+  border-color: rgba(92, 107, 131, .40);
+  box-shadow:
+    0 24px 58px rgba(0, 0, 0, .36),
+    inset 0 1px 0 rgba(255, 255, 255, .055);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .composition-add-button::before {
+  background: radial-gradient(circle, rgba(134, 172, 210, .075), transparent 70%);
+  opacity: .62;
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .composition-add-button {
+  color: #dbe7f5;
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255, 255, 255, .14), transparent 38%),
+    radial-gradient(circle at 50% 70%, rgba(134, 172, 210, .12), transparent 60%),
+    rgba(25, 36, 55, .72);
+}
+
+html[data-theme="dark"] .widget-layout > .widget-card.group-selected,
+html[data-theme="dark"] .panel-layout > .db-panel.group-selected {
+  outline-color: rgba(174, 190, 211, .46);
+  box-shadow:
+    var(--shadow-card),
+    0 0 0 1px rgba(var(--panel-accent-rgb, 134, 172, 210), .08) !important;
+}
+
+html[data-theme="dark"] .widget-layout > .widget-card.active.group-selected,
+html[data-theme="dark"] .widget-layout > .widget-card.db-panel-custom-color.active.group-selected {
+  outline-color: rgba(196, 210, 228, .54) !important;
+  box-shadow:
+    var(--shadow-card),
+    0 0 0 1px rgba(var(--panel-accent-rgb, 134, 172, 210), .10) !important;
+}
+
+html[data-theme="dark"] .db-panel .panel-settings-toggle:hover,
+html[data-theme="dark"] .db-panel .panel-settings-toggle:focus-visible,
+html[data-theme="dark"] .db-panel .panel-tool-button:hover,
+html[data-theme="dark"] .db-panel .panel-tool-button:focus-visible,
+html[data-theme="dark"] .db-panel.db-panel-tools-open .panel-settings-toggle,
+html[data-theme="dark"] .db-panel.db-panel-custom-color .panel-settings-toggle:hover,
+html[data-theme="dark"] .db-panel.db-panel-custom-color .panel-settings-toggle:focus-visible,
+html[data-theme="dark"] .db-panel.db-panel-custom-color .panel-tool-button:hover,
+html[data-theme="dark"] .db-panel.db-panel-custom-color .panel-tool-button:focus-visible,
+html[data-theme="dark"] .db-panel.db-panel-custom-color.db-panel-tools-open .panel-settings-toggle,
+html[data-theme="dark"] .widget-card .panel-settings-toggle:hover,
+html[data-theme="dark"] .widget-card .panel-settings-toggle:focus-visible,
+html[data-theme="dark"] .widget-card .panel-tool-button:hover,
+html[data-theme="dark"] .widget-card .panel-tool-button:focus-visible,
+html[data-theme="dark"] .widget-card.widget-tools-open .panel-settings-toggle {
+  border-color: rgba(142, 160, 186, .54) !important;
+  background: color-mix(in srgb, var(--panel-lock-bg, rgba(134, 172, 210, .12)) 50%, rgba(25, 36, 55, .82)) !important;
+  color: #edf4fb !important;
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, .34),
+    inset 0 1px 0 rgba(255, 255, 255, .07) !important;
+}
+
+html[data-theme="dark"] .db-panel.db-panel-custom-color.db-panel-tools-open:hover,
+html[data-theme="dark"] .db-panel.db-panel-custom-color.db-panel-tools-open:focus-within {
+  border-color: color-mix(in srgb, var(--panel-accent) 26%, rgba(122, 138, 164, .58)) !important;
+  box-shadow:
+    0 24px 58px rgba(0, 0, 0, .42),
+    inset 0 1px 0 rgba(255, 255, 255, .055) !important;
+}
+
+html[data-theme="dark"] .widget-layout > .stat-card.widget-card:hover,
+html[data-theme="dark"] .panel-layout > .db-panel:hover,
+html[data-theme="dark"] .panel-layout > .db-panel:focus-within {
+  border-color: rgba(126, 144, 170, .56) !important;
+  box-shadow:
+    0 28px 66px rgba(0, 0, 0, .46),
+    inset 0 1px 0 rgba(255, 255, 255, .06) !important;
+}
+
+html[data-theme="dark"] .db-panel .panel-settings-toggle:hover,
+html[data-theme="dark"] .db-panel .panel-settings-toggle:focus-visible,
+html[data-theme="dark"] .db-panel .panel-tool-button:hover,
+html[data-theme="dark"] .db-panel .panel-tool-button:focus-visible,
+html[data-theme="dark"] .db-panel.db-panel-tools-open .panel-settings-toggle,
+html[data-theme="dark"] .widget-card .panel-settings-toggle:hover,
+html[data-theme="dark"] .widget-card .panel-settings-toggle:focus-visible,
+html[data-theme="dark"] .widget-card .panel-tool-button:hover,
+html[data-theme="dark"] .widget-card .panel-tool-button:focus-visible,
+html[data-theme="dark"] .widget-card.widget-tools-open .panel-settings-toggle {
+  outline: none !important;
+  background: rgba(28, 42, 64, .84) !important;
+  border-color: rgba(142, 160, 186, .54) !important;
+  color: #f6f9fd !important;
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, .34),
+    inset 0 1px 0 rgba(255, 255, 255, .07) !important;
+}
+
+html[data-theme="dark"] .db-panel.db-panel-custom-color .panel-settings-toggle:hover,
+html[data-theme="dark"] .db-panel.db-panel-custom-color .panel-settings-toggle:focus-visible,
+html[data-theme="dark"] .db-panel.db-panel-custom-color .panel-tool-button:hover,
+html[data-theme="dark"] .db-panel.db-panel-custom-color .panel-tool-button:focus-visible,
+html[data-theme="dark"] .db-panel.db-panel-custom-color.db-panel-tools-open .panel-settings-toggle {
+  outline: none !important;
+  background: rgba(28, 42, 64, .84) !important;
+  border-color: rgba(142, 160, 186, .54) !important;
+  color: #f6f9fd !important;
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, .34),
+    inset 0 1px 0 rgba(255, 255, 255, .07) !important;
+}
+
+/* Dark dashboard border refinement: keep interaction visible without electric edge light. */
+html[data-theme="dark"] .db-panel-hd,
+html[data-theme="dark"] .al-table th {
+  border-color: rgba(74, 88, 112, .52);
+  background: color-mix(in srgb, var(--surface-raised) 76%, rgba(134, 172, 210, .055));
+}
+
+html[data-theme="dark"] .db-panel.db-panel-custom-color .al-table th {
+  border-color: color-mix(in srgb, var(--panel-accent) 10%, rgba(74, 88, 112, .56)) !important;
+  background: color-mix(in srgb, var(--surface-raised) 90%, var(--panel-accent) 6%) !important;
+}
+
+html[data-theme="dark"] .db-panel-hd:focus-visible {
+  outline: 2px solid rgba(174, 190, 211, .28);
+  outline-offset: -3px;
+}
+
+html[data-theme="dark"] .db-panel-hd:hover::before,
+html[data-theme="dark"] .db-panel-hd:focus-visible::before,
+html[data-theme="dark"] .panel-lock-toggle:hover,
+html[data-theme="dark"] .panel-lock-toggle:focus-visible,
+html[data-theme="dark"] .panel-pin-toggle:hover,
+html[data-theme="dark"] .panel-pin-toggle:focus-visible,
+html[data-theme="dark"] .panel-settings-toggle:hover,
+html[data-theme="dark"] .panel-settings-toggle:focus-visible,
+html[data-theme="dark"] .panel-tool-button:hover,
+html[data-theme="dark"] .panel-tool-button:focus-visible,
+html[data-theme="dark"] .db-panel-tools-open .panel-settings-toggle,
+html[data-theme="dark"] .widget-tools-open .panel-settings-toggle {
+  border-color: rgba(142, 160, 186, .50);
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, .32),
+    inset 0 1px 0 rgba(255, 255, 255, .065) !important;
+}
+
+html[data-theme="dark"] .db-panel-count,
+html[data-theme="dark"] .empty-illustration {
+  background: rgba(35, 49, 72, .78);
+  border-color: rgba(92, 107, 131, .44);
+  color: #cbd8e8;
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, .24),
+    inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+
+html[data-theme="dark"] .al-table td {
+  border-bottom-color: rgba(54, 68, 92, .58);
+}
+
+html[data-theme="dark"] .al-table tbody tr:hover td {
+  background: rgba(27, 40, 60, .72);
+}
+
+html[data-theme="dark"] .empty-state {
+  border-color: rgba(92, 107, 131, .42);
+  background:
+    linear-gradient(180deg, rgba(24, 35, 53, .74), rgba(15, 24, 40, .76)),
+    var(--glass-surface);
+  box-shadow:
+    0 18px 42px rgba(0, 0, 0, .30),
+    inset 0 1px 0 rgba(255, 255, 255, .045);
+}
+
+html[data-theme="dark"] .timeframe-command-surface,
+html[data-theme="dark"] .timeframe-presets,
+html[data-theme="dark"] .timeframe-active-cluster,
+html[data-theme="dark"] .timeframe-utility-cluster {
+  border-color: color-mix(in srgb, var(--range-control-accent) 8%, rgba(92, 107, 131, .58));
+  background: color-mix(in srgb, var(--surface-raised) 92%, var(--range-control-accent) 5%);
+  box-shadow:
+    0 14px 32px rgba(0, 0, 0, .24),
+    inset 0 1px 0 rgba(255, 255, 255, .055);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-accent-marker {
+  background: color-mix(in srgb, var(--blue) 64%, #dbe7f5);
+  box-shadow:
+    0 0 10px rgba(134, 172, 210, .14),
+    0 0 0 5px rgba(134, 172, 210, .032);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .composition-add-button {
+  box-shadow:
+    0 22px 54px rgba(0, 0, 0, .34),
+    inset 0 1px 0 rgba(255, 255, 255, .055);
+}
+
+/* Focused top-nav polish: visible dashboard-glass toolbar, not a redesign. */
+.app-nav.workspace-chrome {
+  border: 1.5px solid color-mix(in srgb, var(--line) 68%, rgba(255, 255, 255, .92));
+  border-radius: 26px;
+  background:
+    radial-gradient(circle at 14% 0%, color-mix(in srgb, var(--blue) 9%, transparent) 0 38%, transparent 62%),
+    linear-gradient(180deg, rgba(250, 253, 255, .92), rgba(230, 237, 247, .78));
+  box-shadow:
+    0 18px 44px rgba(15, 23, 42, .11),
+    0 2px 10px rgba(15, 23, 42, .055),
+    inset 0 1px 0 rgba(255, 255, 255, .78);
+  backdrop-filter: blur(22px) saturate(1.12);
+  -webkit-backdrop-filter: blur(22px) saturate(1.12);
+}
+
+.app-nav.workspace-chrome::before {
+  inset: 1px 24px auto;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .78), transparent);
+  opacity: .9;
+}
+
+.app-nav.workspace-chrome::after {
+  opacity: 0;
+}
+
+.app-nav.workspace-chrome .workspace-command-island {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--line-soft) 72%, rgba(255, 255, 255, .82));
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--glass-surface-strong) 74%, rgba(225, 234, 246, .72));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .66),
+    0 8px 18px rgba(15, 23, 42, .045);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+}
+
+.app-nav.workspace-chrome .workspace-identity-island {
+  padding-inline: 6px 8px;
+  border-color: color-mix(in srgb, var(--line) 72%, rgba(255, 255, 255, .82));
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--glass-surface-strong) 84%, rgba(222, 233, 246, .78));
+}
+
+.app-nav.workspace-chrome .layout-command-island,
+.app-nav.workspace-chrome .appearance-command-island {
+  background: color-mix(in srgb, var(--glass-surface-strong) 78%, rgba(225, 234, 246, .72));
+}
+
+.app-nav.workspace-chrome .layout-slot-controls {
+  gap: 4px;
+}
+
+.app-nav.workspace-chrome button.dash-switch-hero,
+.app-nav.workspace-chrome .layout-slot-trigger,
+.app-nav.workspace-chrome .layout-slot-button,
+.app-nav.workspace-chrome .panel-undo-button,
+.app-nav.workspace-chrome .panel-reset-button,
+.app-nav.workspace-chrome .workspace-mode-button,
+.app-nav.workspace-chrome .theme-toggle,
+.app-nav.workspace-chrome .background-tone-trigger,
+.app-nav.workspace-chrome .nav-status-icon-only,
+.app-nav.workspace-chrome .cmd-btn-icon-only {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted-strong);
+  box-shadow: none;
+}
+
+.app-nav.workspace-chrome button.dash-switch-hero,
+.app-nav.workspace-chrome .layout-slot-trigger {
+  color: var(--ink-strong);
+}
+
+.app-nav.workspace-chrome .composition-add-button {
+  border: 1px solid color-mix(in srgb, var(--blue) 24%, var(--line));
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255, 255, 255, .58), transparent 38%),
+    color-mix(in srgb, var(--blue) 16%, rgba(246, 250, 255, .96));
+  color: color-mix(in srgb, var(--blue) 72%, var(--ink-strong));
+  box-shadow:
+    0 12px 26px color-mix(in srgb, var(--blue) 12%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, .72);
+}
+
+.app-nav.workspace-chrome button.dash-switch-hero:hover,
+.app-nav.workspace-chrome button.dash-switch-hero:focus-visible,
+.app-nav.workspace-chrome .theme-toggle:hover,
+.app-nav.workspace-chrome .theme-toggle:focus-visible,
+.app-nav.workspace-chrome .background-tone-trigger:hover,
+.app-nav.workspace-chrome .background-tone-trigger:focus-visible,
+.app-nav.workspace-chrome .panel-reset-button:hover,
+.app-nav.workspace-chrome .panel-reset-button:focus-visible,
+.app-nav.workspace-chrome .panel-undo-button:hover,
+.app-nav.workspace-chrome .panel-undo-button:focus-visible,
+.app-nav.workspace-chrome .layout-slot-button:hover,
+.app-nav.workspace-chrome .layout-slot-button:focus-visible,
+.app-nav.workspace-chrome .layout-slot-trigger:hover,
+.app-nav.workspace-chrome .layout-slot-trigger:focus-visible,
+.app-nav.workspace-chrome .workspace-mode-button:hover,
+.app-nav.workspace-chrome .workspace-mode-button:focus-visible,
+.app-nav.workspace-chrome .nav-status-icon-only:hover,
+.app-nav.workspace-chrome .nav-status-icon-only:focus-visible,
+.app-nav.workspace-chrome .cmd-btn-icon-only:hover,
+.app-nav.workspace-chrome .cmd-btn-icon-only:focus-visible {
+  border-color: color-mix(in srgb, var(--blue) 18%, var(--line));
+  background: color-mix(in srgb, var(--glass-surface-strong) 72%, var(--blue-soft));
+  color: var(--ink-strong);
+  box-shadow:
+    0 10px 22px color-mix(in srgb, var(--blue) 9%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, .66);
+}
+
+.app-nav.workspace-chrome .composition-add-button:hover,
+.app-nav.workspace-chrome .composition-add-button:focus-visible,
+.app-nav.workspace-chrome .panel-add-picker:focus-within .composition-add-button {
+  border-color: color-mix(in srgb, var(--blue) 34%, var(--line));
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255, 255, 255, .64), transparent 38%),
+    color-mix(in srgb, var(--blue) 22%, rgba(246, 250, 255, .96));
+  box-shadow:
+    0 14px 30px color-mix(in srgb, var(--blue) 14%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, .76);
+}
+
+.app-nav.workspace-chrome .workspace-mode-button[aria-pressed="true"],
+.app-nav.workspace-chrome .layout-group-button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--blue) 28%, var(--line));
+  background: color-mix(in srgb, var(--blue) 13%, var(--glass-surface-strong));
+  color: color-mix(in srgb, var(--blue) 76%, var(--ink-strong));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .58),
+    inset 0 -1px 0 color-mix(in srgb, var(--blue) 32%, transparent);
+}
+
+.app-nav.workspace-chrome .panel-add-menu,
+.app-nav.workspace-chrome .layout-slot-menu,
+.app-nav.workspace-chrome .dash-switch-menu,
+.app-nav.workspace-chrome .nav-status-popover,
+.app-nav.workspace-chrome .background-tone-popover {
+  border-color: color-mix(in srgb, var(--line) 62%, rgba(255, 255, 255, .74));
+  background:
+    linear-gradient(180deg, rgba(250, 253, 255, .96), rgba(235, 242, 250, .94));
+  box-shadow:
+    0 24px 58px rgba(15, 23, 42, .17),
+    inset 0 1px 0 rgba(255, 255, 255, .78);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome {
+  border: 1.5px solid rgba(86, 102, 126, .62);
+  background:
+    radial-gradient(circle at 14% 0%, rgba(134, 172, 210, .08) 0 38%, transparent 62%),
+    linear-gradient(180deg, rgba(28, 40, 60, .90), rgba(15, 24, 40, .84));
+  box-shadow:
+    0 24px 62px rgba(0, 0, 0, .42),
+    0 2px 12px rgba(0, 0, 0, .22),
+    inset 0 1px 0 rgba(255, 255, 255, .065);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome::before {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .07), transparent);
+  opacity: .85;
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-command-island {
+  border-color: rgba(82, 96, 118, .52);
+  background: rgba(23, 34, 54, .62);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, .24),
+    inset 0 1px 0 rgba(255, 255, 255, .045);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-identity-island,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-command-island,
+html[data-theme="dark"] .app-nav.workspace-chrome .appearance-command-island {
+  border-color: rgba(92, 107, 131, .54);
+  background: rgba(27, 40, 62, .68);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome button.dash-switch-hero,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-trigger,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-button,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-undo-button,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-reset-button,
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-mode-button,
+html[data-theme="dark"] .app-nav.workspace-chrome .theme-toggle,
+html[data-theme="dark"] .app-nav.workspace-chrome .background-tone-trigger,
+html[data-theme="dark"] .app-nav.workspace-chrome .nav-status-icon-only,
+html[data-theme="dark"] .app-nav.workspace-chrome .cmd-btn-icon-only {
+  border-color: transparent;
+  background: transparent;
+  color: #c7d4e5;
+  box-shadow: none;
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome button.dash-switch-hero,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-trigger {
+  color: #edf4fb;
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .composition-add-button {
+  border-color: rgba(122, 138, 164, .46);
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255, 255, 255, .13), transparent 38%),
+    color-mix(in srgb, rgba(35, 49, 72, .88) 86%, var(--blue) 14%);
+  color: #dbe7f5;
+  box-shadow:
+    0 16px 36px rgba(0, 0, 0, .32),
+    inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome button.dash-switch-hero:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome button.dash-switch-hero:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .theme-toggle:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .theme-toggle:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .background-tone-trigger:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .background-tone-trigger:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-reset-button:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-reset-button:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-undo-button:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-undo-button:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-button:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-button:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-trigger:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-trigger:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-mode-button:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-mode-button:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .nav-status-icon-only:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .nav-status-icon-only:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .cmd-btn-icon-only:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .cmd-btn-icon-only:focus-visible {
+  border-color: rgba(126, 144, 170, .46);
+  background: rgba(35, 49, 72, .72);
+  color: #f6f9fd;
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, .28),
+    inset 0 1px 0 rgba(255, 255, 255, .065);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .composition-add-button:hover,
+html[data-theme="dark"] .app-nav.workspace-chrome .composition-add-button:focus-visible,
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-add-picker:focus-within .composition-add-button {
+  border-color: rgba(142, 160, 186, .54);
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255, 255, 255, .15), transparent 38%),
+    color-mix(in srgb, rgba(39, 55, 80, .90) 84%, var(--blue) 16%);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .workspace-mode-button[aria-pressed="true"],
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-group-button[aria-pressed="true"] {
+  border-color: rgba(126, 144, 170, .50);
+  background: color-mix(in srgb, rgba(35, 49, 72, .78) 88%, var(--blue) 12%);
+  color: #f6f9fd;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .06),
+    inset 0 -1px 0 rgba(134, 172, 210, .12);
+}
+
+html[data-theme="dark"] .app-nav.workspace-chrome .panel-add-menu,
+html[data-theme="dark"] .app-nav.workspace-chrome .layout-slot-menu,
+html[data-theme="dark"] .app-nav.workspace-chrome .dash-switch-menu,
+html[data-theme="dark"] .app-nav.workspace-chrome .nav-status-popover,
+html[data-theme="dark"] .app-nav.workspace-chrome .background-tone-popover {
+  border-color: rgba(86, 102, 126, .58);
+  background:
+    linear-gradient(180deg, rgba(28, 40, 60, .96), rgba(15, 24, 40, .96));
+  box-shadow:
+    0 26px 64px rgba(0, 0, 0, .46),
+    inset 0 1px 0 rgba(255, 255, 255, .06);
 }
 

@@ -8,6 +8,7 @@ This repository is a generic configurable dashboard builder. The dashboard inter
 - Preserve existing class names, templates, visual language, spacing, shadows, radius, colors, glass effects, transitions, and theme behavior.
 - Do not add product-specific concepts, vendor names, monitoring/security language, sample incident data, background integrations, external notification flows, authentication-provider flows, ranking logic, or incident terminology.
 - Do not change drag, resize, collision, snapping, ghost preview, pinning, or save/load behavior without adding or updating Playwright tests first.
+- Do not implement authentication, sharing, or permissions as frontend-only behavior; future access control must be enforced server-side.
 - Treat flicker, jitter, off-grid placement, sticky collision previews, overlap, clipping, text/icon misalignment, and dark-mode visual drift as bugs.
 - Prefer focused fixes over broad rewrites. Read the current code before changing it.
 
@@ -44,5 +45,9 @@ If a test cannot be run, document why in the final response and in any related b
 - `docs/bug-report.md`
 - `docs/drag-resize-audit.md`
 - `docs/css-audit.md`
+- `docs/authentication-system.md`
+- `docs/permissions-model.md`
+- `docs/workspace-sharing.md`
+- `docs/security-guidelines.md`
 
 Update these when changing behavior, interaction mechanics, or architectural rules.

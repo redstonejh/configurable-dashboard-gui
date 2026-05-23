@@ -13,6 +13,30 @@
       <span class="theme-icon theme-icon-day" aria-hidden="true">☀</span>
       <span class="theme-icon theme-icon-night" aria-hidden="true">☾</span>
     </button>
+    <details class="background-tone-menu">
+      <summary class="background-tone-trigger" aria-label="Workspace background" title="Workspace background"><span class="background-tone-dot" aria-hidden="true"></span></summary>
+      <div class="background-tone-popover">
+        <div class="background-tone-group background-tone-group-light" aria-label="Light backgrounds">
+          <span class="background-tone-label">Light</span>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="warm-white">Warm white</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="cool-white">Cool white</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="soft-grey">Soft grey</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="light-blue-grey">Blue grey</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="blue-mist">Blue mist</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="frosted-light">Frosted</button>
+        </div>
+        <div class="background-tone-group background-tone-group-dark" aria-label="Dark backgrounds">
+          <span class="background-tone-label">Dark</span>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="charcoal">Charcoal</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="graphite">Graphite</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="soft-black">Soft black</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="deep-navy">Deep navy</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="dark-blue-grey">Blue grey</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="midnight-blue">Midnight</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="dark-frosted">Frosted</button>
+        </div>
+      </div>
+    </details>
     <a class="cmd-btn" id="settings-dashboard-btn" data-href="/dashboard" href="/dashboard">Dashboard</a>
   </div>
 </header>
@@ -36,6 +60,37 @@
         <input name="description" value="{{ dashboard.description }}" placeholder=" " autocomplete="off">
         <span class="fl-lbl">Description</span>
       </label>
+    </div>
+  </section>
+
+  <section class="form-section appearance-section">
+    <div class="section-heading">
+      <h2>Appearance</h2>
+    </div>
+    <div class="appearance-controls">
+      <div class="appearance-control-group background-tone-group background-tone-group-light" aria-label="Light background tones">
+        <span class="background-tone-label">Light backgrounds</span>
+        <div class="background-preset-grid">
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="warm-white">Warm white</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="cool-white">Cool white</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="soft-grey">Soft grey</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="light-blue-grey">Blue grey</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="blue-mist">Blue mist</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="frosted-light">Frosted</button>
+        </div>
+      </div>
+      <div class="appearance-control-group background-tone-group background-tone-group-dark" aria-label="Dark background tones">
+        <span class="background-tone-label">Dark backgrounds</span>
+        <div class="background-preset-grid">
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="charcoal">Charcoal</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="graphite">Graphite</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="soft-black">Soft black</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="deep-navy">Deep navy</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="dark-blue-grey">Blue grey</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="midnight-blue">Midnight</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="dark-frosted">Frosted</button>
+        </div>
+      </div>
     </div>
   </section>
 

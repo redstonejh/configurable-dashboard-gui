@@ -63,14 +63,14 @@ def close_dialog_if_open(page: Page) -> None:
 
 
 def add_panel_for_setup(page: Page):
-    page.locator(".panel-add-action").evaluate("node => node.click()")
+    page.locator('.panel-add-action[data-panel-kind="panel"]').evaluate("node => node.click()")
     panel = page.locator('.panel-layout > .db-panel[data-custom-panel="true"]').last
     expect(panel).to_be_visible()
     return panel
 
 
 def add_widget_for_setup(page: Page):
-    page.locator(".widget-add-action").evaluate("node => node.click()")
+    page.locator('.widget-add-action[data-widget-kind="stat"]').evaluate("node => node.click()")
     widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
     expect(widget).to_be_visible()
     return widget
@@ -169,10 +169,13 @@ def grid_item_states(page: Page, selector: str) -> list[dict]:
         """
         nodes => nodes.map(node => ({
           key: node.dataset.widgetKey || node.dataset.panelKey || node.textContent.trim().replace(/\\s+/g, " "),
+          type: node.classList.contains("widget-card") ? "widget" : "panel",
           col: Number(node.dataset.gridCol || 0),
           row: Number(node.dataset.gridRow || 0),
           span: Number(node.dataset.currentSpan || node.dataset.defaultSpan || 1),
           rowSpan: Number(node.dataset.gridRowSpan || 1),
+          pinned: node.classList.contains("db-panel-pinned"),
+          collapsed: node.classList.contains("db-panel-collapsed"),
         }))
         """
     )
@@ -203,7 +206,7 @@ def test_add_panel_menu_actions_are_pointer_clickable(page: Page, app_server: st
     goto(page, app_server)
     page.locator(".panel-add-button").click()
     expect(page.locator(".panel-add-menu")).to_have_class(re.compile("open"))
-    page.locator(".panel-add-action").click()
+    page.locator('.panel-add-action[data-panel-kind="panel"]').click()
     expect(page.locator('.panel-layout > .db-panel[data-custom-panel="true"]')).to_have_count(1)
     assert_clean_browser(page)
 
@@ -225,10 +228,331 @@ def test_theme_toggle_persists(page: Page, app_server: str) -> None:
     assert_clean_browser(page)
 
 
+def test_background_presets_and_secondary_surfaces_share_glass_language(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    artifact_dir = Path("test-results") / "workspace-visual-language"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    page.locator(".background-tone-trigger").first.click()
+    page.locator('.background-tone-option[data-background-mode="light"][data-background-tone="blue-mist"]').first.click()
+    expect(page.locator("html")).to_have_attribute("data-background", "blue-mist")
+    assert page.evaluate("localStorage.getItem('dashboard-background-light')") == "blue-mist"
+    page.screenshot(path=str(artifact_dir / "dashboard-light-blue-mist.png"), full_page=True)
+
+    page.locator(".panel-add-button").click()
+    expect(page.locator(".panel-add-menu")).to_have_class(re.compile("open"))
+    page.locator(".panel-add-menu").screenshot(path=str(artifact_dir / "dashboard-add-menu-glass.png"))
+
+    goto(page, app_server, "/settings")
+    expect(page.locator("#settings-form")).to_be_visible()
+    page.screenshot(path=str(artifact_dir / "settings-light-blue-mist.png"), full_page=True)
+    light_styles = page.evaluate(
+        """
+        () => {
+          const section = document.querySelector(".form-section");
+          const input = document.querySelector(".form-grid input");
+          const save = document.querySelector(".settings-save-bar");
+          const read = (node) => {
+            const styles = getComputedStyle(node);
+            return {
+              background: styles.backgroundColor,
+              border: styles.borderColor,
+              radius: parseFloat(styles.borderTopLeftRadius),
+              shadow: styles.boxShadow,
+            };
+          };
+          return { section: read(section), input: read(input), save: read(save) };
+        }
+        """
+    )
+    assert light_styles["section"]["radius"] >= 20
+    assert light_styles["input"]["radius"] >= 14
+    assert light_styles["section"]["shadow"] != "none"
+    assert light_styles["input"]["shadow"] != "none"
+    assert light_styles["save"]["shadow"] != "none"
+
+    page.locator(".theme-toggle").click()
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    page.locator(".background-tone-trigger").first.click()
+    page.locator('.background-tone-option[data-background-mode="dark"][data-background-tone="midnight-blue"]').first.click()
+    expect(page.locator("html")).to_have_attribute("data-background", "midnight-blue")
+    assert page.evaluate("localStorage.getItem('dashboard-background-dark')") == "midnight-blue"
+    page.screenshot(path=str(artifact_dir / "settings-dark-midnight-blue.png"), full_page=True)
+
+    goto(page, app_server)
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    expect(page.locator("html")).to_have_attribute("data-background", "midnight-blue")
+    page.screenshot(path=str(artifact_dir / "dashboard-dark-midnight-blue.png"), full_page=True)
+    assert_clean_browser(page)
+
+
+def test_workspace_chrome_is_spatial_and_modes_still_work(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    artifact_dir = Path("test-results") / "workspace-toolbar"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    expect(page.locator(".workspace-chrome")).to_be_visible()
+    expect(page.locator(".workspace-identity-island .dash-switch-hero")).to_be_visible()
+    expect(page.locator(".layout-command-island .layout-slot-controls")).to_be_visible()
+    expect(page.locator(".composition-add-button")).to_have_attribute("aria-label", "Add dashboard object")
+    expect(page.locator(".mode-command-island .engineer-mode-button")).to_be_visible()
+    expect(page.locator(".context-command-island .nav-status-icon-only")).to_be_visible()
+    expect(page.locator(".appearance-command-island .background-tone-trigger")).to_be_visible()
+
+    chrome_styles = page.locator(".workspace-chrome").evaluate(
+        """
+        node => {
+          const styles = getComputedStyle(node);
+            return {
+              radius: parseFloat(styles.borderTopLeftRadius),
+              border: parseFloat(styles.borderTopWidth),
+              shadow: styles.boxShadow,
+              backdrop: styles.backdropFilter || styles.webkitBackdropFilter,
+              background: styles.backgroundColor,
+              image: styles.backgroundImage,
+            };
+          }
+        """
+    )
+    assert chrome_styles["radius"] >= 24
+    assert chrome_styles["border"] >= 1
+    assert chrome_styles["shadow"] != "none"
+    assert chrome_styles["backdrop"] != "none"
+    assert chrome_styles["background"] != "rgba(0, 0, 0, 0)" or chrome_styles["image"] != "none"
+
+    floating_styles = page.locator(".workspace-identity-island").evaluate(
+        """
+        node => {
+          const styles = getComputedStyle(node);
+          return {
+            radius: parseFloat(styles.borderTopLeftRadius),
+            shadow: styles.boxShadow,
+            backdrop: styles.backdropFilter || styles.webkitBackdropFilter,
+            background: styles.backgroundColor,
+            image: styles.backgroundImage,
+          };
+        }
+        """
+    )
+    assert floating_styles["radius"] >= 22
+    assert floating_styles["shadow"] != "none"
+    assert floating_styles["backdrop"] != "none"
+    assert floating_styles["background"] != "rgba(0, 0, 0, 0)" or floating_styles["image"] != "none"
+
+    add_styles = page.locator(".composition-add-button").evaluate(
+        """
+        node => {
+          const styles = getComputedStyle(node);
+          return {
+            width: parseFloat(styles.width),
+            radius: parseFloat(styles.borderTopLeftRadius),
+            shadow: styles.boxShadow,
+            backdrop: styles.backdropFilter || styles.webkitBackdropFilter,
+          };
+        }
+        """
+    )
+    assert add_styles["width"] <= 52
+    assert add_styles["radius"] >= 20
+    assert add_styles["shadow"] != "none"
+    assert add_styles["backdrop"] != "none"
+
+    island_styles = page.locator(".layout-command-island").evaluate(
+        """
+        node => {
+          const styles = getComputedStyle(node);
+          return {
+            border: parseFloat(styles.borderTopWidth),
+            shadow: styles.boxShadow,
+            background: styles.backgroundColor,
+          };
+        }
+        """
+    )
+    assert island_styles["border"] >= 1
+    assert island_styles["shadow"] != "none"
+    assert island_styles["background"] != "rgba(0, 0, 0, 0)"
+    page.locator(".app-nav").screenshot(path=str(artifact_dir / "toolbar-light-spatial-chrome.png"))
+
+    page.locator(".layout-slot-trigger").click()
+    expect(page.locator(".layout-slot-menu")).to_have_class(re.compile("open"))
+    expect(page.locator(".layout-slot-menu")).to_contain_text("Layout 10")
+    page.keyboard.press("Escape")
+
+    page.locator(".panel-add-button").click()
+    expect(page.locator(".panel-add-menu")).to_have_class(re.compile("open"))
+    for label in ("Stat", "Stat + Filter", "Graph", "Table", "Calendar", "Panel", "Context Panel"):
+        expect(page.locator(".panel-add-menu")).to_contain_text(label)
+
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
+    assert page.locator("body").evaluate("node => node.classList.contains('engineer-mode-active')")
+
+    page.locator(".context-view-button").click()
+    expect(page.locator(".context-view-button")).to_have_attribute("aria-pressed", "true")
+    assert page.locator("body").evaluate("node => node.classList.contains('context-view-active')")
+
+    page.locator(".theme-toggle").click()
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    dark_chrome_styles = page.locator(".workspace-chrome").evaluate(
+        """
+        node => {
+          const styles = getComputedStyle(node);
+          const rgb = styles.borderTopColor.match(/rgba?\\(([^)]+)\\)/);
+          return {
+            border: parseFloat(styles.borderTopWidth),
+            borderRgb: rgb ? rgb[1].split(/[\\s,\\/]+/).filter(Boolean).slice(0, 3).map(Number) : [],
+            shadow: styles.boxShadow,
+            background: styles.backgroundColor,
+            image: styles.backgroundImage,
+          };
+        }
+        """
+    )
+    assert dark_chrome_styles["border"] >= 1
+    assert dark_chrome_styles["shadow"] != "none"
+    assert dark_chrome_styles["background"] != "rgba(0, 0, 0, 0)" or dark_chrome_styles["image"] != "none"
+    if dark_chrome_styles["borderRgb"]:
+        assert max(dark_chrome_styles["borderRgb"]) <= 170
+    page.locator(".app-nav").screenshot(path=str(artifact_dir / "toolbar-dark-spatial-chrome.png"))
+    assert_clean_browser(page)
+
+
+def test_settings_and_delete_modal_share_spatial_glass_language(page: Page, app_server: str) -> None:
+    page.goto(f"{app_server}/settings")
+    expect(page.locator(".settings-nav")).to_be_visible()
+    artifact_dir = Path("test-results") / "workspace-surfaces"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    settings_styles = page.locator(".form-section").first.evaluate(
+        """
+        node => {
+          const styles = getComputedStyle(node);
+            return {
+              radius: parseFloat(styles.borderTopLeftRadius),
+              shadow: styles.boxShadow,
+              backdrop: styles.backdropFilter || styles.webkitBackdropFilter,
+              background: styles.backgroundColor,
+              image: styles.backgroundImage,
+            };
+          }
+        """
+    )
+    assert settings_styles["radius"] >= 24
+    assert settings_styles["shadow"] != "none"
+    assert settings_styles["backdrop"] != "none"
+    assert settings_styles["background"] != "rgba(0, 0, 0, 0)" or settings_styles["image"] != "none"
+    page.screenshot(path=str(artifact_dir / "settings-spatial-glass.png"), full_page=True)
+
+    goto(page, app_server)
+    panel = page.locator(".db-panel").first
+    panel.locator(".panel-settings-toggle").click(force=True)
+    panel.locator(".panel-delete-handle").click(force=True)
+    dialog = page.locator(".confirm-dialog")
+    expect(dialog).to_be_visible()
+    dialog_styles = dialog.evaluate(
+        """
+        node => {
+          const styles = getComputedStyle(node);
+            return {
+              radius: parseFloat(styles.borderTopLeftRadius),
+              shadow: styles.boxShadow,
+              backdrop: styles.backdropFilter || styles.webkitBackdropFilter,
+              background: styles.backgroundColor,
+              image: styles.backgroundImage,
+            };
+          }
+        """
+    )
+    assert dialog_styles["radius"] >= 24
+    assert dialog_styles["shadow"] != "none"
+    assert dialog_styles["backdrop"] != "none"
+    assert dialog_styles["background"] != "rgba(0, 0, 0, 0)" or dialog_styles["image"] != "none"
+    dialog.screenshot(path=str(artifact_dir / "delete-dialog-spatial-glass.png"))
+    page.locator(".confirm-dialog-cancel").click()
+    assert_clean_browser(page)
+
+
+def test_dark_mode_uses_midnight_glass_not_neon_edges(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    artifact_dir = Path("test-results") / "theme-polish"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    page.locator(".theme-toggle").click()
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    page.locator(".stat-card[data-widget-key='widget-1']").hover()
+
+    styles = page.evaluate(
+        """
+        () => {
+          const toRgb = (value) => {
+            const rgb = value.match(/rgba?\\(([^)]+)\\)/);
+            if (rgb) {
+              return rgb[1].split(/[\\s,\\/]+/).filter(Boolean).slice(0, 3).map((part) => Math.round(Number(part)));
+            }
+            const srgb = value.match(/color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)/);
+            if (srgb) {
+              return srgb.slice(1, 4).map((part) => Math.round(Number(part) * 255));
+            }
+            return [];
+          };
+          const root = getComputedStyle(document.documentElement);
+          const stat = getComputedStyle(document.querySelector(".stat-card[data-widget-key='widget-1']"));
+          const panel = getComputedStyle(document.querySelector(".db-panel"));
+          const tableHeader = getComputedStyle(document.querySelector(".al-table th"));
+          const empty = getComputedStyle(document.querySelector(".empty-state"));
+          const timeframe = getComputedStyle(document.querySelector(".timeframe-command-surface"));
+          const add = getComputedStyle(document.querySelector(".composition-add-button"));
+          const marker = getComputedStyle(document.querySelector(".workspace-accent-marker"));
+          return {
+            accent: root.getPropertyValue("--blue").trim(),
+            statBorder: stat.borderTopColor,
+            statBorderRgb: toRgb(stat.borderTopColor),
+            statShadow: stat.boxShadow,
+            panelBorder: panel.borderTopColor,
+            panelBorderRgb: toRgb(panel.borderTopColor),
+            panelShadow: panel.boxShadow,
+            tableBorder: tableHeader.borderBottomColor,
+            tableBorderRgb: toRgb(tableHeader.borderBottomColor),
+            emptyBorder: empty.borderTopColor,
+            emptyBorderRgb: toRgb(empty.borderTopColor),
+            timeframeBorder: timeframe.borderTopColor,
+            timeframeBorderRgb: toRgb(timeframe.borderTopColor),
+            addShadow: add.boxShadow,
+            markerShadow: marker.boxShadow,
+          };
+        }
+        """
+    )
+
+    stat_border = styles["statBorderRgb"]
+    panel_border = styles["panelBorderRgb"]
+    table_border = styles["tableBorderRgb"]
+    empty_border = styles["emptyBorderRgb"]
+    timeframe_border = styles["timeframeBorderRgb"]
+    assert styles["accent"].lower() == "#86acd2"
+    if stat_border:
+        assert max(stat_border) <= 190
+        assert stat_border[2] - stat_border[0] <= 65
+    if panel_border:
+        assert max(panel_border) <= 160
+    for name, border in (("table", table_border), ("empty", empty_border), ("timeframe", timeframe_border)):
+        if border:
+            assert max(border) <= 170, (name, border)
+            assert border[2] - border[0] <= 70, (name, border)
+    old_neon_values = ("103, 169, 255", "147, 197, 253", "#67a9ff", "#75b9ff", "#9dccff")
+    combined_styles = " ".join(str(value) for value in styles.values())
+    for neon_value in old_neon_values:
+        assert neon_value not in combined_styles
+    page.screenshot(path=str(artifact_dir / "dashboard-dark-midnight-glass.png"), full_page=True)
+    assert_clean_browser(page)
+
+
 def test_timeframe_controls_use_theme_aware_glass_color(page: Page, app_server: str) -> None:
     goto(page, app_server)
     control = page.locator(".timeframe-widget")
     expect(control).to_be_visible()
+    assert control.evaluate("node => node.dataset.defaultSpan") == "5"
 
     def ensure_control_tools_open() -> None:
         if not control.evaluate("node => node.classList.contains('widget-tools-open')"):
@@ -375,11 +699,52 @@ def test_timeframe_widget_uses_shared_resize_system(page: Page, app_server: str)
         })
         """
     )
-    assert before == 6
+    assert before == 5
     assert 1 <= after["span"] < before
-    assert "span 6" not in after["gridColumn"]
+    assert "span 5" not in after["gridColumn"]
     assert after["row"] >= 1
     assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    assert_clean_browser(page)
+
+
+def test_timeframe_resize_clamps_to_content_minimum(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    control = page.locator(".timeframe-widget")
+
+    open_tools(control)
+    drag_by(page, control.locator(".panel-resize-handle"), -900, 0, steps=18)
+    page.wait_for_timeout(350)
+
+    state = control.evaluate(
+        """
+        node => {
+          const root = node.getBoundingClientRect();
+          const visibleControls = [...node.querySelectorAll(".preset-btn, .range-custom-trigger, .range-icon-button, .panel-settings-toggle")]
+            .filter((control) => {
+              const styles = getComputedStyle(control);
+              return styles.display !== "none" && styles.visibility !== "hidden";
+            })
+            .map((control) => {
+              const rect = control.getBoundingClientRect();
+              return {
+                width: rect.width,
+                height: rect.height,
+                clipped: rect.left < root.left - 1 || rect.right > root.right + 1 || rect.top < root.top - 1 || rect.bottom > root.bottom + 1,
+              };
+            });
+          return {
+            span: Number(node.dataset.currentSpan || node.dataset.defaultSpan || 0),
+            minW: Number(node.dataset.minW || 0),
+            gridColumn: getComputedStyle(node).gridColumnEnd,
+            clipped: visibleControls.filter((control) => control.clipped || control.width < 24 || control.height < 24),
+          };
+        }
+        """
+    )
+
+    assert state["span"] == state["minW"] == 4
+    assert state["gridColumn"] == "span 4"
+    assert state["clipped"] == []
     assert_clean_browser(page)
 
 
@@ -515,7 +880,7 @@ def test_ordered_drag_reflows_widgets_without_overlap(page: Page, app_server: st
 
     after = visual_grid_items(page, ".widget-layout > .stat-card.widget-card:not(.range-bar)")
     moved = next(item for item in after if item["text"] == "0 Widget 2")
-    assert moved["col"] >= 4
+    assert moved["col"] > before[1]["col"]
     assert no_visible_overlaps(page, ".widget-layout > .widget-card") == []
     assert grid_alignment_error(page, ".widget-layout > .stat-card.widget-card:not(.range-bar):nth-of-type(3)") <= 3
     assert_clean_browser(page)
@@ -750,7 +1115,7 @@ def test_dragging_over_items_does_not_open_underlying_menus(page: Page, app_serv
     start_x, start_y = box_center(handle_box)
     page.mouse.move(start_x, start_y)
     page.mouse.down()
-    page.mouse.move(start_x + 50, start_y + 8, steps=6)
+    page.mouse.move(start_x + 86, start_y + 14, steps=10)
     expect(page.locator(".widget-dragging")).to_have_count(1)
 
     page.mouse.move(panel_box["x"] + panel_box["width"] - 18, panel_box["y"] + 22, steps=12)
@@ -939,6 +1304,272 @@ def test_group_mode_and_layout_save_load_reset(page: Page, app_server: str) -> N
     page.locator(".layout-load-button").click()
     page.wait_for_timeout(350)
     expect(page.locator(".panel-layout > .db-panel", has_text="Saved Panel")).to_have_count(1)
+    assert_clean_browser(page)
+
+
+def test_group_drag_moves_selected_items_as_shared_transform(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span, rowSpan = 1) => {
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+          };
+          const widget = document.querySelector('[data-widget-key="widget-1"]');
+          const pinned = document.querySelector('[data-widget-key="widget-2"]');
+          const panel = document.querySelector('[data-panel-key="builder-table"]');
+          place(widget, 1, 2, 1);
+          place(pinned, 6, 2, 1);
+          place(panel, 3, 2, 2, 3);
+          pinned.classList.add("db-panel-pinned");
+          pinned.querySelector(".panel-pin-toggle")?.setAttribute("aria-pressed", "true");
+        }
+        """
+    )
+
+    group_button = page.locator(".layout-group-button")
+    group_button.click()
+    widget = page.locator('[data-widget-key="widget-1"]')
+    pinned = page.locator('[data-widget-key="widget-2"]')
+    panel = page.locator('[data-panel-key="builder-table"]')
+    widget.click(position={"x": 20, "y": 20})
+    pinned.click(position={"x": 20, "y": 20})
+    panel.click(position={"x": 20, "y": 20})
+    expect(page.locator(".group-selected")).to_have_count(3)
+
+    before = {
+        "widget": grid_item_state(page, '[data-widget-key="widget-1"]'),
+        "pinned": grid_item_state(page, '[data-widget-key="widget-2"]'),
+        "panel": grid_item_state(page, '[data-panel-key="builder-table"]'),
+    }
+    open_tools(widget)
+    drag_by(page, widget.locator(".panel-move-handle"), 0, 220, steps=18)
+    page.wait_for_timeout(360)
+    after = {
+        "widget": grid_item_state(page, '[data-widget-key="widget-1"]'),
+        "pinned": grid_item_state(page, '[data-widget-key="widget-2"]'),
+        "panel": grid_item_state(page, '[data-panel-key="builder-table"]'),
+    }
+
+    widget_delta = after["widget"]["row"] - before["widget"]["row"]
+    panel_delta = after["panel"]["row"] - before["panel"]["row"]
+    assert widget_delta > 0
+    assert panel_delta == widget_delta
+    assert after["panel"]["col"] - after["widget"]["col"] == before["panel"]["col"] - before["widget"]["col"]
+    assert after["pinned"]["row"] == before["pinned"]["row"]
+    assert after["pinned"]["col"] == before["pinned"]["col"]
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    assert_clean_browser(page)
+
+
+def test_group_resize_is_proportional_and_minimum_aware(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span, rowSpan = 1) => {
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+          };
+          const timeframe = document.querySelector('[data-widget-key="builder-search"]');
+          const stat = document.querySelector('[data-widget-key="widget-1"]');
+          const panel = document.querySelector('[data-panel-key="builder-table"]');
+          timeframe.dataset.minW = "4";
+          place(timeframe, 1, 1, 6);
+          place(stat, 1, 4, 2);
+          place(panel, 4, 4, 3, 3);
+          panel.style.height = "275px";
+          panel.dataset.savedHeight = "275";
+        }
+        """
+    )
+
+    page.locator(".layout-group-button").click()
+    timeframe = page.locator('[data-widget-key="builder-search"]')
+    stat = page.locator('[data-widget-key="widget-1"]')
+    panel = page.locator('[data-panel-key="builder-table"]')
+    timeframe.click(position={"x": 20, "y": 20})
+    stat.click(position={"x": 20, "y": 20})
+    panel.click(position={"x": 20, "y": 20})
+    expect(page.locator(".group-selected")).to_have_count(3)
+
+    outline_width = stat.evaluate("node => parseFloat(getComputedStyle(node).outlineWidth)")
+    assert outline_width <= 2
+
+    open_tools(stat)
+    drag_by(page, stat.locator(".panel-resize-handle"), -700, 0, steps=18)
+    page.wait_for_timeout(360)
+
+    sizes = page.evaluate(
+        """
+        () => ({
+          timeframe: Number(document.querySelector('[data-widget-key="builder-search"]').dataset.currentSpan),
+          stat: Number(document.querySelector('[data-widget-key="widget-1"]').dataset.currentSpan),
+          panel: Number(document.querySelector('[data-panel-key="builder-table"]').dataset.currentSpan),
+          timeframeMin: Number(document.querySelector('[data-widget-key="builder-search"]').dataset.minW),
+          panelRows: Number(document.querySelector('[data-panel-key="builder-table"]').dataset.gridRowSpan),
+        })
+        """
+    )
+
+    assert sizes["timeframe"] == sizes["timeframeMin"] == 4
+    assert sizes["stat"] >= 1
+    assert sizes["panel"] >= 1
+    assert len({sizes["timeframe"], sizes["stat"], sizes["panel"]}) > 1
+    assert sizes["panelRows"] >= 1
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    assert_clean_browser(page)
+
+
+def test_layout_save_load_round_trips_exact_item_state(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+
+    expected = page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span, rowSpan = 1, height = null) => {
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            if (height) {
+              node.dataset.savedHeight = String(height);
+              node.style.height = `${height}px`;
+            }
+          };
+          const setPinned = (node, pinned) => {
+            node.classList.toggle("db-panel-pinned", pinned);
+            node.querySelector(".panel-pin-toggle")?.setAttribute("aria-pressed", String(pinned));
+          };
+          const widgetLayout = document.querySelector('.widget-layout[data-widget-layout-key="builder"]');
+          const panelLayout = document.querySelector('.panel-layout[data-layout-key="builder"]');
+          const widgets = {
+            A: widgetLayout.querySelector('[data-widget-key="builder-search"]'),
+            B: widgetLayout.querySelector('[data-widget-key="widget-1"]'),
+            C: widgetLayout.querySelector('[data-widget-key="widget-2"]'),
+            D: widgetLayout.querySelector('[data-widget-key="widget-3"]'),
+            E: widgetLayout.querySelector('[data-widget-key="widget-4"]'),
+          };
+          place(widgets.A, 1, 1, 4);
+          place(widgets.B, 5, 1, 1);
+          place(widgets.C, 6, 1, 1);
+          place(widgets.D, 1, 4, 1);
+          place(widgets.E, 5, 5, 2);
+          setPinned(widgets.A, true);
+          setPinned(widgets.B, false);
+          setPinned(widgets.C, false);
+          setPinned(widgets.D, false);
+          setPinned(widgets.E, true);
+
+          const panels = {
+            table: panelLayout.querySelector('[data-panel-key="builder-table"]'),
+            menu: panelLayout.querySelector('[data-panel-key="builder-menu"]'),
+            notes: panelLayout.querySelector('[data-panel-key="builder-notes"]'),
+          };
+          panels.table.classList.remove("db-panel-collapsed");
+          panels.menu.classList.add("db-panel-collapsed");
+          panels.notes.classList.remove("db-panel-collapsed");
+          place(panels.table, 1, 7, 3, 3, 275);
+          place(panels.menu, 4, 7, 2, 1);
+          place(panels.notes, 6, 10, 1, 3, 275);
+          setPinned(panels.notes, true);
+
+          return [...document.querySelectorAll('.dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel')]
+            .map((node, index) => ({
+              key: node.dataset.widgetKey || node.dataset.panelKey,
+              type: node.classList.contains("widget-card") ? "widget" : "panel",
+              index,
+              col: Number(node.dataset.gridCol || 0),
+              row: Number(node.dataset.gridRow || 0),
+              span: Number(node.dataset.currentSpan || node.dataset.defaultSpan || 1),
+              rowSpan: Number(node.dataset.gridRowSpan || 1),
+              pinned: node.classList.contains("db-panel-pinned"),
+              collapsed: node.classList.contains("db-panel-collapsed"),
+            }));
+        }
+        """
+    )
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+
+    stored = page.evaluate(
+        """
+        () => {
+          const read = (prefix) => Object.fromEntries(
+            Object.keys(localStorage)
+              .filter((key) => key.startsWith(prefix))
+              .map((key) => [key.split(":").pop(), JSON.parse(localStorage.getItem(key))])
+          );
+          return {
+            widgets: read("dashboard-widget-six-grid-layout:1:builder:"),
+            panels: read("dashboard-panel-six-grid-layout:1:builder:"),
+          };
+        }
+        """
+    )
+    assert stored["widgets"]["builder-search"]["pinned"] is True
+    assert stored["widgets"]["widget-4"]["pinned"] is True
+    assert stored["widgets"]["widget-1"]["pinned"] is False
+    assert stored["widgets"]["widget-3"]["gridRow"] == 4
+    assert stored["widgets"]["widget-4"]["gridRow"] == 5
+    assert stored["panels"]["builder-notes"]["pinned"] is True
+    assert stored["panels"]["builder-menu"]["collapsed"] is True
+
+    page.locator(".panel-reset-button").click()
+    page.wait_for_timeout(250)
+    assert page.locator('[data-widget-key="widget-4"]').evaluate("node => node.classList.contains('db-panel-pinned')") is False
+
+    with page.expect_navigation(wait_until="networkidle"):
+        page.locator(".layout-load-button").click()
+    page.wait_for_selector(".dashboard-layout-grid")
+
+    actual = page.evaluate(
+        """
+        () => [...document.querySelectorAll('.dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel')]
+          .map((node, index) => ({
+            key: node.dataset.widgetKey || node.dataset.panelKey,
+            type: node.classList.contains("widget-card") ? "widget" : "panel",
+            index,
+            col: Number(node.dataset.gridCol || 0),
+            row: Number(node.dataset.gridRow || 0),
+            span: Number(node.dataset.currentSpan || node.dataset.defaultSpan || 1),
+            rowSpan: Number(node.dataset.gridRowSpan || 1),
+            pinned: node.classList.contains("db-panel-pinned"),
+            collapsed: node.classList.contains("db-panel-collapsed"),
+          }))
+        """
+    )
+
+    by_key = {item["key"]: item for item in actual}
+    expected_by_key = {item["key"]: item for item in expected}
+    for key, expected_item in expected_by_key.items():
+        actual_item = by_key[key]
+        assert actual_item["type"] == expected_item["type"], key
+        assert actual_item["index"] == expected_item["index"], key
+        assert actual_item["col"] == expected_item["col"], key
+        assert actual_item["row"] == expected_item["row"], key
+        assert actual_item["span"] == expected_item["span"], key
+        assert actual_item["rowSpan"] == expected_item["rowSpan"], key
+        assert actual_item["pinned"] == expected_item["pinned"], key
+        assert actual_item["collapsed"] == expected_item["collapsed"], key
+
+    assert by_key["builder-search"]["pinned"] is True
+    assert by_key["widget-4"]["pinned"] is True
+    assert by_key["widget-1"]["pinned"] is False
+    assert by_key["widget-4"]["row"] == 5
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
     assert_clean_browser(page)
 
 

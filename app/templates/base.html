@@ -9,6 +9,10 @@
       try {
         const theme = localStorage.getItem("dashboard-theme");
         if (theme === "dark") document.documentElement.dataset.theme = "dark";
+        const mode = theme === "dark" ? "dark" : "light";
+        const fallback = mode === "dark" ? "charcoal" : "frosted-light";
+        const background = localStorage.getItem(`dashboard-background-${mode}`) || fallback;
+        document.documentElement.dataset.background = background;
       } catch {}
     })();
   </script>

@@ -13,9 +13,11 @@
   </div>
 {%- endmacro %}
 
-<header class="app-nav">
+<header class="app-nav workspace-chrome">
   <div class="app-nav-brand-group">
-    <div class="dash-switcher">
+    <div class="workspace-command-island workspace-identity-island" aria-label="Workspace identity">
+      <span class="workspace-accent-marker" aria-hidden="true"></span>
+      <div class="dash-switcher">
       <button class="dash-switch-btn dash-switch-hero" type="button" id="dash-switcher-toggle" aria-haspopup="true" aria-expanded="false">
         {{ dashboard.title }} <span class="dash-switch-arrow" aria-hidden="true">▾</span>
       </button>
@@ -24,55 +26,99 @@
           <span><strong>{{ dashboard.title }}</strong><small>Builder workspace</small></span>
         </a>
       </div>
+      </div>
     </div>
   </div>
   <div class="app-nav-status" aria-label="Dashboard controls">
-    <div class="layout-slot-controls" aria-label="Layout save slots">
-      <div class="layout-slot-picker" data-layout-target="builder">
-        <button class="layout-slot-trigger" type="button" data-current-slot="1" aria-haspopup="true" aria-expanded="false">Layout 1</button>
-        <div class="layout-slot-menu" role="menu">
-          {% for slot in range(1, 11) %}<button type="button" role="menuitem" data-slot="{{ slot }}">Layout {{ slot }}</button>{% endfor %}
+    <div class="workspace-command-island layout-command-island" aria-label="Layout and persistence">
+      <div class="layout-slot-controls" aria-label="Layout save slots">
+        <div class="layout-slot-picker" data-layout-target="builder">
+          <button class="layout-slot-trigger" type="button" data-current-slot="1" aria-haspopup="true" aria-expanded="false">Layout 1</button>
+          <div class="layout-slot-menu" role="menu">
+            {% for slot in range(1, 11) %}<button type="button" role="menuitem" data-slot="{{ slot }}">Layout {{ slot }}</button>{% endfor %}
+          </div>
         </div>
+        <button class="layout-slot-button layout-save-button" type="button" data-layout-target="builder">Save</button>
+        <button class="layout-slot-button layout-load-button" type="button" data-layout-target="builder">Load</button>
+        <button class="panel-undo-button" type="button" data-layout-target="builder" aria-label="Undo last layout change" title="Undo last layout change">Undo</button>
       </div>
-      <button class="layout-slot-button layout-save-button" type="button" data-layout-target="builder">Save</button>
-      <button class="layout-slot-button layout-load-button" type="button" data-layout-target="builder">Load</button>
     </div>
-    <div class="panel-add-picker" data-layout-target="builder">
-      <button class="panel-add-button" type="button" aria-label="Panel actions" aria-haspopup="true" aria-expanded="false" title="Panel actions">+</button>
+    <div class="workspace-command-island composition-command-island" aria-label="Composition">
+      <div class="panel-add-picker" data-layout-target="builder">
+      <button class="panel-add-button composition-add-button" type="button" aria-label="Add dashboard object" aria-haspopup="true" aria-expanded="false" title="Add dashboard object"><span class="chrome-add-glyph" aria-hidden="true">+</span></button>
       <div class="panel-add-menu">
-        <button class="panel-add-action" type="button" data-layout-target="builder">Add panel</button>
-        <button class="widget-add-action" type="button" data-widget-target="builder">Add widget</button>
+        <span class="panel-add-menu-label">Widgets</span>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="stat">Stat</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="stat-filter">Stat + Filter</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="graph">Graph</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="table">Table</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="calendar">Calendar</button>
+        <span class="panel-add-menu-label">Panels</span>
+        <button class="panel-add-action" type="button" data-layout-target="builder" data-panel-kind="panel">Panel</button>
+        <button class="panel-add-action" type="button" data-layout-target="builder" data-panel-kind="context-panel">Context Panel</button>
+      </div>
       </div>
     </div>
-    <button class="panel-reset-button" type="button" data-layout-target="builder" aria-label="Reset panel layout" title="Reset panel layout">Default</button>
-    <button class="panel-undo-button" type="button" data-layout-target="builder" aria-label="Undo last layout change" title="Undo last layout change">Undo</button>
-    <button class="layout-slot-button layout-group-button" type="button" data-layout-target="builder" aria-pressed="false" title="Select widgets or panels as a group">Group</button>
-    <details class="nav-status-menu">
-      <summary class="nav-status-item nav-status-icon-only nav-status-good" aria-label="Workspace ready" title="Workspace ready">
-        <span class="nav-icon nav-icon-sync" aria-hidden="true"></span>
-      </summary>
-      <div class="nav-status-popover">
-        <strong>Workspace</strong>
-        <dl>
-          <div><dt>Status</dt><dd>Ready</dd></div>
-          <div><dt>Panels</dt><dd>{{ panels | length }}</dd></div>
-          <div><dt>Widgets</dt><dd>{{ widgets | length }}</dd></div>
-        </dl>
-      </div>
-    </details>
+    <div class="workspace-command-island mode-command-island" aria-label="Interaction modes">
+      <button class="layout-slot-button layout-group-button" type="button" data-layout-target="builder" aria-pressed="false" title="Select widgets or panels as a group">Group</button>
+      <button class="workspace-mode-button engineer-mode-button" type="button" data-workspace-mode="engineer" aria-pressed="false" title="Engineer Mode">Engineer</button>
+      <button class="workspace-mode-button context-view-button" type="button" data-workspace-mode="context" aria-pressed="false" title="Context View">Context</button>
+    </div>
+    <div class="workspace-command-island context-command-island" aria-label="Workspace context">
+      <details class="nav-status-menu">
+        <summary class="nav-status-item nav-status-icon-only nav-status-good" aria-label="Workspace ready" title="Workspace ready">
+          <span class="nav-icon nav-icon-sync" aria-hidden="true"></span>
+        </summary>
+        <div class="nav-status-popover">
+          <strong>Workspace</strong>
+          <dl>
+            <div><dt>Status</dt><dd>Ready</dd></div>
+            <div><dt>Panels</dt><dd>{{ panels | length }}</dd></div>
+            <div><dt>Widgets</dt><dd>{{ widgets | length }}</dd></div>
+          </dl>
+        </div>
+      </details>
+    </div>
   </div>
   <div class="app-nav-actions">
-    <button class="theme-toggle" type="button" aria-label="Switch dashboard theme" title="Toggle dark mode">
-      <span class="theme-icon theme-icon-day" aria-hidden="true">☀</span>
-      <span class="theme-icon theme-icon-night" aria-hidden="true">☾</span>
-    </button>
-    <a class="cmd-btn cmd-btn-icon-only" href="/settings" aria-label="Configure" title="Configure"><span class="btn-icon btn-icon-settings" aria-hidden="true"></span></a>
+    <div class="workspace-command-island appearance-command-island" aria-label="Appearance and environment">
+      <details class="background-tone-menu">
+      <summary class="background-tone-trigger" aria-label="Workspace background" title="Workspace background"><span class="background-tone-dot" aria-hidden="true"></span></summary>
+      <div class="background-tone-popover">
+        <div class="background-tone-group background-tone-group-light" aria-label="Light backgrounds">
+          <span class="background-tone-label">Light</span>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="warm-white">Warm white</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="cool-white">Cool white</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="soft-grey">Soft grey</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="light-blue-grey">Blue grey</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="blue-mist">Blue mist</button>
+          <button type="button" class="background-tone-option" data-background-mode="light" data-background-tone="frosted-light">Frosted</button>
+        </div>
+        <div class="background-tone-group background-tone-group-dark" aria-label="Dark backgrounds">
+          <span class="background-tone-label">Dark</span>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="charcoal">Charcoal</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="graphite">Graphite</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="soft-black">Soft black</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="deep-navy">Deep navy</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="dark-blue-grey">Blue grey</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="midnight-blue">Midnight</button>
+          <button type="button" class="background-tone-option" data-background-mode="dark" data-background-tone="dark-frosted">Frosted</button>
+        </div>
+      </div>
+      </details>
+      <button class="theme-toggle" type="button" aria-label="Switch dashboard theme" title="Toggle dark mode">
+        <span class="theme-icon theme-icon-day" aria-hidden="true">☀</span>
+        <span class="theme-icon theme-icon-night" aria-hidden="true">☾</span>
+      </button>
+      <button class="panel-reset-button restore-layout-button" type="button" data-layout-target="builder" aria-label="Restore default layout" title="Restore default layout">Restore</button>
+      <a class="cmd-btn cmd-btn-icon-only" href="/settings" aria-label="Configure" title="Configure"><span class="btn-icon btn-icon-settings" aria-hidden="true"></span></a>
+    </div>
   </div>
 </header>
 
 <div class="dashboard-layout-grid" data-dashboard-layout-key="builder">
   <div class="stat-band widget-layout" data-widget-layout-key="builder">
-    <nav class="range-bar widget-card timeframe-widget" data-widget-key="builder-search" data-widget-type="controls" data-default-span="6" aria-label="Dashboard timeframe controls">
+    <nav class="range-bar widget-card timeframe-widget" data-widget-key="builder-search" data-widget-type="controls" data-default-span="5" data-min-w="4" aria-label="Dashboard timeframe controls">
       <div class="timeframe-command-surface">
         <div class="range-controls timeframe-controls">
           <div class="range-presets timeframe-presets" role="group" aria-label="Timeframe presets">
