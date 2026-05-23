@@ -23,8 +23,10 @@ Rules:
 - Sparse empty space inside the selected set is preserved.
 - Movement snaps to grid cells.
 - External occupancy is respected.
+- During active drag, selected members use live visual surfaces that keep exact pixel spacing while one composite footprint reserves the snapped grid area.
+- Active drag and resize use the shared group boundary visual treatment so the selected outline does not shrink, darken, or change radius when interaction starts.
 - Pinned selected items do not move and remain hard reservations.
-- If the requested move collides with pinned or external objects, the group resolves to the nearest valid shared delta.
+- If the requested move collides with pinned or external objects, surrounding movable items resolve after the composite footprint so the group reads as one spatial object.
 
 ## Resize
 
@@ -34,7 +36,9 @@ Rules:
 
 - Do not force all selected items to the same size.
 - Each item scales from the shared group bounds.
+- Member row/top offsets inside the group remain stable so stacked panels do not fan apart while the composite footprint changes size.
 - Each item clamps to its own minimum valid size.
+- A single composite resized footprint drives collision and surrounding reflow; member previews are visual only and do not independently displace neighbors.
 - The most constrained item defines the minimum shrink threshold.
 - Widget type, panel content needs, command-surface minimums, and future graph/table density requirements must be respected.
 - Resize math must not depend on which selected object has focus or which menu is open.

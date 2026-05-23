@@ -618,6 +618,102 @@ Passed coverage included app/dashboard/settings load, CSS imports, theme persist
 - Progress notes: This was the resize bug being worked on before later steering requests interrupted the turn. The implementation now creates the ghost from the resize start rect, updates it from `.dashboard-live-resize.getBoundingClientRect()` on every collapsed-panel resize pointermove, and removes the stale snapped-footprint update path. CSS also keeps the fixed-position ghost border-box aligned and disables its width/height transition during active resize so it does not lag behind the live preview.
 - Validation: Updated `test_collapsed_panel_drag_and_resize_show_expanded_footprint_ghost` to prove sub-grid live preview movement, ghost-to-live left/top/width alignment, snapped footprint independence, expanded height preservation, and grid-aligned commit. Targeted tests and `.venv\Scripts\python.exe -m pytest -q` passed with 42 tests after the steering cleanup.
 
+### BUG-041: Resize Toolbar Exposed Direction-Specific Controls
+
+- Status: Verified
+- Area: Dashboard controls / resize UX
+- Severity: Medium
+- Environment: Dashboard workspace, widgets and panels
+- Observed: Floating tool drawers exposed separate resize buttons for normal and left-edge resizing. The extra direction-specific icon added visual noise and made resize feel like an engineering mode choice instead of direct manipulation.
+- Expected: Tool drawers expose one high-level resize action. Directional anchored-edge behavior remains available through direct edge dragging and the resize preview, while the snapped footprint continues to drive collision and commit behavior.
+- Suspected cause: Left-edge resize was added as a separate toolbar button instead of an inferred direct-manipulation edge path.
+- Fix notes: Removed the dedicated left-resize toolbar button from rendered and generated panel/widget tools. The existing resize button keeps standard right-edge behavior, while direct pointerdown on an item's left or right edge infers the anchored edge internally and reuses the existing live resize clone, snapped footprint, collision, and commit path.
+- Validation: Updated `test_single_resize_control_infers_left_edge_resize_for_right_side_widget` to assert only one toolbar resize action is exposed, no left-direction resize button exists, direct left-edge dragging anchors the right edge, the live clone follows raw motion, the snapped footprint stays grid-aligned, and saved layout state persists the inferred resize.
+
+### BUG-042: Widget Resize Could Strand Interaction State Or Trigger Link Navigation
+
+- Status: Verified
+- Area: Dashboard grid / resize lifecycle
+- Severity: High
+- Environment: Dashboard workspace, widgets and panels
+- Observed: Widget resize could feel intermittent: resize appeared active but stopped changing size, repeated attempts could need a refresh, and direct widget edge resizing could reset layout unexpectedly.
+- Expected: Every resize start has exactly one guarded finish path. Pointerup, pointercancel, Escape, window blur, and exceptions during resize preview/commit cleanup live clones, snapped previews, source classes, active classes, body interaction classes, and group transform classes. Direct widget resize must not produce a follow-up anchor click.
+- Suspected cause: Widget, panel, and group resize each owned document listeners and cleanup independently. If pointerup was lost or a preview/commit callback threw, cleanup after the callback could be skipped. Widget edge resize also began from an anchor element, so mouseup could synthesize a click/navigation after the resize.
+- Fix notes: Added a shared resize lifecycle guard that cancels any previous resize, captures the pointer when possible, listens for pointerup, pointercancel, Escape, and window blur, and runs cleanup through `finally`. Routed widget, panel, and group resize through it without changing their grid math. Added a widget resize click suppressor so direct edge resize cannot become a dashboard link click.
+- Validation: Added `test_widget_resize_lifecycle_repeats_cancels_and_persists` for repeated same-widget resize, immediate opposite-direction resize, widget-panel-widget resize, pointercancel cleanup, stale artifact checks after every resize, and reload persistence. Strengthened group resize cleanup assertions. Targeted resize tests and `.venv\Scripts\python.exe -m pytest -q` passed with 43 tests.
+
+### BUG-043: Page Jolted Horizontally When Expand/Collapse Toggled Scrollbar
+
+- Status: Verified
+- Area: Dashboard grid / page scroll
+- Severity: Medium
+- Environment: Chromium, constrained desktop viewport, light and dark themes
+- Observed: Expanding a panel could make page content exceed the viewport, causing the vertical scrollbar to appear. Collapsing the panel removed the scrollbar. The changing scrollbar gutter altered the centered page width and made the dashboard jolt horizontally.
+- Expected: Panel expand/collapse preserves accordion-style vertical pushdown and natural page scrolling without horizontal dashboard movement when the browser scrollbar appears or disappears.
+- Suspected cause: The document used the browser's default automatic scrollbar gutter, so the root/page layout width changed between non-overflow and overflow states.
+- Fix notes: Added `scrollbar-gutter: stable` to the root document element so the vertical scrollbar gutter is reserved without JS measurements, artificial padding, or dashboard-specific compensation. Follow-up calibration moved the root/background paint onto `html`, clipped accidental page-level horizontal overflow, and separated document scrollbar styling from panel/table internal scrollbars so the reserved page gutter has a transparent scrollbar, track, and corner over the exact shared dashboard background instead of a permanent white strip.
+- Validation: Added `test_panel_expand_collapse_does_not_shift_dashboard_when_scrollbar_changes` to force a no-overflow collapsed state, expand a saved-height panel until the document overflows, switch to dark mode, collapse again, assert the dashboard/page left and width do not shift, assert document/body scroll widths do not exceed client widths, assert root/body backgrounds match, and assert the document scrollbar base, track, and corner remain transparent. Manual Playwright smoke captured light and dark expand/collapse states.
+
+### BUG-044: Group Resize Bypassed Live Clone And Snapped Footprint Parity
+
+- Status: Verified
+- Area: Dashboard grid / group resize
+- Severity: Medium
+- Environment: Dashboard workspace, group-selected widgets and panels
+- Observed: Group resize used proportional grid math, but it drove the real selected members during pointermove. That made group resize feel harder and snappier than individual resize, skipped `.dashboard-live-resize` surfaces and `.dashboard-resize-preview` footprints, and meant collapsed selected panels did not participate in the expanded-footprint ghost language.
+- Expected: Group resize should use the same visual/source/footprint separation as individual widget and panel resize. Live clones follow the pointer smoothly, snapped placeholders show the grid-aligned footprint/collision source, original selected members remain unmutated until commit, and collapsed panels still show their expanded footprint ghost.
+- Suspected cause: `runGroupResize` predated the live resize surface work and called `applyGroupResizeLayout` directly on selected source members during pointermove.
+- Fix notes: Reused the existing resize preview architecture for group resize. Each selected member now gets a live clone plus snapped placeholder; `applyGroupResizeLayout` can resolve placeholder sizing from the original source item, so min spans, widget/panel type, and collapsed-panel behavior remain consistent. Commit removes preview artifacts, restores the original snapshot, and applies the final snapped group layout to the real members.
+- Validation: Added `test_group_resize_uses_live_clones_snapped_previews_and_collapsed_ghost` to pause mid-drag, assert live clones/previews/source classes/expanded ghost exist, verify live clones retain group-selected hover styling, verify originals do not mutate during preview, then release and assert final grid-aligned state and cleanup. Targeted group resize tests and `.venv\Scripts\python.exe -m pytest -q` passed with 45 tests.
+
+### BUG-045: Group Transform Did Not Behave Like One Spatial Object
+
+- Status: Verified
+- Area: Dashboard grid / grouped drag and resize
+- Severity: High
+- Environment: Dashboard workspace, grouped widgets and panels, light and dark themes
+- Observed: Group drag used the active item as the only free-moving ghost while other selected members snapped independently on the grid. Group resize used per-member snapped previews as collision sources. This made selected objects drift apart visually, allowed neighbors to resolve around individual members instead of the full group, and could produce a harsh debug-like group movement surface.
+- Expected: Grouped interactions preserve member spacing and read as one composite object. Live visual members move together, one snapped composite footprint reserves the group area, surrounding items move out of the way of that footprint, and commit applies the resolved group delta or proportional resize back to individual grid items without jumps.
+- Suspected cause: The grouped paths reused single-item placeholder mechanics but did not promote the selected set's bounding box to the collision/reflow source. Sparse resolution also used nearest-slot behavior, which could move surrounding items upward during group preview instead of producing accordion-style pushdown.
+- Fix notes: Added a shared composite group footprint helper and fixed live group surfaces. Group drag now hides original members, moves cloned member surfaces inside a calm glass shell, and drives reflow from one footprint. Group resize now keeps per-member previews visual-only while the composite resized footprint owns collision and reflow. Added directional sparse resolution for group footprints so surrounding movable items resolve after the composite area. Replaced the harsh active group surface with neutral glass/slate styling in light and dark mode.
+- Validation: Added `test_group_drag_uses_composite_footprint_and_preserves_member_spacing` and `test_group_resize_composite_footprint_pushes_surrounding_items`. These pause mid-interaction to assert original state is unmutated, member spacing is preserved, a single composite footprint exists, surrounding blockers move down, no black shell is present, cleanup removes group artifacts, repeated drag does not drift, and final layouts do not overlap. Manual Playwright smoke captured light and dark grouped drag surfaces. `.venv\Scripts\python.exe -m pytest -q` passed with 48 tests.
+
+### BUG-046: Group Resize Fanned Stacked Members And Top Drag Missed Row One
+
+- Status: Verified
+- Area: Dashboard grid / grouped drag and resize
+- Severity: High
+- Environment: Dashboard workspace, grouped panels, light and dark themes
+- Observed: Resizing vertically stacked grouped panels could fan members apart, and dragging a group toward the top of the dashboard could leave the composite preview pushed below the first valid grid row. The active group shell also still read darker and more debug-like than the settled group selection state.
+- Expected: Group resize preserves each member's stable row/top offset inside the selected stack while resizing the composite footprint. Group drag can target row one when row one is otherwise available. Active group visuals stay in the same neutral glass selection language as the pre-drag group state.
+- Suspected cause: Group resize applied the vertical resize scale to each member's row/top offset as well as its height, which changed the spacing relationship between stacked members. Group drag converted pointer position to a grid cell with the active source item instead of the composite footprint placeholder, so top placement used the wrong dimensions and effectively clamped the group downward.
+- Fix notes: Kept the composite footprint collision path from BUG-045, but changed group resize so member row/top offsets remain stable while item heights can scale. Group drag now uses the composite placeholder when mapping pointer position to a snapped cell. The active group shell, member clone, and footprint styles were tuned to neutral slate/glass borders and shadows in both themes.
+- Validation: Added `test_group_drag_can_target_top_grid_row` and `test_group_resize_preserves_stacked_panel_spacing`, and extended the composite drag test with save/reload and active-shell color checks. Targeted group tests and `.venv\Scripts\python.exe -m pytest -q` passed with 50 tests. Manual Playwright smoke captured light top-row group drag plus dark group drag and stacked group resize states.
+
+### BUG-047: Group Boundary Visuals Changed Between Selection, Move, And Resize
+
+- Status: Verified
+- Area: Dashboard grid / grouped visual states
+- Severity: Medium
+- Environment: Dashboard workspace, grouped panels, light and dark themes
+- Observed: Initial group selection used the desired soft outline language, but active group move drew a tighter composite shell and group resize live clones inherited generic resize shadows/borders, including dark theme black-looking per-item edges.
+- Expected: Group selection, active move, and active resize share the same visual boundary language. The active composite boundary uses the same visual outset, radius, border width, and border color family as the selected state, and grouped resize clones keep each member's selected outline treatment without black/debug borders.
+- Suspected cause: `.group-selected`, `.dashboard-group-live-shell`, and `.dashboard-live-resize.group-selected` were styled by separate paths. The move shell used the raw member union rect and a larger shell radius, while resize clones fell through to the generic `.dashboard-live-resize` dark override.
+- Fix notes: Added a shared `.dashboard-group-boundary` visual surface for active grouped move and resize. The boundary is expanded by the selected outline outset without changing the underlying collision, drag, resize, snap, or persistence geometry. Group resize live clones now receive the group-selected outline styling instead of the generic resize border/shadow.
+- Validation: Added `test_group_boundary_visuals_match_selection_during_move_and_resize` for light and dark themes. It compares selected, move, and resize boundary dimensions/styles, checks per-member resize clone outlines, and rejects black border/shadow styles. Targeted group tests and `.venv\Scripts\python.exe -m pytest -q` passed with 52 tests. Manual Playwright smoke captured selected, moving, and resizing group states in light and dark themes.
+
+### BUG-048: Collapse Did Not Restore Nested Expansion Pushdown After Group Resize
+
+- Status: Verified
+- Area: Dashboard grid / expand-collapse
+- Severity: High
+- Environment: Dashboard workspace, grouped panels after group resize, repeated panel expand/collapse
+- Observed: After panels were resized as a group, expanding upper collapsed panels pushed lower panels down correctly. Collapsing the expanded panels could leave the lower panel stranded too far down, especially when panels were collapsed in the same order they were expanded.
+- Expected: Expansion displacement remains temporary. Collapsing panels locally relaxes displaced items upward into their stable post-resize positions when space is available, without globally compacting unrelated dashboard items.
+- Suspected cause: Collapse restoration used a per-panel full layout snapshot. Nested expansions captured snapshots at different temporary states, so collapsing an earlier panel could discard the only snapshot that knew the lower panel's original stable row; a later collapse then restored toward an already-pushed intermediate row.
+- Fix notes: Replaced per-panel full snapshot restoration with a layout-level expansion baseline plus local upward relaxation. The baseline is captured once at the first expansion after the committed layout, group-resized coordinates included. On each collapse, only items that are below their baseline row and still in their baseline column are considered; each moves upward only as far as it can without overlapping current expanded panels, pinned items, or other occupied cells. The baseline is cleared when the expansion session ends.
+- Validation: Added `test_panel_collapse_restores_local_pushdown_after_group_resize` for both normal and post-group-resize flows. It expands/collapses upper panels repeatedly in the failure-prone order, asserts the lower panel returns to its post-resize baseline, verifies widgets/unrelated items do not globally repack, checks no overlaps, and saves/reloads the collapsed layout. Targeted expand/collapse tests, grouped interaction tests, and `.venv\Scripts\python.exe -m pytest -q` passed with 54 tests. Manual Playwright smoke captured light and dark baseline, expanded pushdown, and restored collapsed states.
+
 ## Entry Template
  
 ```md

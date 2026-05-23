@@ -12,13 +12,20 @@ They are not wallpapers and should not become decorative theme chaos.
 - `cool-white`: A cooler white workspace tone.
 - `soft-grey`: A quiet neutral grey.
 - `cool-grey`: A grounded cool grey for modern productivity workspaces.
+- `medium-cool-grey`: A medium cool grey with visibly stronger contrast.
+- `darker-soft-grey`: A darker soft grey for reduced glare.
 - `warm-grey`: A soft industrial warm grey.
 - `slate`: A richer light-mode slate with stronger surface separation.
+- `slate-grey`: A neutral slate grey with less blue wash.
 - `graphite-light`: A premium dark-light hybrid graphite tone.
+- `graphite-grey`: A deeper light graphite grey.
 - `light-blue-grey`: A restrained blue-grey.
 - `muted-blue-grey`: A richer muted cool background with less pastel wash.
+- `blue-slate`: A grounded blue-slate neutral.
 - `neutral-dim`: A soft neutral dim workspace tone.
 - `stone-slate`: A balanced stone and slate neutral.
+- `stone-grey`: A grounded stone grey.
+- `industrial-grey`: A muted industrial grey.
 - `blue-mist`: A subtle blue mist.
 - `frosted-light`: The default light frosted neutral.
 
@@ -54,6 +61,7 @@ Background selection is an appearance/environment action in the workspace toolba
 
 - The background tone control should live with theme mode and settings.
 - Changing background tone should not change active accent color.
+- Hovering or focusing a background option may preview that tone live, but it must revert when the user leaves without selecting.
 - Command islands must remain legible and elevated above every background preset.
 - Toolbar screenshots should cover at least one light preset and one dark preset.
 

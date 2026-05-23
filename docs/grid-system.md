@@ -23,6 +23,7 @@ Sparse placement is valid.
 - Users may intentionally leave empty cells, rows, or columns.
 - Dropping into open space should preserve that placement.
 - The grid must not auto-pack or collapse items upward unless the user explicitly invokes a layout action.
+- Panel collapse may locally relax items that were temporarily displaced by the matching expand/collapse accordion session, but it must move only those items back toward their committed baseline when space is available. This is not a global compaction pass.
 - Surrounding items should shift only when required by an occupied target or resize conflict.
 
 ## Spatial Workspace Direction

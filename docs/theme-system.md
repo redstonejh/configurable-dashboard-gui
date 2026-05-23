@@ -46,6 +46,7 @@ Rules:
 - Background tone must not change widget accent color.
 - Background tone must not introduce decorative wallpaper or loud saturation.
 - Light and dark mode each keep their own selected tone.
+- Hover and keyboard focus may preview a tone by temporarily applying `html[data-background]`; do not write storage until the user selects the option.
 
 ## Surface Tokens
 

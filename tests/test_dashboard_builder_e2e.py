@@ -52,8 +52,42 @@ def end_drag(page: Page, x: float, y: float, dx: float, dy: float, steps: int = 
 
 
 def open_tools(item) -> None:
-    item.locator(".panel-settings-toggle").click(force=True)
+    is_open = item.evaluate(
+        """
+        node => node.classList.contains("widget-tools-open") || node.classList.contains("db-panel-tools-open")
+        """
+    )
+    if not is_open:
+        item.locator(".panel-settings-toggle").click(force=True)
     expect(item.locator(".panel-tool-drawer")).to_be_visible()
+
+
+def resize_cleanup_state(page: Page) -> dict:
+    return page.evaluate(
+        """
+        () => ({
+          live: document.querySelectorAll(".dashboard-live-resize").length,
+          preview: document.querySelectorAll(".dashboard-resize-preview").length,
+          source: document.querySelectorAll(".dashboard-resize-source").length,
+          active: document.querySelectorAll(".dashboard-active-resize").length,
+          bodyResize: document.body.classList.contains("panel-resize-active"),
+          bodyInteraction: document.body.classList.contains("panel-interaction-active"),
+          groupActive: document.body.classList.contains("group-transform-active"),
+        })
+        """
+    )
+
+
+def assert_no_resize_artifacts(page: Page) -> None:
+    assert resize_cleanup_state(page) == {
+        "live": 0,
+        "preview": 0,
+        "source": 0,
+        "active": 0,
+        "bodyResize": False,
+        "bodyInteraction": False,
+        "groupActive": False,
+    }
 
 
 def close_dialog_if_open(page: Page) -> None:
@@ -225,6 +259,80 @@ def test_theme_toggle_persists(page: Page, app_server: str) -> None:
 
     page.locator(".theme-toggle").click()
     expect(page.locator("html")).not_to_have_attribute("data-theme", "dark")
+    assert_clean_browser(page)
+
+
+def test_background_palette_hover_previews_without_saving(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    root = page.locator("html")
+    expect(root).to_have_attribute("data-background", "frosted-light")
+
+    page.locator(".background-tone-trigger").first.click()
+    for tone in [
+        "medium-cool-grey",
+        "darker-soft-grey",
+        "slate-grey",
+        "graphite-grey",
+        "blue-slate",
+        "neutral-dim",
+        "stone-grey",
+        "industrial-grey",
+    ]:
+        expect(page.locator(f'.background-tone-option[data-background-tone="{tone}"]').first).to_be_visible()
+
+    palette = page.evaluate(
+        """
+        () => {
+          const toRgb = (value) => {
+            const rgb = value.match(/rgba?\\(([^)]+)\\)/);
+            if (rgb) {
+              return rgb[1].split(/[\\s,\\/]+/).filter(Boolean).slice(0, 3).map((part) => Math.round(Number(part)));
+            }
+            const hex = value.trim().match(/^#([0-9a-f]{6})$/i);
+            if (hex) return [0, 2, 4].map((start) => parseInt(hex[1].slice(start, start + 2), 16));
+            return [];
+          };
+          return [
+            "medium-cool-grey",
+            "darker-soft-grey",
+            "slate-grey",
+            "graphite-grey",
+            "blue-slate",
+            "neutral-dim",
+            "stone-grey",
+            "industrial-grey",
+          ].map((tone) => {
+            document.documentElement.dataset.background = tone;
+            const bg = toRgb(getComputedStyle(document.documentElement).getPropertyValue("--bg"));
+            return { tone, bg, max: Math.max(...bg), min: Math.min(...bg) };
+          });
+        }
+        """
+    )
+    assert len({tuple(entry["bg"]) for entry in palette}) == len(palette)
+    assert max(entry["max"] for entry in palette) <= 208
+    assert min(entry["min"] for entry in palette) <= 174
+
+    page.evaluate("document.documentElement.dataset.background = 'frosted-light'")
+    preview = page.locator('.background-tone-option[data-background-mode="light"][data-background-tone="graphite-grey"]').first
+    preview.hover()
+    expect(root).to_have_attribute("data-background", "graphite-grey")
+    assert page.evaluate("localStorage.getItem('dashboard-background-light')") is None
+
+    page.locator(".workspace-identity-island").hover()
+    expect(root).to_have_attribute("data-background", "frosted-light")
+    assert page.evaluate("localStorage.getItem('dashboard-background-light')") is None
+
+    focus_preview = page.locator('.background-tone-option[data-background-mode="light"][data-background-tone="blue-slate"]').first
+    focus_preview.focus()
+    expect(root).to_have_attribute("data-background", "blue-slate")
+    assert page.evaluate("localStorage.getItem('dashboard-background-light')") is None
+    page.locator(".dash-switch-hero").focus()
+    expect(root).to_have_attribute("data-background", "frosted-light")
+
+    page.locator('.background-tone-option[data-background-mode="light"][data-background-tone="slate-grey"]').first.click()
+    expect(root).to_have_attribute("data-background", "slate-grey")
+    assert page.evaluate("localStorage.getItem('dashboard-background-light')") == "slate-grey"
     assert_clean_browser(page)
 
 
@@ -752,14 +860,17 @@ def test_dark_widget_focus_and_active_borders_match_panel_softness(page: Page, a
         assert border[2] - border[0] <= 70, (key, state[key]["borderColor"])
         if state[key]["outlineWidth"]:
             assert max(outline) <= 215, (key, state[key]["outlineColor"])
-            assert state[key]["outlineOffset"] <= 0
+            if key == "widget":
+                assert state[key]["outlineOffset"] == state["panel"]["outlineOffset"]
+            else:
+                assert state[key]["outlineOffset"] <= 0
         assert "103, 169, 255" not in state[key]["boxShadow"]
         assert "147, 197, 253" not in state[key]["boxShadow"]
         assert "0 0 18px" not in state[key]["boxShadow"]
         assert "0 0 24px" not in state[key]["boxShadow"]
 
-    assert state["widget"]["outlineColor"] == state["custom"]["outlineColor"]
-    assert state["widget"]["outlineWidth"] == state["custom"]["outlineWidth"]
+    assert state["widget"]["outlineColor"] == state["panel"]["outlineColor"]
+    assert state["widget"]["outlineWidth"] == state["panel"]["outlineWidth"]
     assert state["widgetBackground"] != state["customBackground"]
     assert_clean_browser(page)
 
@@ -1332,6 +1443,310 @@ def test_panel_expand_uses_vertical_pushdown_not_sideways_reflow(page: Page, app
     assert_clean_browser(page)
 
 
+@pytest.mark.parametrize("after_group_resize", [False, True])
+def test_panel_collapse_restores_local_pushdown_after_group_resize(page: Page, app_server: str, after_group_resize: bool) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const layout = document.querySelector('.panel-layout[data-layout-key="builder"]');
+          const menu = layout.querySelector('[data-panel-key="builder-menu"]');
+          const notes = layout.querySelector('[data-panel-key="builder-notes"]');
+          const table = layout.querySelector('[data-panel-key="builder-table"]');
+          const place = (node, col, row, span, rowSpan, height = null) => {
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            if (height) {
+              node.dataset.savedHeight = String(height);
+              if (!node.classList.contains("db-panel-collapsed")) node.style.height = `${height}px`;
+            } else {
+              node.style.height = "";
+            }
+          };
+          document.querySelectorAll(".widget-layout > .widget-card").forEach((node, index) => {
+            node.dataset.gridCol = String(1 + (index % 6));
+            node.dataset.gridRow = String(18 + index);
+            node.dataset.currentSpan = "1";
+            node.dataset.gridRowSpan = "1";
+            node.style.gridColumn = `${1 + (index % 6)} / span 1`;
+            node.style.gridRow = `${18 + index} / span 1`;
+          });
+          [menu, notes].forEach((node) => {
+            node.classList.add("db-panel-collapsed");
+            node.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "false");
+            node.style.height = "";
+          });
+          table.classList.remove("db-panel-collapsed");
+          table.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "true");
+          place(menu, 1, 4, 2, 1, 275);
+          place(notes, 1, 5, 2, 1, 275);
+          place(table, 1, 6, 2, 3, 275);
+          window.scrollTo(0, 0);
+        }
+        """
+    )
+
+    menu = page.locator('[data-panel-key="builder-menu"]')
+    notes = page.locator('[data-panel-key="builder-notes"]')
+    table = page.locator('[data-panel-key="builder-table"]')
+
+    if after_group_resize:
+        page.locator(".layout-group-button").click()
+        menu.click(position={"x": 20, "y": 20})
+        notes.click(position={"x": 20, "y": 20})
+        table.click(position={"x": 20, "y": 20})
+        expect(page.locator(".group-selected")).to_have_count(3)
+        open_tools(table)
+        handle_box = table.locator(".panel-resize-handle").bounding_box()
+        assert handle_box
+        x, y = box_center(handle_box)
+        page.mouse.move(x, y)
+        page.mouse.down()
+        page.mouse.move(x + 220, y + 20, steps=14)
+        page.mouse.up()
+        page.wait_for_timeout(380)
+        page.locator(".layout-group-button").click()
+        expect(page.locator(".group-selected")).to_have_count(0)
+
+    baseline = page.evaluate(
+        """
+        () => {
+          const read = (key) => {
+            const node = document.querySelector(`[data-panel-key="${key}"]`);
+            return {
+              col: Number(node.dataset.gridCol),
+              row: Number(node.dataset.gridRow),
+              span: Number(node.dataset.currentSpan),
+              rowSpan: Number(node.dataset.gridRowSpan),
+              collapsed: node.classList.contains("db-panel-collapsed"),
+            };
+          };
+          return {
+            menu: read("builder-menu"),
+            notes: read("builder-notes"),
+            table: read("builder-table"),
+            widgets: [...document.querySelectorAll(".widget-layout > .widget-card")].map((node) => ({
+              key: node.dataset.widgetKey,
+              row: Number(node.dataset.gridRow),
+              col: Number(node.dataset.gridCol),
+            })),
+          };
+        }
+        """
+    )
+    assert baseline["menu"]["collapsed"] is True
+    assert baseline["notes"]["collapsed"] is True
+
+    for cycle in range(2):
+        menu.locator(".db-panel-hd").click(position={"x": 18, "y": 18})
+        page.wait_for_timeout(260)
+        notes.locator(".db-panel-hd").click(position={"x": 18, "y": 18})
+        page.wait_for_timeout(320)
+        expanded = {
+            "menu": grid_item_state(page, '[data-panel-key="builder-menu"]'),
+            "notes": grid_item_state(page, '[data-panel-key="builder-notes"]'),
+            "table": grid_item_state(page, '[data-panel-key="builder-table"]'),
+        }
+        assert expanded["table"]["row"] > baseline["table"]["row"]
+        assert expanded["menu"]["row"] == baseline["menu"]["row"]
+        assert expanded["notes"]["row"] >= baseline["notes"]["row"]
+
+        menu.locator(".db-panel-hd").click(position={"x": 18, "y": 18})
+        page.wait_for_timeout(260)
+        notes.locator(".db-panel-hd").click(position={"x": 18, "y": 18})
+        page.wait_for_timeout(360)
+        collapsed = {
+            "menu": grid_item_state(page, '[data-panel-key="builder-menu"]'),
+            "notes": grid_item_state(page, '[data-panel-key="builder-notes"]'),
+            "table": grid_item_state(page, '[data-panel-key="builder-table"]'),
+        }
+        assert collapsed["menu"]["row"] == baseline["menu"]["row"], cycle
+        assert collapsed["notes"]["row"] == baseline["notes"]["row"], cycle
+        assert collapsed["table"]["row"] == baseline["table"]["row"], cycle
+        assert collapsed["table"]["col"] == baseline["table"]["col"], cycle
+        assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+
+    widgets_after = page.evaluate(
+        """
+        () => [...document.querySelectorAll(".widget-layout > .widget-card")].map((node) => ({
+          key: node.dataset.widgetKey,
+          row: Number(node.dataset.gridRow),
+          col: Number(node.dataset.gridCol),
+        }))
+        """
+    )
+    assert widgets_after == baseline["widgets"]
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    reloaded = {
+        "menu": grid_item_state(page, '[data-panel-key="builder-menu"]'),
+        "notes": grid_item_state(page, '[data-panel-key="builder-notes"]'),
+        "table": grid_item_state(page, '[data-panel-key="builder-table"]'),
+    }
+    assert reloaded["menu"]["row"] == baseline["menu"]["row"]
+    assert reloaded["notes"]["row"] == baseline["notes"]["row"]
+    assert reloaded["table"]["row"] == baseline["table"]["row"]
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    assert_clean_browser(page)
+
+
+def test_panel_expand_collapse_does_not_shift_dashboard_when_scrollbar_changes(page: Page, app_server: str) -> None:
+    page.set_viewport_size({"width": 1100, "height": 620})
+    goto(page, app_server)
+
+    setup = page.evaluate(
+        """
+        () => {
+          const setGrid = (node, col, row, span, rowSpan = 1, height = null) => {
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            if (height) {
+              node.dataset.savedHeight = String(height);
+              if (!node.classList.contains("db-panel-collapsed")) node.style.height = `${height}px`;
+            } else {
+              delete node.dataset.savedHeight;
+              node.style.height = "";
+            }
+          };
+          const widgets = [...document.querySelectorAll(".widget-layout > .widget-card")];
+          widgets.forEach((node, index) => setGrid(node, 1 + index, 1, 1));
+          const notes = document.querySelector('[data-panel-key="builder-notes"]');
+          const menu = document.querySelector('[data-panel-key="builder-menu"]');
+          const table = document.querySelector('[data-panel-key="builder-table"]');
+          [notes, menu, table].forEach((node) => {
+            node.classList.add("db-panel-collapsed");
+            node.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "false");
+            node.style.height = "";
+          });
+          setGrid(notes, 1, 3, 2, 1, 760);
+          setGrid(menu, 3, 3, 2, 1, 260);
+          setGrid(table, 5, 3, 2, 1, 260);
+          window.scrollTo(0, 0);
+          const rootStyles = getComputedStyle(document.documentElement);
+          return {
+            scrollbarGutter: rootStyles.scrollbarGutter,
+            initialOverflows: document.documentElement.scrollHeight > document.documentElement.clientHeight,
+          };
+        }
+        """
+    )
+    assert "stable" in setup["scrollbarGutter"]
+    assert setup["initialOverflows"] is False
+
+    def horizontal_metrics() -> dict:
+        return page.evaluate(
+            """
+            () => {
+              const grid = document.querySelector(".dashboard-layout-grid");
+              const page = document.querySelector(".page");
+              const gridRect = grid.getBoundingClientRect();
+              const pageRect = page.getBoundingClientRect();
+          const root = document.documentElement;
+          const rootStyles = getComputedStyle(root);
+          const bodyStyles = getComputedStyle(document.body);
+          const bodyScrollbarStyles = getComputedStyle(document.body, "::-webkit-scrollbar");
+          const bodyTrackStyles = getComputedStyle(document.body, "::-webkit-scrollbar-track");
+          const bodyCornerStyles = getComputedStyle(document.body, "::-webkit-scrollbar-corner");
+          return {
+            gridLeft: gridRect.left,
+            gridWidth: gridRect.width,
+            pageLeft: pageRect.left,
+            pageWidth: pageRect.width,
+            clientWidth: root.clientWidth,
+            innerWidth: window.innerWidth,
+            rootScrollWidth: root.scrollWidth,
+            bodyClientWidth: document.body.clientWidth,
+            bodyScrollWidth: document.body.scrollWidth,
+            scrollHeight: root.scrollHeight,
+            clientHeight: root.clientHeight,
+            overflows: root.scrollHeight > root.clientHeight,
+            rootBackground: rootStyles.backgroundImage || rootStyles.backgroundColor,
+            bodyBackground: bodyStyles.backgroundImage || bodyStyles.backgroundColor,
+            bodyScrollbarColor: bodyStyles.scrollbarColor,
+            bodyScrollbarBackground: bodyScrollbarStyles.backgroundColor,
+            bodyScrollbarTrack: bodyTrackStyles.backgroundColor,
+            bodyScrollbarCorner: bodyCornerStyles.backgroundColor,
+            bodyOverflowX: bodyStyles.overflowX,
+          };
+        }
+        """
+    )
+
+    collapsed_before = horizontal_metrics()
+    assert collapsed_before["rootScrollWidth"] <= collapsed_before["clientWidth"]
+    assert collapsed_before["bodyScrollWidth"] <= collapsed_before["bodyClientWidth"]
+    assert collapsed_before["bodyOverflowX"] == "clip"
+    assert collapsed_before["rootBackground"] != "none"
+    assert collapsed_before["rootBackground"] == collapsed_before["bodyBackground"]
+    assert collapsed_before["bodyScrollbarBackground"] == "rgba(0, 0, 0, 0)"
+    assert collapsed_before["bodyScrollbarTrack"] == "rgba(0, 0, 0, 0)"
+    assert collapsed_before["bodyScrollbarCorner"] == "rgba(0, 0, 0, 0)"
+    assert "rgba(0, 0, 0, 0)" in collapsed_before["bodyScrollbarColor"]
+    notes = page.locator('.panel-layout > .db-panel[data-panel-key="builder-notes"]')
+    expect(notes).to_have_class(re.compile("db-panel-collapsed"))
+
+    notes.locator(".db-panel-hd").click(position={"x": 18, "y": 18})
+    page.wait_for_timeout(350)
+    expanded = horizontal_metrics()
+    assert expanded["overflows"] is True
+    assert expanded["rootScrollWidth"] <= expanded["clientWidth"]
+    assert expanded["bodyScrollWidth"] <= expanded["bodyClientWidth"]
+    assert expanded["rootBackground"] == expanded["bodyBackground"]
+    assert expanded["bodyScrollbarBackground"] == "rgba(0, 0, 0, 0)"
+    assert expanded["bodyScrollbarTrack"] == "rgba(0, 0, 0, 0)"
+    assert expanded["bodyScrollbarCorner"] == "rgba(0, 0, 0, 0)"
+    assert abs(expanded["gridLeft"] - collapsed_before["gridLeft"]) <= 1
+    assert abs(expanded["gridWidth"] - collapsed_before["gridWidth"]) <= 1
+    assert abs(expanded["pageLeft"] - collapsed_before["pageLeft"]) <= 1
+    assert abs(expanded["pageWidth"] - collapsed_before["pageWidth"]) <= 1
+
+    page.locator(".theme-toggle").click()
+    page.wait_for_timeout(250)
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    expanded_dark = horizontal_metrics()
+    assert expanded_dark["overflows"] is True
+    assert expanded_dark["rootScrollWidth"] <= expanded_dark["clientWidth"]
+    assert expanded_dark["bodyScrollWidth"] <= expanded_dark["bodyClientWidth"]
+    assert expanded_dark["rootBackground"] != "none"
+    assert expanded_dark["rootBackground"] == expanded_dark["bodyBackground"]
+    assert expanded_dark["bodyScrollbarBackground"] == "rgba(0, 0, 0, 0)"
+    assert expanded_dark["bodyScrollbarTrack"] == "rgba(0, 0, 0, 0)"
+    assert expanded_dark["bodyScrollbarCorner"] == "rgba(0, 0, 0, 0)"
+    assert "rgba(0, 0, 0, 0)" in expanded_dark["bodyScrollbarColor"]
+    assert abs(expanded_dark["gridLeft"] - collapsed_before["gridLeft"]) <= 1
+    assert abs(expanded_dark["gridWidth"] - collapsed_before["gridWidth"]) <= 1
+    assert abs(expanded_dark["pageLeft"] - collapsed_before["pageLeft"]) <= 1
+    assert abs(expanded_dark["pageWidth"] - collapsed_before["pageWidth"]) <= 1
+
+    notes.locator(".db-panel-hd").click(position={"x": 18, "y": 18})
+    page.wait_for_timeout(350)
+    collapsed_after = horizontal_metrics()
+    assert collapsed_after["overflows"] is False
+    assert collapsed_after["rootScrollWidth"] <= collapsed_after["clientWidth"]
+    assert collapsed_after["bodyScrollWidth"] <= collapsed_after["bodyClientWidth"]
+    assert collapsed_after["rootBackground"] == collapsed_after["bodyBackground"]
+    assert collapsed_after["bodyScrollbarBackground"] == "rgba(0, 0, 0, 0)"
+    assert collapsed_after["bodyScrollbarTrack"] == "rgba(0, 0, 0, 0)"
+    assert collapsed_after["bodyScrollbarCorner"] == "rgba(0, 0, 0, 0)"
+    assert abs(collapsed_after["gridLeft"] - collapsed_before["gridLeft"]) <= 1
+    assert abs(collapsed_after["gridWidth"] - collapsed_before["gridWidth"]) <= 1
+    assert abs(collapsed_after["pageLeft"] - collapsed_before["pageLeft"]) <= 1
+    assert abs(collapsed_after["pageWidth"] - collapsed_before["pageWidth"]) <= 1
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    assert_clean_browser(page)
+
+
 def test_ordered_drag_reflows_widgets_without_overlap(page: Page, app_server: str) -> None:
     goto(page, app_server)
     widgets = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)")
@@ -1543,7 +1958,7 @@ def test_resize_has_live_surface_and_grid_preview(page: Page, app_server: str) -
     assert_clean_browser(page)
 
 
-def test_left_edge_resize_anchors_right_edge_for_right_side_widget(page: Page, app_server: str) -> None:
+def test_single_resize_control_infers_left_edge_resize_for_right_side_widget(page: Page, app_server: str) -> None:
     goto(page, app_server)
     widget = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)").first
     page.evaluate(
@@ -1582,11 +1997,17 @@ def test_left_edge_resize_anchors_right_edge_for_right_side_widget(page: Page, a
     assert start_rect
 
     open_tools(widget)
-    left_handle = widget.locator(".panel-resize-left-handle")
-    expect(left_handle).to_be_visible()
-    handle_box = left_handle.bounding_box()
-    assert handle_box
-    x, y = box_center(handle_box)
+    expect(widget.locator(".panel-resize-handle")).to_have_count(1)
+    expect(widget.locator(".panel-resize-left-handle")).to_have_count(0)
+    toolbar_buttons = widget.locator(".panel-tool-drawer .panel-tool-button").evaluate_all(
+        """
+        nodes => nodes.map((node) => node.getAttribute("aria-label"))
+        """
+    )
+    assert toolbar_buttons.count("Resize panel") == 1
+    assert "Resize panel from left" not in toolbar_buttons
+    x = start_rect["x"] + 3
+    y = start_rect["y"] + start_rect["height"] / 2
     page.mouse.move(x, y)
     page.mouse.down()
     page.mouse.move(x - 22, y, steps=3)
@@ -1632,6 +2053,104 @@ def test_left_edge_resize_anchors_right_edge_for_right_side_widget(page: Page, a
     )
     assert saved["gridCol"] == end["col"]
     assert saved["span"] == end["span"]
+    assert_clean_browser(page)
+
+
+def test_widget_resize_lifecycle_repeats_cancels_and_persists(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const setGrid = (node, col, row, span, rowSpan = 1) => {
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            if (node.classList.contains("db-panel") && !node.classList.contains("db-panel-collapsed")) {
+              const grid = node.closest(".dashboard-layout-grid");
+              const styles = getComputedStyle(grid);
+              const rowHeight = parseFloat(styles.gridAutoRows) || 81;
+              const gap = parseFloat(styles.rowGap || styles.gap || "16") || 16;
+              const height = (rowSpan * rowHeight) + (Math.max(0, rowSpan - 1) * gap);
+              node.dataset.savedHeight = String(height);
+              node.style.height = `${height}px`;
+            }
+          };
+          const widgets = [...document.querySelectorAll(".widget-layout > .widget-card:not(.range-bar)")];
+          setGrid(widgets[0], 2, 1, 3);
+          widgets.slice(1).forEach((node, index) => setGrid(node, 1 + ((index * 2) % 5), 4 + index, 1));
+          document.querySelectorAll(".panel-layout > .db-panel").forEach((node, index) => {
+            node.classList.remove("db-panel-collapsed");
+            setGrid(node, 1, 10 + index * 4, Number(node.dataset.currentSpan || node.dataset.defaultSpan || 3), 3);
+          });
+        }
+        """
+    )
+    widget = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)").first
+    panel = page.locator('.panel-layout > .db-panel[data-panel-key="builder-table"]')
+    start_span = int(widget.evaluate("node => node.dataset.currentSpan || node.dataset.defaultSpan"))
+    seen_spans = {start_span}
+
+    for delta in [260, -170, 220, -120]:
+        open_tools(widget)
+        drag_by(page, widget.locator(".panel-resize-handle"), delta, 0, steps=10)
+        page.wait_for_timeout(260)
+        assert_no_resize_artifacts(page)
+        assert grid_alignment_error(page, ".widget-layout > .stat-card.widget-card:not(.range-bar)") <= 3
+        seen_spans.add(int(widget.evaluate("node => node.dataset.currentSpan || node.dataset.defaultSpan")))
+
+    assert len(seen_spans) > 1
+
+    open_tools(panel)
+    drag_by(page, panel.locator(".panel-resize-handle"), 180, 90, steps=12)
+    page.wait_for_timeout(300)
+    assert_no_resize_artifacts(page)
+    assert grid_alignment_error(page, '.panel-layout > .db-panel[data-panel-key="builder-table"]') <= 3
+
+    widget.hover()
+    widget.evaluate("node => node.classList.add('widget-tools-open')")
+    expect(widget.locator(".panel-tool-drawer")).to_be_visible()
+    drag_by(page, widget.locator(".panel-resize-handle"), 180, 0, steps=10)
+    page.wait_for_timeout(260)
+    assert_no_resize_artifacts(page)
+
+    handle = widget.locator(".panel-resize-handle")
+    handle.scroll_into_view_if_needed()
+    handle_box = handle.bounding_box()
+    assert handle_box
+    x, y = box_center(handle_box)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 140, y, steps=5)
+    expect(page.locator(".dashboard-live-resize")).to_have_count(1)
+    expect(page.locator(".widget-placeholder.dashboard-resize-preview")).to_have_count(1)
+    page.evaluate(
+        """
+        () => document.dispatchEvent(new PointerEvent("pointercancel", {
+          bubbles: true,
+          pointerId: 1,
+          pointerType: "mouse",
+        }))
+        """
+    )
+    page.mouse.up()
+    page.wait_for_timeout(260)
+    assert_no_resize_artifacts(page)
+
+    open_tools(widget)
+    drag_by(page, widget.locator(".panel-resize-handle"), -150, 0, steps=10)
+    page.wait_for_timeout(260)
+    assert_no_resize_artifacts(page)
+    persisted_span = int(widget.evaluate("node => node.dataset.currentSpan || node.dataset.defaultSpan"))
+    page.locator(".layout-save-button").click()
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    reloaded_span = int(widget.evaluate("node => node.dataset.currentSpan || node.dataset.defaultSpan"))
+    assert reloaded_span == persisted_span
+    assert_no_resize_artifacts(page)
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
     assert_clean_browser(page)
 
 
@@ -1919,13 +2438,17 @@ def test_drop_on_top_item_shifts_forward_without_wrapping_top_item_to_end(page: 
     assert top_before["row"] == 1
 
     open_tools(dragged)
-    handle_box = dragged.locator(".panel-move-handle").bounding_box()
+    handle = dragged.locator(".panel-move-handle")
+    handle.hover()
+    page.wait_for_timeout(120)
+    handle_box = handle.bounding_box()
     top_box = top_item.bounding_box()
     assert handle_box
     assert top_box
     start_x, start_y = box_center(handle_box)
     page.mouse.move(start_x, start_y)
     page.mouse.down()
+    page.wait_for_timeout(80)
     page.mouse.move(start_x + 42, start_y + 8, steps=6)
     page.mouse.move(top_box["x"] + 28, top_box["y"] + 28, steps=14)
     page.mouse.up()
@@ -1935,7 +2458,6 @@ def test_drop_on_top_item_shifts_forward_without_wrapping_top_item_to_end(page: 
     top_after = grid_item_state(page, ".timeframe-widget")
     all_rows = [item["row"] for item in grid_item_states(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel")]
     assert dragged_state["row"] == 1
-    assert dragged_state["col"] == 1
     assert top_after["row"] <= 2
     assert top_after["row"] < max(all_rows)
     assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
@@ -2339,6 +2861,417 @@ def test_group_drag_moves_selected_items_as_shared_transform(page: Page, app_ser
     assert_clean_browser(page)
 
 
+def test_group_drag_uses_composite_footprint_and_preserves_member_spacing(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span, rowSpan = 1) => {
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            if (node.classList.contains("db-panel") && !node.classList.contains("db-panel-collapsed")) {
+              const gap = parseFloat(getComputedStyle(document.querySelector(".dashboard-layout-grid")).rowGap || "16") || 16;
+              const height = (rowSpan * 81) + (Math.max(0, rowSpan - 1) * gap);
+              node.dataset.savedHeight = String(height);
+              node.style.height = `${height}px`;
+            }
+          };
+          place(document.querySelector('[data-widget-key="widget-1"]'), 1, 2, 2);
+          place(document.querySelector('[data-panel-key="builder-table"]'), 3, 2, 2, 3);
+          place(document.querySelector('[data-panel-key="builder-notes"]'), 2, 6, 3, 2);
+          place(document.querySelector('[data-widget-key="widget-2"]'), 5, 6, 1);
+        }
+        """
+    )
+
+    page.locator(".layout-group-button").click()
+    widget = page.locator('[data-widget-key="widget-1"]')
+    panel = page.locator('[data-panel-key="builder-table"]')
+    blocker = page.locator('[data-panel-key="builder-notes"]')
+    widget.click(position={"x": 20, "y": 20})
+    panel.click(position={"x": 20, "y": 20})
+    expect(page.locator(".group-selected")).to_have_count(2)
+
+    before = page.evaluate(
+        """
+        () => {
+          const read = (selector) => {
+            const node = document.querySelector(selector);
+            const rect = node.getBoundingClientRect();
+            return {
+              col: Number(node.dataset.gridCol),
+              row: Number(node.dataset.gridRow),
+              span: Number(node.dataset.currentSpan),
+              rowSpan: Number(node.dataset.gridRowSpan),
+              left: rect.left,
+              top: rect.top,
+            };
+          };
+          return {
+            widget: read('[data-widget-key="widget-1"]'),
+            panel: read('[data-panel-key="builder-table"]'),
+            blocker: read('[data-panel-key="builder-notes"]'),
+          };
+        }
+        """
+    )
+
+    widget.evaluate("node => node.classList.add('widget-tools-open')")
+    expect(widget.locator(".panel-tool-drawer")).to_be_visible()
+    handle = widget.locator(".panel-move-handle")
+    handle_box = handle.bounding_box()
+    assert handle_box
+    x, y = box_center(handle_box)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x, y + 355, steps=16)
+    page.wait_for_timeout(220)
+
+    during = page.evaluate(
+        """
+        () => {
+          const read = (selector) => {
+            const node = document.querySelector(selector);
+            return {
+              col: Number(node.dataset.gridCol),
+              row: Number(node.dataset.gridRow),
+              span: Number(node.dataset.currentSpan),
+              rowSpan: Number(node.dataset.gridRowSpan),
+            };
+          };
+          const liveRect = (selector) => {
+            const rect = document.querySelector(selector).getBoundingClientRect();
+            return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+          };
+          const shell = document.querySelector(".dashboard-group-live-shell");
+          const shellStyles = getComputedStyle(shell);
+          const footprint = document.querySelector(".dashboard-group-footprint");
+          return {
+            originals: {
+              widget: read('[data-widget-key="widget-1"]'),
+              panel: read('[data-panel-key="builder-table"]'),
+            },
+            blocker: read('[data-panel-key="builder-notes"]'),
+            liveWidget: liveRect('.dashboard-group-live-member[data-widget-key="widget-1"]'),
+            livePanel: liveRect('.dashboard-group-live-member[data-panel-key="builder-table"]'),
+            liveCount: document.querySelectorAll(".dashboard-group-live-member").length,
+            sourceCount: document.querySelectorAll(".dashboard-group-source").length,
+            footprintCount: document.querySelectorAll(".dashboard-group-footprint").length,
+            footprintSpan: Number(footprint.dataset.currentSpan),
+            footprintRows: Number(footprint.dataset.gridRowSpan),
+            shellBackground: shellStyles.backgroundImage,
+            shellBackgroundColor: shellStyles.backgroundColor,
+            shellBorderColor: shellStyles.borderTopColor,
+          };
+        }
+        """
+    )
+
+    assert during["originals"]["widget"] == {key: before["widget"][key] for key in ("col", "row", "span", "rowSpan")}
+    assert during["originals"]["panel"] == {key: before["panel"][key] for key in ("col", "row", "span", "rowSpan")}
+    assert during["liveCount"] == 2
+    assert during["sourceCount"] == 2
+    assert during["footprintCount"] == 1
+    assert during["footprintSpan"] == 4
+    assert during["footprintRows"] == 3
+    assert during["blocker"]["row"] > before["blocker"]["row"]
+    assert during["shellBackground"] != "none"
+    assert during["shellBackgroundColor"] != "rgb(0, 0, 0)"
+    assert during["shellBorderColor"] != "rgb(0, 0, 0)"
+    before_dx = before["panel"]["left"] - before["widget"]["left"]
+    before_dy = before["panel"]["top"] - before["widget"]["top"]
+    live_dx = during["livePanel"]["left"] - during["liveWidget"]["left"]
+    live_dy = during["livePanel"]["top"] - during["liveWidget"]["top"]
+    assert abs(live_dx - before_dx) <= 1
+    assert abs(live_dy - before_dy) <= 1
+
+    page.mouse.up()
+    page.wait_for_timeout(360)
+    first_after = {
+        "widget": grid_item_state(page, '[data-widget-key="widget-1"]'),
+        "panel": grid_item_state(page, '[data-panel-key="builder-table"]'),
+        "blocker": grid_item_state(page, '[data-panel-key="builder-notes"]'),
+    }
+    assert first_after["panel"]["col"] - first_after["widget"]["col"] == before["panel"]["col"] - before["widget"]["col"]
+    assert first_after["panel"]["row"] - first_after["widget"]["row"] == before["panel"]["row"] - before["widget"]["row"]
+    assert first_after["blocker"]["row"] > before["blocker"]["row"]
+    expect(page.locator(".dashboard-group-live-shell")).to_have_count(0)
+    expect(page.locator(".dashboard-group-footprint")).to_have_count(0)
+    expect(page.locator(".dashboard-group-source")).to_have_count(0)
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+
+    open_tools(widget)
+    drag_by(page, widget.locator(".panel-move-handle"), 0, -95, steps=10)
+    page.wait_for_timeout(300)
+    second_after = {
+        "widget": grid_item_state(page, '[data-widget-key="widget-1"]'),
+        "panel": grid_item_state(page, '[data-panel-key="builder-table"]'),
+    }
+    assert second_after["panel"]["col"] - second_after["widget"]["col"] == before["panel"]["col"] - before["widget"]["col"]
+    assert second_after["panel"]["row"] - second_after["widget"]["row"] == before["panel"]["row"] - before["widget"]["row"]
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    reloaded = {
+        "widget": grid_item_state(page, '[data-widget-key="widget-1"]'),
+        "panel": grid_item_state(page, '[data-panel-key="builder-table"]'),
+    }
+    assert reloaded["widget"]["col"] == second_after["widget"]["col"]
+    assert reloaded["widget"]["row"] == second_after["widget"]["row"]
+    assert reloaded["panel"]["col"] == second_after["panel"]["col"]
+    assert reloaded["panel"]["row"] == second_after["panel"]["row"]
+    assert_clean_browser(page)
+
+
+def test_group_drag_can_target_top_grid_row(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span, rowSpan = 1) => {
+            node.classList.remove("db-panel-collapsed");
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            if (node.classList.contains("db-panel")) {
+              const gap = parseFloat(getComputedStyle(document.querySelector(".dashboard-layout-grid")).rowGap || "16") || 16;
+              const height = (rowSpan * 81) + (Math.max(0, rowSpan - 1) * gap);
+              node.dataset.savedHeight = String(height);
+              node.style.height = `${height}px`;
+            }
+          };
+          document.querySelectorAll(".widget-layout > .widget-card").forEach((node, index) => place(node, 1 + (index % 6), 14 + index, 1));
+          place(document.querySelector('[data-panel-key="builder-table"]'), 1, 7, 2, 2);
+          place(document.querySelector('[data-panel-key="builder-menu"]'), 3, 7, 2, 2);
+          place(document.querySelector('[data-panel-key="builder-notes"]'), 5, 10, 2, 2);
+          window.scrollTo(0, 0);
+        }
+        """
+    )
+
+    page.locator(".layout-group-button").click()
+    table = page.locator('[data-panel-key="builder-table"]')
+    menu = page.locator('[data-panel-key="builder-menu"]')
+    table.click(position={"x": 20, "y": 20})
+    menu.click(position={"x": 20, "y": 20})
+    expect(page.locator(".group-selected")).to_have_count(2)
+
+    open_tools(table)
+    handle_box = table.locator(".panel-move-handle").bounding_box()
+    grid_box = page.locator(".dashboard-layout-grid").bounding_box()
+    assert handle_box
+    assert grid_box
+    x, y = box_center(handle_box)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(grid_box["x"] + 44, grid_box["y"] + 18, steps=18)
+    page.wait_for_timeout(220)
+    expect(page.locator(".dashboard-group-footprint")).to_have_count(1)
+    preview_row = int(page.locator(".dashboard-group-footprint").evaluate("node => node.dataset.gridRow"))
+    assert preview_row == 1
+    page.mouse.up()
+    page.wait_for_timeout(360)
+
+    after = {
+        "table": grid_item_state(page, '[data-panel-key="builder-table"]'),
+        "menu": grid_item_state(page, '[data-panel-key="builder-menu"]'),
+    }
+    assert min(after["table"]["row"], after["menu"]["row"]) == 1
+    assert after["menu"]["col"] - after["table"]["col"] == 2
+    assert after["menu"]["row"] == after["table"]["row"]
+    expect(page.locator(".dashboard-group-footprint")).to_have_count(0)
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    assert_clean_browser(page)
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_group_boundary_visuals_match_selection_during_move_and_resize(page: Page, app_server: str, theme: str) -> None:
+    goto(page, app_server)
+    if theme == "dark":
+        page.locator(".theme-toggle").click()
+        expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+
+    page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span, rowSpan = 1) => {
+            node.classList.remove("db-panel-collapsed");
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            if (node.classList.contains("db-panel")) {
+              const gap = parseFloat(getComputedStyle(document.querySelector(".dashboard-layout-grid")).rowGap || "16") || 16;
+              const height = (rowSpan * 81) + (Math.max(0, rowSpan - 1) * gap);
+              node.dataset.savedHeight = String(height);
+              node.style.height = `${height}px`;
+            }
+          };
+          document.querySelectorAll(".widget-layout > .widget-card").forEach((node, index) => place(node, 1 + (index % 6), 14 + index, 1));
+          place(document.querySelector('[data-panel-key="builder-table"]'), 1, 5, 2, 2);
+          place(document.querySelector('[data-panel-key="builder-menu"]'), 3, 5, 2, 2);
+          place(document.querySelector('[data-panel-key="builder-notes"]'), 5, 9, 2, 2);
+          window.scrollTo(0, 0);
+        }
+        """
+    )
+
+    page.locator(".layout-group-button").click()
+    table = page.locator('[data-panel-key="builder-table"]')
+    menu = page.locator('[data-panel-key="builder-menu"]')
+    table.click(position={"x": 20, "y": 20})
+    menu.click(position={"x": 20, "y": 20})
+    expect(page.locator(".group-selected")).to_have_count(2)
+
+    def selected_visual() -> dict:
+        return page.evaluate(
+            """
+            () => {
+              const nodes = [...document.querySelectorAll(".group-selected")];
+              const rects = nodes.map((node) => {
+                const rect = node.getBoundingClientRect();
+                const styles = getComputedStyle(node);
+                const offset = Math.max(0, parseFloat(styles.outlineOffset || "0") || 0);
+                return {
+                  left: rect.left - offset,
+                  top: rect.top - offset,
+                  right: rect.right + offset,
+                  bottom: rect.bottom + offset,
+                  outlineColor: styles.outlineColor,
+                  outlineWidth: styles.outlineWidth,
+                  outlineOffset: styles.outlineOffset,
+                  borderRadius: styles.borderRadius,
+                };
+              });
+              const left = Math.min(...rects.map((rect) => rect.left));
+              const top = Math.min(...rects.map((rect) => rect.top));
+              const right = Math.max(...rects.map((rect) => rect.right));
+              const bottom = Math.max(...rects.map((rect) => rect.bottom));
+              return {
+                left,
+                top,
+                width: right - left,
+                height: bottom - top,
+                outlineColor: rects[0].outlineColor,
+                outlineWidth: rects[0].outlineWidth,
+                outlineOffset: rects[0].outlineOffset,
+                borderRadius: rects[0].borderRadius,
+                members: Object.fromEntries(nodes.map((node) => {
+                  const styles = getComputedStyle(node);
+                  return [node.dataset.widgetKey || node.dataset.panelKey, {
+                    outlineColor: styles.outlineColor,
+                    outlineWidth: styles.outlineWidth,
+                    outlineOffset: styles.outlineOffset,
+                  }];
+                })),
+              };
+            }
+            """
+        )
+
+    def boundary_visual(selector: str = ".dashboard-group-boundary") -> dict:
+        return page.locator(selector).evaluate(
+            """
+            node => {
+              const rect = node.getBoundingClientRect();
+              const styles = getComputedStyle(node);
+              return {
+                left: rect.left,
+                top: rect.top,
+                width: rect.width,
+                height: rect.height,
+                borderColor: styles.borderTopColor,
+                borderWidth: styles.borderTopWidth,
+                borderRadius: styles.borderRadius,
+                boxShadow: styles.boxShadow,
+              };
+            }
+            """
+        )
+
+    selected_before_move = selected_visual()
+    open_tools(table)
+    handle_box = table.locator(".panel-move-handle").bounding_box()
+    assert handle_box
+    x, y = box_center(handle_box)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 100, y + 45, steps=10)
+    page.wait_for_timeout(180)
+
+    expect(page.locator(".dashboard-group-live-shell")).to_have_count(1)
+    move_boundary = boundary_visual(".dashboard-group-live-shell")
+    assert abs(move_boundary["width"] - selected_before_move["width"]) <= 1
+    assert abs(move_boundary["height"] - selected_before_move["height"]) <= 1
+    assert move_boundary["borderColor"] == selected_before_move["outlineColor"]
+    assert move_boundary["borderWidth"] == selected_before_move["outlineWidth"]
+    assert move_boundary["borderRadius"] == selected_before_move["borderRadius"]
+    assert "rgb(0, 0, 0)" not in move_boundary["borderColor"]
+    page.mouse.up()
+    page.wait_for_timeout(360)
+    expect(page.locator(".dashboard-group-boundary")).to_have_count(0)
+
+    selected_before_resize = selected_visual()
+    open_tools(table)
+    resize_box = table.locator(".panel-resize-handle").bounding_box()
+    assert resize_box
+    rx, ry = box_center(resize_box)
+    page.mouse.move(rx, ry)
+    page.mouse.down()
+    page.wait_for_timeout(160)
+
+    expect(page.locator(".dashboard-group-resize-boundary")).to_have_count(1)
+    resize_boundary = boundary_visual(".dashboard-group-resize-boundary")
+    assert abs(resize_boundary["width"] - selected_before_resize["width"]) <= 2
+    assert abs(resize_boundary["height"] - selected_before_resize["height"]) <= 2
+    assert resize_boundary["borderColor"] == selected_before_resize["outlineColor"]
+    assert resize_boundary["borderWidth"] == selected_before_resize["outlineWidth"]
+    assert resize_boundary["borderRadius"] == selected_before_resize["borderRadius"]
+
+    live_styles = page.locator(".dashboard-live-resize.group-selected").evaluate_all(
+        """
+        nodes => nodes.map((node) => {
+          const styles = getComputedStyle(node);
+          return {
+            key: node.dataset.widgetKey || node.dataset.panelKey,
+            borderColor: styles.borderTopColor,
+            outlineColor: styles.outlineColor,
+            outlineWidth: styles.outlineWidth,
+            outlineOffset: styles.outlineOffset,
+            boxShadow: styles.boxShadow,
+          };
+        })
+        """
+    )
+    assert len(live_styles) == 2
+    for style in live_styles:
+        member_style = selected_before_resize["members"][style["key"]]
+        assert style["outlineColor"] == member_style["outlineColor"]
+        assert style["outlineWidth"] == member_style["outlineWidth"]
+        assert style["outlineOffset"] == member_style["outlineOffset"]
+        assert "rgb(0, 0, 0)" not in style["borderColor"]
+        assert "rgb(0, 0, 0)" not in style["outlineColor"]
+        assert "rgba(0, 0, 0" not in style["boxShadow"]
+
+    page.mouse.up()
+    page.wait_for_timeout(360)
+    expect(page.locator(".dashboard-group-boundary")).to_have_count(0)
+    assert_no_resize_artifacts(page)
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    assert_clean_browser(page)
+
+
 def test_group_resize_is_proportional_and_minimum_aware(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate(
@@ -2398,6 +3331,354 @@ def test_group_resize_is_proportional_and_minimum_aware(page: Page, app_server: 
     assert sizes["panel"] >= 1
     assert len({sizes["timeframe"], sizes["stat"], sizes["panel"]}) > 1
     assert sizes["panelRows"] >= 1
+    assert_no_resize_artifacts(page)
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    assert_clean_browser(page)
+
+
+def test_group_resize_uses_live_clones_snapped_previews_and_collapsed_ghost(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span, rowSpan = 1) => {
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+          };
+          const timeframe = document.querySelector('[data-widget-key="builder-search"]');
+          const stat = document.querySelector('[data-widget-key="widget-1"]');
+          const panel = document.querySelector('[data-panel-key="builder-table"]');
+          timeframe.dataset.minW = "4";
+          place(timeframe, 1, 1, 6);
+          place(stat, 1, 4, 2);
+          place(panel, 4, 4, 3, 1);
+          panel.classList.add("db-panel-collapsed");
+          panel.dataset.savedHeight = "275";
+          panel.style.height = "";
+          panel.querySelector(".panel-collapse-toggle")?.setAttribute("aria-expanded", "false");
+        }
+        """
+    )
+
+    page.locator(".layout-group-button").click()
+    timeframe = page.locator('[data-widget-key="builder-search"]')
+    stat = page.locator('[data-widget-key="widget-1"]')
+    panel = page.locator('[data-panel-key="builder-table"]')
+    timeframe.click(position={"x": 20, "y": 20})
+    stat.click(position={"x": 20, "y": 20})
+    panel.click(position={"x": 20, "y": 20})
+    expect(page.locator(".group-selected")).to_have_count(3)
+
+    before = page.evaluate(
+        """
+        () => {
+          const state = (selector) => {
+            const node = document.querySelector(selector);
+            return {
+              col: Number(node.dataset.gridCol),
+              row: Number(node.dataset.gridRow),
+              span: Number(node.dataset.currentSpan),
+              rowSpan: Number(node.dataset.gridRowSpan),
+            };
+          };
+          return {
+            timeframe: state('[data-widget-key="builder-search"]'),
+            stat: state('[data-widget-key="widget-1"]'),
+            panel: state('[data-panel-key="builder-table"]'),
+          };
+        }
+        """
+    )
+
+    open_tools(stat)
+    handle = stat.locator(".panel-resize-handle")
+    handle.scroll_into_view_if_needed()
+    box = handle.bounding_box()
+    assert box, "No group resize handle"
+    x, y = box_center(box)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x - 36, y + 18, steps=4)
+
+    micro = page.evaluate(
+        """
+        () => {
+          const source = document.querySelector('[data-widget-key="widget-1"]');
+          const live = document.querySelector('.dashboard-live-resize[data-widget-key="widget-1"]');
+          const sourceRect = source.getBoundingClientRect();
+          const liveRect = live.getBoundingClientRect();
+          return {
+            live: document.querySelectorAll(".dashboard-live-resize").length,
+            preview: document.querySelectorAll(".dashboard-resize-preview").length,
+            groupFootprint: document.querySelectorAll(".dashboard-group-resize-footprint").length,
+            memberPreview: document.querySelectorAll(".dashboard-group-member-preview").length,
+            source: document.querySelectorAll(".dashboard-resize-source").length,
+            ghost: document.querySelectorAll(".dashboard-expanded-footprint-ghost").length,
+            liveSelected: [...document.querySelectorAll(".dashboard-live-resize")].every((node) => node.classList.contains("group-selected")),
+            sourceWidth: sourceRect.width,
+            liveWidth: liveRect.width,
+          };
+        }
+        """
+    )
+    assert micro["live"] == 3
+    assert micro["preview"] == 4
+    assert micro["groupFootprint"] == 1
+    assert micro["memberPreview"] == 3
+    assert micro["source"] == 3
+    assert micro["ghost"] == 1
+    assert micro["liveSelected"]
+    assert abs(micro["liveWidth"] - micro["sourceWidth"]) > 2
+
+    page.mouse.move(x - 420, y + 120, steps=14)
+    during = page.evaluate(
+        """
+        () => {
+          const state = (selector) => {
+            const node = document.querySelector(selector);
+            return {
+              col: Number(node.dataset.gridCol),
+              row: Number(node.dataset.gridRow),
+              span: Number(node.dataset.currentSpan),
+              rowSpan: Number(node.dataset.gridRowSpan),
+            };
+          };
+          return {
+            originals: {
+              timeframe: state('[data-widget-key="builder-search"]'),
+              stat: state('[data-widget-key="widget-1"]'),
+              panel: state('[data-panel-key="builder-table"]'),
+            },
+            previewSpans: [...document.querySelectorAll(".dashboard-resize-preview")].map((node) => Number(node.dataset.currentSpan)),
+          };
+        }
+        """
+    )
+    assert during["originals"] == before
+    assert any(span not in {2, 3, 6} for span in during["previewSpans"])
+
+    page.mouse.up()
+    page.wait_for_timeout(360)
+    after = {
+        "timeframe": grid_item_state(page, '[data-widget-key="builder-search"]'),
+        "stat": grid_item_state(page, '[data-widget-key="widget-1"]'),
+        "panel": grid_item_state(page, '[data-panel-key="builder-table"]'),
+    }
+
+    assert after["timeframe"]["span"] == 4
+    assert after["stat"]["span"] >= 1
+    assert after["panel"]["rowSpan"] == 1
+    assert_no_resize_artifacts(page)
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    assert_clean_browser(page)
+
+
+def test_group_resize_composite_footprint_pushes_surrounding_items(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span, rowSpan = 1) => {
+            node.classList.remove("db-panel-collapsed");
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            const gap = parseFloat(getComputedStyle(document.querySelector(".dashboard-layout-grid")).rowGap || "16") || 16;
+            const height = (rowSpan * 81) + (Math.max(0, rowSpan - 1) * gap);
+            node.dataset.savedHeight = String(height);
+            node.style.height = `${height}px`;
+          };
+          place(document.querySelector('[data-panel-key="builder-table"]'), 1, 4, 2, 2);
+          place(document.querySelector('[data-panel-key="builder-menu"]'), 3, 4, 2, 2);
+          place(document.querySelector('[data-panel-key="builder-notes"]'), 1, 7, 4, 2);
+        }
+        """
+    )
+
+    page.locator(".layout-group-button").click()
+    table = page.locator('[data-panel-key="builder-table"]')
+    menu = page.locator('[data-panel-key="builder-menu"]')
+    blocker = page.locator('[data-panel-key="builder-notes"]')
+    table.click(position={"x": 20, "y": 20})
+    menu.click(position={"x": 20, "y": 20})
+    expect(page.locator(".group-selected")).to_have_count(2)
+
+    before = {
+        "table": grid_item_state(page, '[data-panel-key="builder-table"]'),
+        "menu": grid_item_state(page, '[data-panel-key="builder-menu"]'),
+        "blocker": grid_item_state(page, '[data-panel-key="builder-notes"]'),
+    }
+
+    table.evaluate("node => node.classList.add('db-panel-tools-open')")
+    expect(table.locator(".panel-tool-drawer")).to_be_visible()
+    handle = table.locator(".panel-resize-handle")
+    handle_box = handle.bounding_box()
+    assert handle_box
+    x, y = box_center(handle_box)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 260, y + 220, steps=16)
+    page.wait_for_timeout(220)
+
+    during = page.evaluate(
+        """
+        () => {
+          const state = (selector) => {
+            const node = document.querySelector(selector);
+            return {
+              col: Number(node.dataset.gridCol),
+              row: Number(node.dataset.gridRow),
+              span: Number(node.dataset.currentSpan),
+              rowSpan: Number(node.dataset.gridRowSpan),
+            };
+          };
+          const footprint = document.querySelector(".dashboard-group-resize-footprint");
+          return {
+            originals: {
+              table: state('[data-panel-key="builder-table"]'),
+              menu: state('[data-panel-key="builder-menu"]'),
+            },
+            blocker: state('[data-panel-key="builder-notes"]'),
+            live: document.querySelectorAll(".dashboard-live-resize").length,
+            memberPreview: document.querySelectorAll(".dashboard-group-member-preview").length,
+            footprint: document.querySelectorAll(".dashboard-group-resize-footprint").length,
+            footprintSpan: Number(footprint.dataset.currentSpan),
+            footprintRows: Number(footprint.dataset.gridRowSpan),
+          };
+        }
+        """
+    )
+    assert during["originals"]["table"] == {key: before["table"][key] for key in ("col", "row", "span", "rowSpan")}
+    assert during["originals"]["menu"] == {key: before["menu"][key] for key in ("col", "row", "span", "rowSpan")}
+    assert during["live"] == 2
+    assert during["memberPreview"] == 2
+    assert during["footprint"] == 1
+    assert during["footprintSpan"] >= 4
+    assert during["footprintRows"] > 2
+    assert during["blocker"]["row"] > before["blocker"]["row"]
+
+    page.mouse.up()
+    page.wait_for_timeout(360)
+    after = {
+        "table": grid_item_state(page, '[data-panel-key="builder-table"]'),
+        "menu": grid_item_state(page, '[data-panel-key="builder-menu"]'),
+        "blocker": grid_item_state(page, '[data-panel-key="builder-notes"]'),
+    }
+    assert after["menu"]["col"] > after["table"]["col"]
+    assert after["menu"]["row"] == after["table"]["row"]
+    assert after["blocker"]["row"] > before["blocker"]["row"]
+    assert_no_resize_artifacts(page)
+    expect(page.locator(".dashboard-group-resize-footprint")).to_have_count(0)
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    assert_clean_browser(page)
+
+
+def test_group_resize_preserves_stacked_panel_spacing(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span, rowSpan = 1) => {
+            node.classList.remove("db-panel-collapsed");
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            const gap = parseFloat(getComputedStyle(document.querySelector(".dashboard-layout-grid")).rowGap || "16") || 16;
+            const height = (rowSpan * 81) + (Math.max(0, rowSpan - 1) * gap);
+            node.dataset.savedHeight = String(height);
+            node.style.height = `${height}px`;
+          };
+          document.querySelectorAll(".widget-layout > .widget-card").forEach((node, index) => {
+            node.dataset.gridCol = String(1 + (index % 6));
+            node.dataset.gridRow = String(18 + index);
+            node.dataset.currentSpan = "1";
+            node.dataset.gridRowSpan = "1";
+            node.style.gridColumn = `${1 + (index % 6)} / span 1`;
+            node.style.gridRow = `${18 + index} / span 1`;
+          });
+          place(document.querySelector('[data-panel-key="builder-menu"]'), 1, 4, 2, 2);
+          place(document.querySelector('[data-panel-key="builder-notes"]'), 1, 7, 2, 2);
+          place(document.querySelector('[data-panel-key="builder-table"]'), 1, 10, 2, 2);
+        }
+        """
+    )
+
+    page.locator(".layout-group-button").click()
+    menu = page.locator('[data-panel-key="builder-menu"]')
+    notes = page.locator('[data-panel-key="builder-notes"]')
+    table = page.locator('[data-panel-key="builder-table"]')
+    menu.click(position={"x": 20, "y": 20})
+    notes.click(position={"x": 20, "y": 20})
+    table.click(position={"x": 20, "y": 20})
+    expect(page.locator(".group-selected")).to_have_count(3)
+
+    before = page.evaluate(
+        """
+        () => {
+          const rows = ["builder-menu", "builder-notes", "builder-table"].map((key) => Number(document.querySelector(`[data-panel-key="${key}"]`).dataset.gridRow));
+          const tops = ["builder-menu", "builder-notes", "builder-table"].map((key) => document.querySelector(`[data-panel-key="${key}"]`).getBoundingClientRect().top);
+          return { rows, tops, rowGaps: [rows[1] - rows[0], rows[2] - rows[1]], topGaps: [tops[1] - tops[0], tops[2] - tops[1]] };
+        }
+        """
+    )
+
+    open_tools(menu)
+    handle_box = menu.locator(".panel-resize-handle").bounding_box()
+    assert handle_box
+    x, y = box_center(handle_box)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 330, y + 12, steps=16)
+    page.wait_for_timeout(220)
+
+    during = page.evaluate(
+        """
+        () => {
+          const originalRows = ["builder-menu", "builder-notes", "builder-table"].map((key) => Number(document.querySelector(`[data-panel-key="${key}"]`).dataset.gridRow));
+          const previewRows = [...document.querySelectorAll(".dashboard-group-member-preview")]
+            .sort((a, b) => Number(a.dataset.gridRow) - Number(b.dataset.gridRow))
+            .map((node) => Number(node.dataset.gridRow));
+          const liveTops = [...document.querySelectorAll(".dashboard-live-resize")]
+            .map((node) => node.getBoundingClientRect().top)
+            .sort((a, b) => a - b);
+          return {
+            originalRows,
+            previewRows,
+            previewGaps: [previewRows[1] - previewRows[0], previewRows[2] - previewRows[1]],
+            liveGaps: [liveTops[1] - liveTops[0], liveTops[2] - liveTops[1]],
+            liveCount: liveTops.length,
+            footprint: document.querySelectorAll(".dashboard-group-resize-footprint").length,
+          };
+        }
+        """
+    )
+    assert during["originalRows"] == before["rows"]
+    assert during["liveCount"] == 3
+    assert during["previewGaps"] == before["rowGaps"]
+    assert during["footprint"] == 1
+    assert abs(during["liveGaps"][0] - before["topGaps"][0]) <= 1
+    assert abs(during["liveGaps"][1] - before["topGaps"][1]) <= 1
+
+    page.mouse.up()
+    page.wait_for_timeout(360)
+    after_rows = page.evaluate(
+        """
+        () => ["builder-menu", "builder-notes", "builder-table"].map((key) => Number(document.querySelector(`[data-panel-key="${key}"]`).dataset.gridRow))
+        """
+    )
+    assert [after_rows[1] - after_rows[0], after_rows[2] - after_rows[1]] == before["rowGaps"]
+    assert_no_resize_artifacts(page)
+    expect(page.locator(".dashboard-group-resize-footprint")).to_have_count(0)
     assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
     assert_clean_browser(page)
 
