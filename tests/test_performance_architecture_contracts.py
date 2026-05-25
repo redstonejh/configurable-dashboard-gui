@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP_JS = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
 DASHBOARD_CSS = (ROOT / "app" / "static" / "dashboard-grid.css").read_text(encoding="utf-8")
+THEMES_CSS = (ROOT / "app" / "static" / "themes.css").read_text(encoding="utf-8")
 PERFORMANCE_PLAN = (ROOT / "docs" / "performance-stabilization-plan.md").read_text(encoding="utf-8")
 
 
@@ -42,14 +43,36 @@ def test_collision_queries_use_spatial_row_buckets_for_large_occupied_sets():
     assert "occupied.some" not in can_place_body
 
 
-def test_visual_lod_css_reduces_far_offscreen_render_cost_only():
-    for tier in ('data-visual-lod="near"', 'data-visual-lod="far"'):
-        assert tier in DASHBOARD_CSS
+def test_sparse_resolution_uses_cached_logical_geometry_records():
+    for name in (
+        "layoutItemsForLogicalResolution",
+        "createGridGeometryRecords",
+        "gridGeometryEntry",
+        "gridGeometryEntriesForItems",
+    ):
+        assert name in APP_JS
 
-    assert "backdrop-filter: none" in DASHBOARD_CSS
-    assert "transition: none" in DASHBOARD_CSS
-    assert ":not(.widget-dragging)" in DASHBOARD_CSS
-    assert ":not(.dashboard-active-resize)" in DASHBOARD_CSS
+    sparse_body = APP_JS[
+        APP_JS.index("const resolveSparseGridLayout"):
+        APP_JS.index("const resolveActiveDropSlot")
+    ]
+    assert "items: options.items" in sparse_body
+    assert "createGridGeometryRecords(items, metrics)" in sparse_body
+    assert "gridGeometryEntry(item, records, metrics).bounds" in sparse_body
+    assert "gridGeometryEntriesForItems(" in sparse_body
+
+
+def test_visual_lod_css_reduces_far_offscreen_render_cost_only():
+    for tier in ('data-lod="active"', 'data-lod="near"', 'data-lod="far"', 'data-visual-lod="far"'):
+        assert tier in THEMES_CSS
+
+    assert "dataset.lod" in APP_JS
+    assert "--workspace-lod-near-shadow" in THEMES_CSS
+    assert "--workspace-lod-far-shadow" in THEMES_CSS
+    assert "backdrop-filter: none" in THEMES_CSS
+    assert "transition: var(--workspace-lod-far-transition)" in THEMES_CSS
+    assert ":not(.widget-dragging)" in THEMES_CSS
+    assert ":not(.dashboard-active-resize)" in THEMES_CSS
 
 
 def test_performance_pass_two_is_documented():

@@ -7350,22 +7350,48 @@ def test_large_dashboard_drag_resize_cleanup_stays_bounded(page: Page, app_serve
             total[tier] = (total[tier] || 0) + 1;
             return total;
           }, {});
+          const lodCounts = widgets.reduce((total, widget) => {
+            const tier = widget.dataset.lod || "missing";
+            total[tier] = (total[tier] || 0) + 1;
+            return total;
+          }, {});
           const far = widgets.find((widget) => widget.dataset.visualLod === "far");
+          const visible = widgets.find((widget) => widget.dataset.visualLod === "visible");
+          const farStyle = far ? getComputedStyle(far) : null;
+          const visibleStyle = visible ? getComputedStyle(visible) : null;
           return {
             counts,
+            lodCounts,
             farKey: far?.dataset.widgetKey || null,
             farRow: far ? Number(far.dataset.gridRow || 0) : null,
+            farFilter: farStyle?.backdropFilter || farStyle?.webkitBackdropFilter || "",
+            farTransition: farStyle?.transitionDuration || "",
+            farShadow: farStyle?.boxShadow || "",
+            visibleShadow: visibleStyle?.boxShadow || "",
           };
         }
         """
     )
     assert lod_state["counts"].get("visible", 0) > 0
     assert lod_state["counts"].get("far", 0) > 0
+    assert lod_state["lodCounts"] == lod_state["counts"]
     assert lod_state["farKey"]
+    assert lod_state["farFilter"] in {"", "none"}
+    assert lod_state["farShadow"] != lod_state["visibleShadow"]
 
     moved = page.locator('[data-widget-key="large-widget-0"]')
     force_open_tools_for_interaction(page, moved)
-    drag_by(page, moved.locator(".panel-move-handle"), 0, 260, steps=18)
+    move_handle_box = moved.locator(".panel-move-handle").bounding_box()
+    assert move_handle_box
+    move_x, move_y = box_center(move_handle_box)
+    page.mouse.move(move_x, move_y)
+    page.mouse.down()
+    page.mouse.move(move_x, move_y + 80, steps=6)
+    expect(page.locator(".widget-placeholder")).to_have_count(1)
+    active_lod = moved.evaluate("node => ({ lod: node.dataset.lod, visualLod: node.dataset.visualLod })")
+    assert active_lod == {"lod": "active", "visualLod": "active"}
+    page.mouse.move(move_x, move_y + 260, steps=12)
+    page.mouse.up()
     page.wait_for_timeout(360)
 
     resized = page.locator('[data-widget-key="large-widget-5"]')
@@ -7411,6 +7437,78 @@ def test_large_dashboard_drag_resize_cleanup_stays_bounded(page: Page, app_serve
     assert scrolled_lod_state["row"] == scrolled_lod_state["currentRow"]
     assert scrolled_lod_state["lod"] in {"active", "visible", "near"}
     assert scrolled_lod_state["overlaps"] is False
+    assert_clean_browser(page)
+
+
+def test_large_offscreen_reflow_resolves_before_scroll_and_persists(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const widgetLayout = document.querySelector(".widget-layout");
+          const source = document.querySelector('[data-widget-key="widget-1"]');
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const place = (node, col, row, span = 1, rowSpan = 1) => {
+            node.dataset.currentSpan = String(span);
+            node.dataset.defaultSpan = node.dataset.defaultSpan || String(span);
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+          };
+          panel.classList.add("db-panel-collapsed");
+          panel.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "false");
+          panel.dataset.savedHeight = "";
+          panel.style.height = "";
+          place(panel, 1, 8, 6, 1);
+          for (let index = 0; index < 84; index += 1) {
+            const clone = source.cloneNode(true);
+            clone.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+            clone.dataset.widgetKey = `offscreen-validity-widget-${index}`;
+            clone.dataset.customWidget = "true";
+            clone.dataset.panelTitle = `Offscreen Validity ${index + 1}`;
+            clone.dataset.defaultTitle = `Offscreen Validity ${index + 1}`;
+            delete clone.dataset.widgetInitialized;
+            clone.classList.remove("widget-tools-open", "db-panel-pinned", "group-selected");
+            clone.querySelector(".panel-settings-toggle")?.setAttribute("aria-expanded", "false");
+            const label = clone.querySelector(".stat-lbl");
+            if (label) label.textContent = `Offscreen Validity ${index + 1}`;
+            widgetLayout.appendChild(clone);
+            place(clone, (index % 6) + 1, 9 + Math.floor(index / 6), 1, 1);
+            widgetLayout.__initWidget?.(clone);
+          }
+          window.scrollTo(0, 0);
+          window.dashboardPerformanceEngine?.refreshVisualLod?.();
+        }
+        """
+    )
+    before_far = grid_item_state(page, '[data-widget-key="offscreen-validity-widget-72"]')
+    cells_before = occupied_grid_cells(page, ".dashboard-layout-grid .widget-card:not([hidden]), .panel-layout > .db-panel:not([hidden])")
+    assert len(cells_before) == len(set(cells_before))
+
+    page.locator('[data-panel-key="builder-content"] > .db-panel-hd').click(position={"x": 28, "y": 28})
+    expect(page.locator('[data-panel-key="builder-content"]')).not_to_have_class(re.compile("db-panel-collapsed"))
+    page.wait_for_timeout(360)
+
+    after_far = grid_item_state(page, '[data-widget-key="offscreen-validity-widget-72"]')
+    assert after_far["row"] > before_far["row"]
+    cells_after = occupied_grid_cells(page, ".dashboard-layout-grid .widget-card:not([hidden]), .panel-layout > .db-panel:not([hidden])")
+    assert len(cells_after) == len(set(cells_after))
+
+    page.locator('[data-widget-key="offscreen-validity-widget-72"]').scroll_into_view_if_needed()
+    page.evaluate("window.dashboardPerformanceEngine?.refreshVisualLod?.()")
+    revealed_far = grid_item_state(page, '[data-widget-key="offscreen-validity-widget-72"]')
+    assert grid_state_tuple(revealed_far) == grid_state_tuple(after_far)
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    reloaded_far = grid_item_state(page, '[data-widget-key="offscreen-validity-widget-72"]')
+    assert grid_state_tuple(reloaded_far) == grid_state_tuple(after_far)
+    reloaded_cells = occupied_grid_cells(page, ".dashboard-layout-grid .widget-card:not([hidden]), .panel-layout > .db-panel:not([hidden])")
+    assert len(reloaded_cells) == len(set(reloaded_cells))
     assert_clean_browser(page)
 
 

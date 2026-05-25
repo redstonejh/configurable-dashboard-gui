@@ -4424,6 +4424,58 @@ document.addEventListener("DOMContentLoaded", () => {
       .filter((item) => !excluded.has(item) && (host === layout || !isPanelInternalGridItem(item)) && !item.classList.contains("workspace-anchor-object") && !item.classList.contains("widget-dragging") && !item.classList.contains("db-panel-dragging") && !item.classList.contains("dashboard-live-resize") && !item.classList.contains("dashboard-resize-source") && !item.classList.contains("dashboard-group-source") && !item.classList.contains("dashboard-group-member-preview"));
   };
 
+  const layoutItemsForLogicalResolution = (layout, options = {}) => {
+    const excluded = new Set([].concat(options.exclude || []).filter(Boolean));
+    const provided = Array.isArray(options.items) ? options.items : null;
+    const items = provided || globalGridItems(layout, {
+      includePlaceholders: options.includePlaceholders !== false,
+      exclude: [...excluded],
+    });
+    return [...new Set(items)]
+      .filter((item) => (
+        item?.isConnected &&
+        !excluded.has(item) &&
+        !item.classList.contains("workspace-anchor-object") &&
+        !item.classList.contains("widget-dragging") &&
+        !item.classList.contains("db-panel-dragging") &&
+        !item.classList.contains("dashboard-live-resize") &&
+        !item.classList.contains("dashboard-resize-source") &&
+        !item.classList.contains("dashboard-group-source") &&
+        !item.classList.contains("dashboard-group-member-preview")
+      ));
+  };
+
+  const createGridGeometryRecords = (items, metrics = null) => {
+    const records = new Map();
+    items.forEach((item) => {
+      if (!item?.isConnected || records.has(item)) return;
+      records.set(item, {
+        item,
+        bounds: gridBoundsForItem(item, metrics),
+      });
+    });
+    return records;
+  };
+
+  const gridGeometryEntry = (item, records, metrics = null) => {
+    if (!item?.isConnected) return null;
+    if (!records.has(item)) {
+      records.set(item, {
+        item,
+        bounds: gridBoundsForItem(item, metrics),
+      });
+    }
+    return records.get(item);
+  };
+
+  const gridGeometryEntriesForItems = (items, records, metrics = null, exclude = []) => {
+    const excluded = new Set([].concat(exclude || []).filter(Boolean));
+    return items
+      .filter((item) => item?.isConnected && !excluded.has(item))
+      .map((item) => gridGeometryEntry(item, records, metrics))
+      .filter(Boolean);
+  };
+
   const workspaceVisualViewport = () => {
     const scrollY = window.scrollY || document.documentElement.scrollTop || 0;
     const height = window.innerHeight || document.documentElement.clientHeight || 800;
@@ -4478,7 +4530,9 @@ document.addEventListener("DOMContentLoaded", () => {
       items.forEach((item) => {
         if (processedItems.has(item)) return;
         processedItems.add(item);
-        item.dataset.visualLod = workspaceVisualLodForItem(item, metrics, viewport);
+        const lod = workspaceVisualLodForItem(item, metrics, viewport);
+        item.dataset.visualLod = lod;
+        item.dataset.lod = lod;
       });
     });
   };
@@ -4668,7 +4722,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const firstVerticalOpenRow = (bounds, occupied) => {
     let nextBounds = { ...bounds };
     for (let attempts = 0; attempts < 120; attempts += 1) {
-      const conflicts = occupied.filter((entry) => (
+      const conflicts = indexedCollisionEntries(nextBounds, occupied).filter((entry) => (
         gridBoundsShareColumns(nextBounds, entry.bounds) &&
         gridBoundsOverlap(nextBounds, entry.bounds)
       ));
@@ -4762,18 +4816,23 @@ document.addEventListener("DOMContentLoaded", () => {
   const resolveSparseGridLayout = (layout, activeItem = null, preferredTarget = null, options = {}) => {
     const metrics = options.metrics || null;
     const localVacancy = options.localVacancy || null;
-    const items = globalGridItems(layout, { includePlaceholders: true });
+    const items = layoutItemsForLogicalResolution(layout, {
+      includePlaceholders: true,
+      items: options.items,
+    });
+    if (activeItem?.isConnected && !items.includes(activeItem)) items.push(activeItem);
+    const records = createGridGeometryRecords(items, metrics);
     const placements = new Map();
     const occupied = [];
     const pinned = items.filter((item) => item !== activeItem && item.classList.contains("db-panel-pinned"));
     pinned.forEach((item) => {
-      const bounds = gridBoundsForItem(item, metrics);
+      const bounds = gridGeometryEntry(item, records, metrics).bounds;
       placements.set(item, bounds);
       occupied.push({ item, bounds });
     });
 
     if (activeItem?.isConnected) {
-      const target = preferredTarget || gridBoundsForItem(activeItem, metrics);
+      const target = preferredTarget || gridGeometryEntry(activeItem, records, metrics).bounds;
       let activeBounds = boundsAtGridSlot(activeItem, target.col, target.row, metrics);
       if (!canPlaceBounds(activeBounds, occupied)) {
         activeBounds = options.afterOnly
@@ -4787,10 +4846,12 @@ document.addEventListener("DOMContentLoaded", () => {
     visualGridOrder(items, metrics)
       .filter((item) => item !== activeItem && !item.classList.contains("db-panel-pinned"))
       .forEach((item) => {
-        const current = gridBoundsForItem(item, metrics);
-        const reserved = items
-          .filter((other) => other !== activeItem && other !== item)
-          .map((other) => ({ item: other, bounds: gridBoundsForItem(other, metrics) }));
+        const current = gridGeometryEntry(item, records, metrics).bounds;
+        const reserved = gridGeometryEntriesForItems(
+          items.filter((other) => other !== activeItem && other !== item),
+          records,
+          metrics
+        );
         const verticalFallback = options.verticalDisplacement
           ? verticalSlotAtOrAfter(item, current, occupied, null, metrics) || nearestSparseSlotAtOrAfter(item, current, occupied, null, metrics)
           : null;
@@ -4813,20 +4874,25 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!activeList.length) return new Map();
     const activeSet = new Set(activeList);
     const excluded = new Set([].concat(options.exclude || []).filter(Boolean));
-    const items = globalGridItems(layout, { includePlaceholders: true, exclude: [...excluded, ...activeList] });
+    const items = layoutItemsForLogicalResolution(layout, {
+      includePlaceholders: true,
+      items: options.items,
+      exclude: [...excluded, ...activeList],
+    });
     const allItems = [...activeList, ...items];
+    const records = createGridGeometryRecords(allItems, metrics);
     const placements = new Map();
     const occupied = [];
     items
       .filter((item) => item.classList.contains("db-panel-pinned"))
       .forEach((item) => {
-        const bounds = gridBoundsForItem(item, metrics);
+        const bounds = gridGeometryEntry(item, records, metrics).bounds;
         placements.set(item, bounds);
         occupied.push({ item, bounds });
       });
 
     activeList.forEach((item) => {
-      const target = gridBoundsForItem(item, metrics);
+      const target = gridGeometryEntry(item, records, metrics).bounds;
       let bounds = boundsAtGridSlot(item, target.col, target.row, metrics);
       if (!canPlaceBounds(bounds, occupied)) {
         bounds = options.afterOnly
@@ -4840,10 +4906,12 @@ document.addEventListener("DOMContentLoaded", () => {
     visualGridOrder(items, metrics)
       .filter((item) => !activeSet.has(item) && !item.classList.contains("db-panel-pinned"))
       .forEach((item) => {
-        const current = gridBoundsForItem(item, metrics);
-        const reserved = allItems
-          .filter((other) => other !== item && !excluded.has(other))
-          .map((other) => ({ item: other, bounds: gridBoundsForItem(other, metrics) }));
+        const current = gridGeometryEntry(item, records, metrics).bounds;
+        const reserved = gridGeometryEntriesForItems(
+          allItems.filter((other) => other !== item && !excluded.has(other)),
+          records,
+          metrics
+        );
         const bounds = canPlaceBounds(current, occupied)
           ? current
           : options.afterOnly
@@ -5579,6 +5647,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (dragging) return;
       dragging = true;
       item.dataset.visualLod = "active";
+      item.dataset.lod = "active";
       rect = item.getBoundingClientRect();
       startSnapshot = snapshotGridLayout(layout);
       const groupItems = groupTransformItems(item)
@@ -5746,7 +5815,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.targetCell = nextCell;
       animateOrderedGridReflow(state.layout, () => {
         restoreGridLayoutSnapshot(state.snapshot, { exclude: [state.placeholder] });
-        resolveSparseGridLayout(state.layout, state.placeholder, nextCell, { afterOnly: true, metrics });
+        resolveSparseGridLayout(state.layout, state.placeholder, nextCell, { afterOnly: true, metrics, items: state.reflowItems });
       }, state.placeholder, { items: state.reflowItems, metrics });
       updatePanelChildEmptyState(state.panel);
       return true;
@@ -5771,13 +5840,14 @@ document.addEventListener("DOMContentLoaded", () => {
             col: nextCell.col,
             row: nextCell.row,
           });
-          resolveSparseGridLayout(layout, placeholder, nextCell, { afterOnly: true, metrics, localVacancy });
+          resolveSparseGridLayout(layout, placeholder, nextCell, { afterOnly: true, metrics, localVacancy, items: reflowItems });
         } else {
           resolveSparseGridLayout(layout, placeholder, nextCell, {
             afterOnly: true,
             metrics,
             localVacancy,
             verticalDisplacement: expandedPanelDrag,
+            items: reflowItems,
           });
         }
       }, item, { items: reflowItems, metrics });
@@ -5914,7 +5984,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 col: finalCell.col,
                 row: finalCell.row,
               });
-              resolveSparseGridLayout(layout, placeholder, finalCell, { afterOnly: true, metrics: dragMetrics, localVacancy });
+              resolveSparseGridLayout(layout, placeholder, finalCell, { afterOnly: true, metrics: dragMetrics, localVacancy, items: reflowItems });
               const resolvedCell = {
                 col: Number(placeholder.dataset.gridCol) || finalCell.col,
                 row: Number(placeholder.dataset.gridRow) || finalCell.row,
@@ -6425,6 +6495,7 @@ document.addEventListener("DOMContentLoaded", () => {
           afterOnly: true,
           metrics: layoutMetrics,
           exclude: [groupFootprint.footprint],
+          items: reflowItems,
         });
       }, source, { items: reflowItems, metrics: layoutMetrics });
     };
@@ -6450,6 +6521,7 @@ document.addEventListener("DOMContentLoaded", () => {
             afterOnly: true,
             metrics: layoutMetrics,
             exclude: [groupFootprint.footprint],
+            items: reflowItems,
           });
           commitGroupResizeFromPreviews(previewEntries, layout);
           previewEntries.forEach((entry) => entry.preview.remove());
@@ -6947,7 +7019,7 @@ document.addEventListener("DOMContentLoaded", () => {
           applyWidgetSpan(resizePreview, snappedSpan);
           if (resizeEdge === "left") applyWidgetGridPosition(resizePreview, snappedCol, startRow);
           resizePeers.forEach(({ peer, startSpan: peerStartSpan }) => applyWidgetSpan(peer, peerStartSpan + delta));
-          resolveSparseGridLayout(layout, resizePreview, { col: snappedCol, row: previewStartCell.row }, { metrics: layoutMetrics });
+          resolveSparseGridLayout(layout, resizePreview, { col: snappedCol, row: previewStartCell.row }, { metrics: layoutMetrics, items: reflowItems });
           previewSpan = snappedSpan;
         };
         const onMove = (moveEvent) => {
@@ -7550,7 +7622,7 @@ document.addEventListener("DOMContentLoaded", () => {
             applyPanelSpan(peer, peerStartSpan + delta);
             applyPanelHeight(peer, Math.max(getPanelMinimumHeight(peer), nextHeight));
           });
-          resolveSparseGridLayout(layout, resizePreview, { col: snappedCol, row: previewStartCell.row }, { metrics: layoutMetrics });
+          resolveSparseGridLayout(layout, resizePreview, { col: snappedCol, row: previewStartCell.row }, { metrics: layoutMetrics, items: reflowItems });
           previewSpan = snappedSpan;
           previewHeight = nextHeight;
           previewRows = nextRows;

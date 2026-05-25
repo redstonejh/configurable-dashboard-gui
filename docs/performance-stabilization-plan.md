@@ -161,7 +161,7 @@ Viewport-aware visual reflow:
 
 Visual LOD:
 
-- Workspace objects receive `data-visual-lod="active"`, `"visible"`, `"near"`, or `"far"`.
+- Workspace objects receive `data-lod` and legacy-compatible `data-visual-lod` values of `"active"`, `"visible"`, `"near"`, or `"far"`.
 - Active dragged/resized/tool-open objects remain full fidelity.
 - Visible objects keep the normal glass/material system.
 - Near objects use cheaper shadow/will-change behavior.
@@ -192,6 +192,30 @@ DOM-read reduction:
 - Fast architecture tests cover the new viewport-aware reflow, visual LOD, and row-bucket collision contracts.
 - The large-dashboard cleanup regression is the preferred browser stress slice for this pass.
 - Mobile/responsive suites remain intentionally deferred during the desktop interaction architecture phase.
+
+### Viewport-Aware Correctness Refinement
+
+The optimization model must never become viewport-only correctness. A follow-up refinement keeps sparse collision/reflow deterministic across the whole workspace while reducing the hot-path cost of finding and animating affected objects.
+
+Applied safeguards:
+
+- Active drag/resize sessions can pass a cached logical item set into sparse resolution, avoiding repeated global DOM queries during snapped preview updates.
+- Sparse resolution now builds per-pass geometry records from committed grid metadata and reuses those records for ordering, reserved bounds, and placement checks.
+- Row-bucket collision lookup is used for conflict detection and vertical open-row searches, so far irrelevant rows are skipped only when the spatial index proves they cannot overlap.
+- Visual LOD and viewport-aware FLIP remain visual-only. They do not remove offscreen objects from collision participation.
+
+Pseudo-LOD material rules:
+
+- `active` and `visible` use the normal widget/panel glass treatment.
+- `near` uses centralized LOD material variables for lighter shadows and tiny backdrop blur while staying visually close to full fidelity.
+- `far` disables backdrop blur, heavy shadows, and hover lift through shared LOD selectors. It does not change dimensions, grid placement, or interaction state.
+- Objects upgrade back toward full fidelity as they approach the viewport through the normal material transition path, avoiding harsh visual pops.
+
+Validation focus:
+
+- Large dense dashboards must remain logically valid before scrolling.
+- Expanding a top panel must resolve offscreen objects immediately, not defer the correction until the user scrolls.
+- Saving and reloading after a large reflow must preserve the resolved positions.
 
 ## Identified Hot Paths
 

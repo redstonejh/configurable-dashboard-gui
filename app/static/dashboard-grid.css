@@ -65,11 +65,9 @@
 /* Widget base styles and hover states */
 
 .widget-card {
-  box-sizing: border-box;
-  min-width: 0;
-  min-height: var(--dashboard-grid-row-height, 81px);
-  overflow: visible;
-  transition:
+  --workspace-lod-shadow: var(--shadow-soft);
+  --workspace-lod-backdrop-filter: none;
+  --workspace-lod-transition:
     grid-column var(--motion-grid),
     grid-row var(--motion-grid),
     width var(--motion-grid),
@@ -78,6 +76,11 @@
     box-shadow var(--motion-fast),
     transform var(--motion-fast),
     color var(--motion-fast);
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: var(--dashboard-grid-row-height, 81px);
+  overflow: visible;
+  transition: var(--workspace-lod-transition);
 }
 
 .widget-layout > .stat-card {
@@ -834,6 +837,17 @@ body.layout-tools-active .widget-card:not(.widget-tools-open):not(:has(> .widget
 
 /* Panel (generic card) */
 .db-panel {
+  --workspace-lod-shadow: var(--shadow-card);
+  --workspace-lod-backdrop-filter: none;
+  --workspace-lod-transition:
+    grid-column var(--motion-grid),
+    grid-row var(--motion-grid),
+    width var(--motion-grid),
+    background .18s ease,
+    border-color .18s ease,
+    box-shadow .20s ease,
+    transform .18s cubic-bezier(.2, .8, .2, 1),
+    width .12s ease;
   --panel-header-min-height: var(--dashboard-grid-row-height, 81px);
   --panel-header-pad-y: 16px;
   --panel-header-pad-x: 20px;
@@ -854,15 +868,7 @@ body.layout-tools-active .widget-card:not(.widget-tools-open):not(:has(> .widget
   overflow: hidden;
   min-height: 0;
   will-change: transform;
-  transition:
-    grid-column var(--motion-grid),
-    grid-row var(--motion-grid),
-    width var(--motion-grid),
-    background .18s ease,
-    border-color .18s ease,
-    box-shadow .20s ease,
-    transform .18s cubic-bezier(.2, .8, .2, 1),
-    width .12s ease;
+  transition: var(--workspace-lod-transition);
 }
 
 .db-panel.db-panel-tools-open {
@@ -1379,25 +1385,6 @@ body.panel-interaction-active .widget-dragging,
 body.panel-interaction-active .db-panel-dragging,
 body.panel-interaction-active .dashboard-active-resize {
   pointer-events: auto;
-}
-
-.dashboard-layout-grid .widget-card[data-visual-lod="near"]:not(.widget-dragging):not(.dashboard-active-resize):not(.widget-tools-open),
-.dashboard-layout-grid .db-panel[data-visual-lod="near"]:not(.db-panel-dragging):not(.dashboard-active-resize):not(.db-panel-tools-open) {
-  box-shadow:
-    0 6px 16px rgba(15, 23, 42, .08),
-    inset 0 1px 0 rgba(255, 255, 255, .42);
-  will-change: auto;
-}
-
-.dashboard-layout-grid .widget-card[data-visual-lod="far"]:not(.widget-dragging):not(.dashboard-active-resize):not(.widget-tools-open),
-.dashboard-layout-grid .db-panel[data-visual-lod="far"]:not(.db-panel-dragging):not(.dashboard-active-resize):not(.db-panel-tools-open) {
-  box-shadow:
-    0 1px 4px rgba(15, 23, 42, .05),
-    inset 0 1px 0 rgba(255, 255, 255, .30);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  transition: none;
-  will-change: auto;
 }
 
 body.panel-interaction-active .db-panel.panel-header-entry-accept {

@@ -3995,3 +3995,57 @@ button[aria-disabled="true"]:hover {
   transform: none;
 }
 
+/* Pseudo-LOD visual effects: paint cost changes only, never geometry or layout state. */
+.dashboard-layout-grid .widget-card[data-lod],
+.dashboard-layout-grid .db-panel[data-lod] {
+  --workspace-lod-near-shadow:
+    0 6px 16px rgba(15, 23, 42, .08),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 58%, transparent);
+  --workspace-lod-far-shadow:
+    0 1px 4px rgba(15, 23, 42, .05),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 38%, transparent);
+  --workspace-lod-near-transition:
+    background .16s ease,
+    border-color .16s ease,
+    box-shadow .18s ease,
+    transform .18s cubic-bezier(.2, .8, .2, 1),
+    color .16s ease;
+  --workspace-lod-far-transition: none;
+}
+
+.dashboard-layout-grid .widget-card[data-lod="active"],
+.dashboard-layout-grid .db-panel[data-lod="active"],
+.dashboard-layout-grid .widget-card[data-visual-lod="active"],
+.dashboard-layout-grid .db-panel[data-visual-lod="active"] {
+  will-change: transform;
+}
+
+.dashboard-layout-grid .widget-card[data-lod="near"]:not(.widget-dragging):not(.dashboard-active-resize):not(.widget-tools-open),
+.dashboard-layout-grid .db-panel[data-lod="near"]:not(.db-panel-dragging):not(.dashboard-active-resize):not(.db-panel-tools-open),
+.dashboard-layout-grid .widget-card[data-visual-lod="near"]:not(.widget-dragging):not(.dashboard-active-resize):not(.widget-tools-open),
+.dashboard-layout-grid .db-panel[data-visual-lod="near"]:not(.db-panel-dragging):not(.dashboard-active-resize):not(.db-panel-tools-open) {
+  box-shadow: var(--workspace-lod-near-shadow) !important;
+  backdrop-filter: blur(2px) saturate(1.02);
+  -webkit-backdrop-filter: blur(2px) saturate(1.02);
+  transition: var(--workspace-lod-near-transition) !important;
+  will-change: auto;
+}
+
+.dashboard-layout-grid .widget-card[data-lod="far"]:not(.widget-dragging):not(.dashboard-active-resize):not(.widget-tools-open),
+.dashboard-layout-grid .db-panel[data-lod="far"]:not(.db-panel-dragging):not(.dashboard-active-resize):not(.db-panel-tools-open),
+.dashboard-layout-grid .widget-card[data-visual-lod="far"]:not(.widget-dragging):not(.dashboard-active-resize):not(.widget-tools-open),
+.dashboard-layout-grid .db-panel[data-visual-lod="far"]:not(.db-panel-dragging):not(.dashboard-active-resize):not(.db-panel-tools-open) {
+  box-shadow: var(--workspace-lod-far-shadow) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  transition: var(--workspace-lod-far-transition) !important;
+  will-change: auto;
+}
+
+.dashboard-layout-grid .widget-card[data-lod="far"]:not(.widget-dragging):not(.dashboard-active-resize):not(.widget-tools-open):hover,
+.dashboard-layout-grid .db-panel[data-lod="far"]:not(.db-panel-dragging):not(.dashboard-active-resize):not(.db-panel-tools-open):hover,
+.dashboard-layout-grid .widget-card[data-visual-lod="far"]:not(.widget-dragging):not(.dashboard-active-resize):not(.widget-tools-open):hover,
+.dashboard-layout-grid .db-panel[data-visual-lod="far"]:not(.db-panel-dragging):not(.dashboard-active-resize):not(.db-panel-tools-open):hover {
+  transform: none;
+}
+
