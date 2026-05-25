@@ -40,6 +40,7 @@ The upcoming work is intentionally staged around stabilization first, then large
 - Workspace context now resolves through source-agnostic data-source adapters, semantic mappings, inherited divider regions, and normalized context queries.
 - Widget rendering now uses `app/static/widget-registry.js`, so stat, timeframe, search, table, chart, stat-filter, and calendar widgets declare runtime contracts outside core grid interaction code.
 - Context visualization is hidden in normal mode and is revealed through Engineer Mode, keeping the default workspace clean while preserving internal context inheritance.
+- Large-workspace performance now separates layout correctness from visual cost with viewport-aware reflow animation, visual LOD tiers, row-bucketed collision queries, and reduced DOM reads on committed geometry.
 
 ### Near-Term Stabilization
 

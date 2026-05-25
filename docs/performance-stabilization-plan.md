@@ -139,6 +139,60 @@ Interpretation:
 - `applyGroupResizeLayout` still performs collision checks per member during snapped group resize. It is correct for current coverage, but future persisted groups may need a stronger composite geometry API.
 - Paint cost from glass, shadows, and backdrop filters was not reduced in this pass; visual polish remains intentionally preserved.
 
+## Performance Pass #2 - 2026-05-25
+
+This pass focuses on large spatial workspaces. It preserves the same committed layout, collision, preview, save/load, and undo behavior while reducing the visual and query cost of dense dashboards.
+
+### Hotspots Confirmed
+
+- `animateOrderedGridReflow` was still willing to FLIP-read and animate every candidate item, including far-offscreen objects whose animation could not be seen.
+- Collision checks flowed through `canPlaceBounds`, which scanned every occupied object for each candidate even when the candidate could only overlap nearby rows.
+- `gridItemRowSpan` could read rendered panel height even when committed `data-grid-row-span` was already available.
+- Visual polish was uniform for all objects, including far-offscreen objects that do not need expensive transition/shadow behavior until they approach the viewport.
+
+### Optimizations Implemented
+
+Viewport-aware visual reflow:
+
+- FLIP animation now filters reflow candidates through a viewport plus overscan test.
+- Visible and near-visible items keep polished movement.
+- Far-offscreen items still receive committed grid updates but skip expensive animation reads and animations.
+- Scrolling later reveals already-correct committed positions rather than delayed reshuffles.
+
+Visual LOD:
+
+- Workspace objects receive `data-visual-lod="active"`, `"visible"`, `"near"`, or `"far"`.
+- Active dragged/resized/tool-open objects remain full fidelity.
+- Visible objects keep the normal glass/material system.
+- Near objects use cheaper shadow/will-change behavior.
+- Far objects drop nonessential transitions and expensive backdrop work.
+- LOD affects paint/animation only; it does not affect geometry, collision, context inheritance, save/load, or undo.
+
+Spatial indexing:
+
+- Large occupied sets now use row-bucketed collision candidates inside `canPlaceBounds`.
+- Existing placement algorithms still call the same correctness function, but dense queries inspect only rows that can overlap the candidate.
+- The row-bucket cache is invalidated automatically when the occupied array length changes.
+
+DOM-read reduction:
+
+- Panel row-span resolution now trusts committed `data-grid-row-span` before falling back to rendered height measurement.
+- Reflow animation uses cached interaction metrics when callers already have them.
+- LOD region tests use grid geometry and scroll position instead of reading every object rectangle.
+
+### Behavior Preservation
+
+- Full workspace layout remains deterministic.
+- Offscreen objects are still included in collision and placement correctness.
+- Drag ghost, resize preview, group resize, panel containment, anchors, save/load, and undo/redo state ownership are unchanged.
+- Sparse intentional placement remains valid; no auto-pack behavior was introduced.
+
+### Targeted Validation
+
+- Fast architecture tests cover the new viewport-aware reflow, visual LOD, and row-bucket collision contracts.
+- The large-dashboard cleanup regression is the preferred browser stress slice for this pass.
+- Mobile/responsive suites remain intentionally deferred during the desktop interaction architecture phase.
+
 ## Identified Hot Paths
 
 ### Drag

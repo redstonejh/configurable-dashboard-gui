@@ -674,7 +674,7 @@ def test_adding_many_panels_appends_without_global_layout_scramble(page: Page, a
     assert_clean_browser(page)
 
 
-def test_panel_add_collision_uses_local_vertical_pushdown(page: Page, app_server: str) -> None:
+def test_panel_add_uses_next_visible_available_top_slot(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate(
         """
@@ -727,10 +727,10 @@ def test_panel_add_collision_uses_local_vertical_pushdown(page: Page, app_server
         "content": grid_item_state(page, '[data-panel-key="builder-content"]'),
     }
 
-    assert inserted["col"] == 1
-    assert inserted["row"] == 5
+    assert inserted["col"] == 5
+    assert inserted["row"] == 1
     assert blocker_after["col"] == blocker_before["col"]
-    assert blocker_after["row"] == blocker_before["row"] + 1
+    assert blocker_after["row"] == blocker_before["row"]
     for key, original in unrelated_before.items():
         assert unrelated_after[key]["col"] == original["col"], (key, original, unrelated_after[key])
         assert unrelated_after[key]["row"] == original["row"], (key, original, unrelated_after[key])
@@ -806,15 +806,24 @@ def test_search_bar_widget_uses_normal_widget_creation_and_controls(page: Page, 
     search_input = search_widget.locator(".search-widget-input")
     expect(search_input).to_be_visible()
     expect(search_widget.locator(".range-search-label")).to_have_text("Search")
-    search_input.fill("panel")
-    expect(search_input).to_have_value("panel")
 
     state = search_widget.evaluate(
         """
         node => {
           const input = node.querySelector(".search-widget-input");
+          const control = node.querySelector(".search-widget-control");
+          const content = node.querySelector(".search-widget-content");
+          const settings = node.querySelector(".widget-settings-toggle");
+          const widgetRect = node.getBoundingClientRect();
+          const inputRect = input.getBoundingClientRect();
+          const controlRect = control.getBoundingClientRect();
+          const settingsRect = settings.getBoundingClientRect();
           const inputStyles = getComputedStyle(input);
+          const controlStyles = getComputedStyle(control);
+          const contentStyles = getComputedStyle(content);
           const label = node.querySelector(".range-search-label");
+          const labelStyles = label ? getComputedStyle(label) : null;
+          const iconStyles = getComputedStyle(control, "::before");
           return {
             tag: node.tagName,
             widgetType: node.dataset.widgetType,
@@ -837,6 +846,23 @@ def test_search_bar_widget_uses_normal_widget_creation_and_controls(page: Page, 
             inputBorder: inputStyles.borderTopColor,
             inputRadius: inputStyles.borderTopLeftRadius,
             labelTextTransform: label ? getComputedStyle(label).textTransform : null,
+            layout: {
+              contentMinWidth: contentStyles.minWidth,
+              controlMinWidth: controlStyles.minWidth,
+              controlDisplay: controlStyles.display,
+              inputSettingsGap: settingsRect.left - inputRect.right,
+              inputWidgetCenterDelta: Math.abs((inputRect.top + inputRect.height / 2) - (widgetRect.top + widgetRect.height / 2)),
+              settingsWidgetCenterDelta: Math.abs((settingsRect.top + settingsRect.height / 2) - (widgetRect.top + widgetRect.height / 2)),
+              inputHeight: inputRect.height,
+              inputWidth: inputRect.width,
+              controlWidth: controlRect.width,
+              inputFontSize: parseFloat(inputStyles.fontSize),
+              labelFontSize: labelStyles ? parseFloat(labelStyles.fontSize) : 0,
+              labelFontWeight: labelStyles ? parseFloat(labelStyles.fontWeight) : 0,
+              iconWidth: parseFloat(iconStyles.width),
+              iconHeight: parseFloat(iconStyles.height),
+              iconBorder: iconStyles.borderTopColor,
+            },
           };
         }
         """
@@ -862,6 +888,23 @@ def test_search_bar_widget_uses_normal_widget_creation_and_controls(page: Page, 
     assert state["inputBorder"] != "rgba(0, 0, 0, 0)"
     assert state["inputRadius"] in ("999px", "50%") or float(state["inputRadius"].replace("px", "")) >= 18
     assert state["labelTextTransform"] == "none"
+    assert state["layout"]["contentMinWidth"] == "0px"
+    assert state["layout"]["controlMinWidth"] == "0px"
+    assert state["layout"]["controlDisplay"] == "flex"
+    assert state["layout"]["inputSettingsGap"] >= 10
+    assert state["layout"]["inputWidgetCenterDelta"] <= 3
+    assert state["layout"]["settingsWidgetCenterDelta"] <= 3
+    assert state["layout"]["inputHeight"] <= 36.5
+    assert state["layout"]["inputWidth"] <= state["layout"]["controlWidth"]
+    assert state["layout"]["inputFontSize"] >= 14
+    assert state["layout"]["labelFontSize"] >= 14
+    assert state["layout"]["labelFontWeight"] >= 700
+    assert state["layout"]["iconWidth"] >= 13
+    assert state["layout"]["iconHeight"] >= 13
+    assert state["layout"]["iconBorder"] != "rgba(0, 0, 0, 0)"
+
+    search_input.fill("panel")
+    expect(search_input).to_have_value("panel")
 
     force_open_tools_for_interaction(page, search_widget)
     search_widget.locator(".panel-pin-toggle").click(force=True)
@@ -881,6 +924,178 @@ def test_search_bar_widget_uses_normal_widget_creation_and_controls(page: Page, 
     expect(anchor).to_be_visible()
     expect(anchor.locator(".workspace-anchor-label")).to_have_text("Top")
     expect(page.locator(".timeframe-widget .timeframe-command-surface")).to_be_visible()
+    assert_clean_browser(page)
+
+
+def test_add_widget_uses_default_top_region_when_no_dividers_exist(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    page.evaluate(
+        """
+        () => {
+          document.querySelectorAll(".widget-layout[data-widget-layout-key='builder'] > .widget-card").forEach((node) => {
+            node.hidden = true;
+          });
+          document.querySelectorAll(".panel-layout[data-layout-key='builder'] > .db-panel").forEach((node) => {
+            node.hidden = true;
+          });
+        }
+        """
+    )
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="search"]').click()
+    added = page.locator(
+        '.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-custom-widget="true"][data-dashboard-object-kind="search"]'
+    ).last
+    expect(added).to_be_visible()
+    position = added.evaluate(
+        """
+        node => ({
+          key: node.dataset.widgetKey,
+          col: Number(node.dataset.gridCol || 0),
+          row: Number(node.dataset.gridRow || 0),
+        })
+        """
+    )
+    assert position["col"] == 1
+    assert position["row"] == 1
+
+    press_dashboard_undo(page)
+    expect(page.locator(f'.widget-card[data-widget-key="{position["key"]}"]')).to_have_count(0)
+    assert_clean_browser(page)
+
+
+def test_add_widget_targets_visible_divider_region_and_next_open_slot(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    page.locator(".panel-add-button").click()
+    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    expect(page.locator(".panel-layout[data-layout-key='builder'] > .workspace-divider")).to_have_count(2)
+
+    setup = page.evaluate(
+        """
+        () => {
+          const setGrid = (node, col, row, span, rowSpan = 1) => {
+            node.hidden = false;
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.defaultSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            if (node.classList.contains("db-panel") && !node.classList.contains("workspace-divider")) {
+              node.classList.add("db-panel-collapsed");
+            }
+          };
+          document.querySelectorAll(".widget-layout[data-widget-layout-key='builder'] > .widget-card").forEach((node) => {
+            node.hidden = true;
+          });
+          document.querySelectorAll(".panel-layout[data-layout-key='builder'] > .db-panel:not(.workspace-divider)").forEach((node) => {
+            node.hidden = true;
+          });
+          const dividers = [...document.querySelectorAll(".panel-layout[data-layout-key='builder'] > .workspace-divider")];
+          const firstDivider = dividers[0];
+          const secondDivider = dividers[1];
+          setGrid(firstDivider, 1, 8, 6, 1);
+          setGrid(secondDivider, 1, 22, 6, 1);
+          const blocker = document.querySelector(".widget-layout[data-widget-layout-key='builder'] > .widget-card[data-widget-key='widget-1']");
+          setGrid(blocker, 1, 23, 2, 1);
+          blocker.hidden = false;
+          const host = document.querySelector(".dashboard-layout-grid");
+          host.style.minHeight = "2600px";
+          document.body.style.minHeight = "3000px";
+          document.documentElement.style.minHeight = "3000px";
+          window.scrollTo(0, secondDivider.getBoundingClientRect().top + window.scrollY - 150);
+          return {
+            blockerKey: blocker.dataset.widgetKey,
+            secondDividerKey: secondDivider.dataset.panelKey,
+            secondDividerRegion: secondDivider.dataset.workspaceRegionId || secondDivider.dataset.contextScopeId || "",
+            targetRow: Number(secondDivider.dataset.gridRow) + Number(secondDivider.dataset.gridRowSpan || 1),
+          };
+        }
+        """
+    )
+    second_divider = page.locator(f'.workspace-divider[data-panel-key="{setup["secondDividerKey"]}"]')
+    second_divider.scroll_into_view_if_needed()
+    page.evaluate("window.scrollBy(0, -150)")
+    page.wait_for_function("window.scrollY > 1000")
+    page.wait_for_timeout(100)
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="search"]').click()
+    added = page.locator(
+        '.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-custom-widget="true"][data-dashboard-object-kind="search"]'
+    ).last
+    expect(added).to_be_visible()
+    placement = added.evaluate(
+        """
+        node => ({
+          key: node.dataset.widgetKey,
+          col: Number(node.dataset.gridCol || 0),
+          row: Number(node.dataset.gridRow || 0),
+          span: Number(node.dataset.currentSpan || node.dataset.defaultSpan || 0),
+          inheritedFrom: node.dataset.contextInheritedFrom || node.dataset.workspaceRegionId || "",
+          blocker: [...document.querySelectorAll(".widget-layout[data-widget-layout-key='builder'] > .widget-card:not([hidden])")]
+            .find((item) => item.dataset.widgetKey === "widget-1")
+            ? {
+                col: Number(document.querySelector(".widget-layout[data-widget-layout-key='builder'] > .widget-card[data-widget-key='widget-1']").dataset.gridCol || 0),
+                row: Number(document.querySelector(".widget-layout[data-widget-layout-key='builder'] > .widget-card[data-widget-key='widget-1']").dataset.gridRow || 0),
+              }
+            : null,
+        })
+        """
+    )
+    assert placement["row"] == setup["targetRow"]
+    assert placement["col"] == 3
+    assert placement["span"] == 2
+    assert placement["blocker"] == {"col": 1, "row": setup["targetRow"]}
+    assert placement["inheritedFrom"] == setup["secondDividerRegion"]
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card:not([hidden]), .dashboard-layout-grid .db-panel:not([hidden])") == []
+
+    press_dashboard_undo(page)
+    expect(page.locator(f'.widget-card[data-widget-key="{placement["key"]}"]')).to_have_count(0)
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="search"]').click()
+    persisted = page.locator(
+        '.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-custom-widget="true"][data-dashboard-object-kind="search"]'
+    ).last
+    expect(persisted).to_be_visible()
+    persisted_state = persisted.evaluate(
+        """
+        node => ({
+          key: node.dataset.widgetKey,
+          col: Number(node.dataset.gridCol || 0),
+          row: Number(node.dataset.gridRow || 0),
+        })
+        """
+    )
+    assert persisted_state["col"] == 3
+    assert persisted_state["row"] == setup["targetRow"]
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    reloaded = page.locator(f'.widget-card[data-widget-key="{persisted_state["key"]}"]')
+    expect(reloaded).to_be_visible()
+    reloaded_state = reloaded.evaluate(
+        """
+        node => ({
+          col: Number(node.dataset.gridCol || 0),
+          row: Number(node.dataset.gridRow || 0),
+        })
+        """
+    )
+    assert reloaded_state == {"col": persisted_state["col"], "row": persisted_state["row"]}
     assert_clean_browser(page)
 
 
@@ -1014,7 +1229,7 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
     assert_clean_browser(page)
 
 
-def test_widget_absorbs_into_open_panel_after_stable_hover_and_round_trips(page: Page, app_server: str) -> None:
+def test_widget_drags_directly_into_open_panel_and_round_trips(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate(
         """
@@ -1064,15 +1279,14 @@ def test_widget_absorbs_into_open_panel_after_stable_hover_and_round_trips(page:
     target_x = body_box["x"] + body_box["width"] * 0.5
     target_y = body_box["y"] + body_box["height"] * 0.5
     page.mouse.move(target_x, target_y, steps=8)
-    expect(panel).to_have_class(re.compile("panel-absorption-receptive"))
-    page.wait_for_timeout(1750)
+    expect(panel.locator(".panel-internal-widget-grid > .widget-placeholder")).to_be_visible()
     page.mouse.up()
 
     internal_widget = panel.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="widget-1"]')
     expect(internal_widget).to_be_visible()
     expect(page.locator('.widget-layout[data-widget-layout-key="builder"]:not(.panel-internal-widget-grid) > .widget-card[data-widget-key="widget-1"]')).to_have_count(0)
     expect(panel.locator(".panel-empty-state")).to_be_hidden()
-    expect(panel).not_to_have_class(re.compile("panel-absorption-receptive"))
+    expect(panel.locator(".panel-internal-widget-grid > .widget-placeholder")).to_have_count(0)
     assert_no_undo_artifacts(page)
 
     press_dashboard_undo(page)
@@ -1085,6 +1299,186 @@ def test_widget_absorbs_into_open_panel_after_stable_hover_and_round_trips(page:
     expect(page.locator(".toast", has_text="saved")).to_be_visible()
     page.reload(wait_until="networkidle")
     panel = page.locator('[data-panel-key="builder-content"]')
+    expect(panel.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="widget-1"]')).to_be_visible()
+    expect(page.locator('.widget-layout[data-widget-layout-key="builder"]:not(.panel-internal-widget-grid) > .widget-card[data-widget-key="widget-1"]')).to_have_count(0)
+    assert_clean_browser(page)
+
+
+def test_slow_header_drag_can_enter_open_panel_when_no_outside_room(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const grid = document.querySelector(".dashboard-layout-grid");
+          const gap = parseFloat(getComputedStyle(grid).rowGap || "16") || 16;
+          const place = (node, col, row, span, rowSpan = 1) => {
+            node.hidden = false;
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            if (node.classList.contains("db-panel")) {
+              node.classList.remove("db-panel-collapsed");
+              const height = (rowSpan * 81) + (Math.max(0, rowSpan - 1) * gap);
+              node.dataset.savedHeight = String(height);
+              node.style.height = `${height}px`;
+              node.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "true");
+            }
+          };
+          document.querySelectorAll(".panel-internal-widget-grid").forEach((node) => node.remove());
+          document.querySelector('[data-panel-key="builder-menu"]').hidden = true;
+          document.querySelector('[data-panel-key="builder-notes"]').hidden = true;
+          place(document.querySelector('[data-widget-key="widget-1"]'), 2, 2, 1, 1);
+          place(document.querySelector('[data-panel-key="builder-content"]'), 2, 3, 3, 4);
+        }
+        """
+    )
+
+    widget = page.locator('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="widget-1"]')
+    panel = page.locator('[data-panel-key="builder-content"]')
+    open_tools(widget)
+    handle_box = widget.locator(".panel-move-handle").bounding_box()
+    header_box = panel.locator(".db-panel-hd").bounding_box()
+    assert handle_box and header_box
+    start_x, start_y = box_center(handle_box)
+    header_x = header_box["x"] + header_box["width"] * 0.22
+    header_y = header_box["y"] + header_box["height"] * 0.58
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(header_x, header_y - 3, steps=18)
+    page.wait_for_timeout(140)
+    page.mouse.move(header_x, header_y + 3, steps=2)
+
+    expect(panel.locator(".panel-internal-widget-grid > .widget-placeholder")).to_be_visible()
+    feedback = panel.evaluate(
+        """
+        node => node.classList.contains("panel-header-entry-accept") ||
+          node.getAnimations().some((animation) => animation.animationName === "panel-header-entry-accept")
+        """
+    )
+    assert feedback is True
+    page.mouse.up()
+
+    expect(panel.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="widget-1"]')).to_be_visible()
+    expect(page.locator('.widget-layout[data-widget-layout-key="builder"]:not(.panel-internal-widget-grid) > .widget-card[data-widget-key="widget-1"]')).to_have_count(0)
+    assert_clean_browser(page)
+
+
+def test_fast_header_pass_through_keeps_workspace_collision(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const grid = document.querySelector(".dashboard-layout-grid");
+          const gap = parseFloat(getComputedStyle(grid).rowGap || "16") || 16;
+          const place = (node, col, row, span, rowSpan = 1) => {
+            node.hidden = false;
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            if (node.classList.contains("db-panel")) {
+              node.classList.remove("db-panel-collapsed");
+              const height = (rowSpan * 81) + (Math.max(0, rowSpan - 1) * gap);
+              node.dataset.savedHeight = String(height);
+              node.style.height = `${height}px`;
+              node.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "true");
+            }
+          };
+          document.querySelectorAll(".panel-internal-widget-grid").forEach((node) => node.remove());
+          document.querySelector('[data-panel-key="builder-menu"]').hidden = true;
+          document.querySelector('[data-panel-key="builder-notes"]').hidden = true;
+          place(document.querySelector('[data-widget-key="widget-2"]'), 1, 2, 1, 1);
+          place(document.querySelector('[data-panel-key="builder-content"]'), 2, 3, 3, 4);
+        }
+        """
+    )
+
+    widget = page.locator('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="widget-2"]')
+    panel = page.locator('[data-panel-key="builder-content"]')
+    open_tools(widget)
+    handle_box = widget.locator(".panel-move-handle").bounding_box()
+    header_box = panel.locator(".db-panel-hd").bounding_box()
+    assert handle_box and header_box
+    start_x, start_y = box_center(handle_box)
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(header_box["x"] + header_box["width"] * 0.88, header_box["y"] + header_box["height"] * 0.46, steps=4)
+    expect(panel.locator(".panel-internal-widget-grid > .widget-placeholder")).to_have_count(0)
+    page.mouse.up()
+
+    expect(panel.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="widget-2"]')).to_have_count(0)
+    expect(page.locator('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="widget-2"]')).to_be_visible()
+    assert_no_undo_artifacts(page)
+    assert_clean_browser(page)
+
+
+def test_deleting_panel_extracts_child_widgets_and_undo_restores_containment(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const grid = document.querySelector(".dashboard-layout-grid");
+          const gap = parseFloat(getComputedStyle(grid).rowGap || "16") || 16;
+          const place = (node, col, row, span, rowSpan = 1) => {
+            node.hidden = false;
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            if (node.classList.contains("db-panel")) {
+              node.classList.remove("db-panel-collapsed");
+              const height = (rowSpan * 81) + (Math.max(0, rowSpan - 1) * gap);
+              node.dataset.savedHeight = String(height);
+              node.style.height = `${height}px`;
+              node.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "true");
+            }
+          };
+          document.querySelectorAll(".panel-internal-widget-grid").forEach((node) => node.remove());
+          place(document.querySelector('[data-widget-key="widget-1"]'), 1, 1, 1, 1);
+          place(document.querySelector('[data-panel-key="builder-content"]'), 2, 4, 4, 4);
+        }
+        """
+    )
+
+    widget = page.locator('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="widget-1"]')
+    panel = page.locator('[data-panel-key="builder-content"]')
+    open_tools(widget)
+    handle_box = widget.locator(".panel-move-handle").bounding_box()
+    body_box = panel.locator(".db-panel-body").bounding_box()
+    assert handle_box and body_box
+    start_x, start_y = box_center(handle_box)
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(body_box["x"] + body_box["width"] * 0.5, body_box["y"] + body_box["height"] * 0.5, steps=18)
+    expect(panel.locator(".panel-internal-widget-grid > .widget-placeholder")).to_be_visible()
+    page.mouse.up()
+
+    expect(panel.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="widget-1"]')).to_be_visible()
+    page.evaluate(
+        """
+        () => document
+          .querySelector('[data-panel-key="builder-content"] > .db-panel-hd .panel-delete-handle')
+          ?.click()
+        """
+    )
+    expect(page.locator("#panel-delete-dialog")).to_be_visible()
+    page.locator(".confirm-dialog-danger").click()
+
+    expect(page.locator('.panel-layout > .db-panel[data-panel-key="builder-content"]:not([hidden])')).to_have_count(0)
+    extracted = page.locator('.widget-layout[data-widget-layout-key="builder"]:not(.panel-internal-widget-grid) > .widget-card[data-widget-key="widget-1"]')
+    expect(extracted).to_be_visible()
+    expect(page.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="widget-1"]')).to_have_count(0)
+
+    press_dashboard_undo(page)
+    panel = page.locator('[data-panel-key="builder-content"]')
+    expect(panel).to_be_visible()
     expect(panel.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="widget-1"]')).to_be_visible()
     expect(page.locator('.widget-layout[data-widget-layout-key="builder"]:not(.panel-internal-widget-grid) > .widget-card[data-widget-key="widget-1"]')).to_have_count(0)
     assert_clean_browser(page)
@@ -1105,6 +1499,8 @@ def test_widget_hover_over_collapsed_panel_does_not_absorb(page: Page, app_serve
             node.style.gridRow = `${row} / span ${rowSpan}`;
           };
           document.querySelectorAll(".panel-internal-widget-grid").forEach((node) => node.remove());
+          document.querySelector('[data-panel-key="builder-content"]').hidden = true;
+          document.querySelector('[data-panel-key="builder-notes"]').hidden = true;
           place(document.querySelector('[data-widget-key="widget-2"]'), 1, 1, 1, 1);
           const panel = document.querySelector('[data-panel-key="builder-menu"]');
           place(panel, 2, 4, 3, 1);
@@ -1127,10 +1523,9 @@ def test_widget_hover_over_collapsed_panel_does_not_absorb(page: Page, app_serve
     page.mouse.move(start_x, start_y)
     page.mouse.down()
     page.mouse.move(target_x, target_y, steps=12)
-    page.wait_for_timeout(1700)
+    page.wait_for_timeout(200)
     page.mouse.up()
 
-    expect(panel).not_to_have_class(re.compile("panel-absorption-receptive"))
     expect(panel.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="widget-2"]')).to_have_count(0)
     expect(page.locator('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="widget-2"]')).to_be_visible()
     assert_no_undo_artifacts(page)
@@ -2347,6 +2742,57 @@ def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_s
     assert widget_visual_state["anchorLayerZ"] < widget_visual_state["objectPopoverZ"]
     assert widget_visual_state["anchorLayerZ"] < widget_visual_state["navbarDropdownZ"]
 
+    anchor_box = anchor.bounding_box()
+    assert anchor_box
+    press_x = anchor_box["x"] + anchor_box["width"] * 0.42
+    press_y = anchor_box["y"] + anchor_box["height"] * 0.5
+    press_before = anchor.evaluate(
+        """
+        node => ({
+          transform: getComputedStyle(node).transform,
+          shadow: getComputedStyle(node).boxShadow,
+          background: getComputedStyle(node).backgroundImage,
+        })
+        """
+    )
+    page.mouse.move(press_x, press_y)
+    page.mouse.down()
+    press_active = anchor.evaluate(
+        """
+        node => ({
+          pressed: node.classList.contains("anchor-body-pressing"),
+          transform: getComputedStyle(node).transform,
+          shadow: getComputedStyle(node).boxShadow,
+          background: getComputedStyle(node).backgroundImage,
+        })
+        """
+    )
+    assert press_active["pressed"] is True
+    assert press_active["transform"] != press_before["transform"]
+    assert press_active["shadow"] != press_before["shadow"]
+    assert "linear-gradient" in press_active["background"]
+    page.mouse.up()
+    expect(anchor).not_to_have_class(re.compile("anchor-body-pressing"))
+
+    settings_box = anchor.locator(".anchor-settings-toggle").bounding_box()
+    assert settings_box
+    page.mouse.move(settings_box["x"] + settings_box["width"] / 2, settings_box["y"] + settings_box["height"] / 2)
+    page.mouse.down()
+    control_press_state = anchor.evaluate(
+        """
+        node => ({
+          bodyPressed: node.classList.contains("anchor-body-pressing"),
+          controlTransform: getComputedStyle(node.querySelector(".anchor-settings-toggle")).transform,
+        })
+        """
+    )
+    assert control_press_state["bodyPressed"] is False
+    assert control_press_state["controlTransform"] != "none"
+    page.mouse.up()
+    expect(anchor.locator(".anchor-tool-drawer")).to_be_visible()
+    anchor.locator(".anchor-settings-toggle").click(force=True)
+    expect(anchor).not_to_have_class(re.compile("widget-tools-open"))
+
     page.evaluate("window.scrollTo(0, 900)")
     page.wait_for_timeout(160)
     anchor.click(position={"x": 24, "y": 24})
@@ -2854,6 +3300,17 @@ def test_timeframe_widget_is_createable_and_uses_widget_system(page: Page, app_s
     assert resized["presetMinWidth"] <= 46
     assert resized["selectorMinWidth"] <= 74
 
+    created.evaluate(
+        """
+        node => {
+          node.classList.remove("widget-tools-open");
+          node.querySelector(".widget-settings-toggle")?.setAttribute("aria-expanded", "false");
+          node.querySelector(".widget-settings-toggle")?.blur();
+          document.body.classList.remove("layout-tools-active");
+        }
+        """
+    )
+    expect(created).not_to_have_class(re.compile("widget-tools-open"))
     created.locator(".preset-btn:not(.active)").first.hover()
     hover_transform = created.locator(".preset-btn:not(.active)").first.evaluate("node => getComputedStyle(node).transform")
     created.locator(".range-custom-trigger").hover()
@@ -6861,7 +7318,7 @@ def test_large_dashboard_drag_resize_cleanup_stays_bounded(page: Page, app_serve
             node.style.gridColumn = `${col} / span ${span}`;
             node.style.gridRow = `${row} / span 1`;
           };
-          for (let index = 0; index < 24; index += 1) {
+          for (let index = 0; index < 108; index += 1) {
             const clone = source.cloneNode(true);
             clone.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
             clone.dataset.widgetKey = `large-widget-${index}`;
@@ -6877,9 +7334,34 @@ def test_large_dashboard_drag_resize_cleanup_stays_bounded(page: Page, app_serve
             place(clone, (index % 6) + 1, 8 + Math.floor(index / 6));
             layout.__initWidget?.(clone);
           }
+          window.dashboardPerformanceEngine?.refreshVisualLod?.();
         }
         """
     )
+
+    lod_state = page.evaluate(
+        """
+        () => {
+          window.scrollTo(0, 0);
+          window.dashboardPerformanceEngine?.refreshVisualLod?.();
+          const widgets = [...document.querySelectorAll('[data-widget-key^="large-widget-"]')];
+          const counts = widgets.reduce((total, widget) => {
+            const tier = widget.dataset.visualLod || "missing";
+            total[tier] = (total[tier] || 0) + 1;
+            return total;
+          }, {});
+          const far = widgets.find((widget) => widget.dataset.visualLod === "far");
+          return {
+            counts,
+            farKey: far?.dataset.widgetKey || null,
+            farRow: far ? Number(far.dataset.gridRow || 0) : null,
+          };
+        }
+        """
+    )
+    assert lod_state["counts"].get("visible", 0) > 0
+    assert lod_state["counts"].get("far", 0) > 0
+    assert lod_state["farKey"]
 
     moved = page.locator('[data-widget-key="large-widget-0"]')
     force_open_tools_for_interaction(page, moved)
@@ -6894,6 +7376,41 @@ def test_large_dashboard_drag_resize_cleanup_stays_bounded(page: Page, app_serve
     assert_no_resize_artifacts(page)
     assert_no_undo_artifacts(page)
     assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    scrolled_lod_state = page.evaluate(
+        """
+        ({ farKey, farRow }) => {
+          const far = document.querySelector(`[data-widget-key="${farKey}"]`);
+          const currentRow = far ? Number(far.dataset.gridRow || 0) : null;
+          far?.scrollIntoView({ block: "center" });
+          window.dashboardPerformanceEngine?.refreshVisualLod?.();
+          return {
+            currentRow,
+            row: far ? Number(far.dataset.gridRow || 0) : null,
+            lod: far?.dataset.visualLod || null,
+            overlaps: [...document.querySelectorAll(".widget-layout > .widget-card:not([hidden])")]
+              .some((widget, index, widgets) => widgets.slice(index + 1).some((other) => {
+                const a = {
+                  col: Number(widget.dataset.gridCol || 1),
+                  row: Number(widget.dataset.gridRow || 1),
+                  right: Number(widget.dataset.gridCol || 1) + Number(widget.dataset.currentSpan || widget.dataset.defaultSpan || 1) - 1,
+                  bottom: Number(widget.dataset.gridRow || 1) + Number(widget.dataset.gridRowSpan || 1) - 1,
+                };
+                const b = {
+                  col: Number(other.dataset.gridCol || 1),
+                  row: Number(other.dataset.gridRow || 1),
+                  right: Number(other.dataset.gridCol || 1) + Number(other.dataset.currentSpan || other.dataset.defaultSpan || 1) - 1,
+                  bottom: Number(other.dataset.gridRow || 1) + Number(other.dataset.gridRowSpan || 1) - 1,
+                };
+                return a.col <= b.right && a.right >= b.col && a.row <= b.bottom && a.bottom >= b.row;
+              })),
+          };
+        }
+        """,
+        lod_state,
+    )
+    assert scrolled_lod_state["row"] == scrolled_lod_state["currentRow"]
+    assert scrolled_lod_state["lod"] in {"active", "visible", "near"}
+    assert scrolled_lod_state["overlaps"] is False
     assert_clean_browser(page)
 
 

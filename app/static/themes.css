@@ -1739,12 +1739,23 @@ body::-webkit-scrollbar-thumb:hover {
 .widget-layout > .widget-card.db-panel-custom-color.active,
 .workspace-anchor-object.widget-card.db-panel-custom-color:hover,
 .workspace-anchor-object.widget-card.db-panel-custom-color:focus-visible,
+.workspace-anchor-object.widget-card.db-panel-custom-color.anchor-body-pressing,
 .workspace-anchor-object.widget-card.db-panel-custom-color.active {
   background: linear-gradient(90deg, rgba(var(--panel-accent-rgb), .58), rgba(var(--panel-accent-rgb), .34));
   border-color: color-mix(in srgb, var(--panel-accent) 78%, var(--panel-hover-tint)) !important;
   box-shadow:
     0 10px 22px rgba(15, 23, 42, .10),
     inset 0 1px 0 rgba(255, 255, 255, .20) !important;
+}
+
+.workspace-anchor-object.widget-card.db-panel-custom-color.anchor-body-pressing {
+  transform: var(--pressable-active-transform);
+  background: linear-gradient(90deg, rgba(var(--panel-accent-rgb), .52), rgba(var(--panel-accent-rgb), .32));
+  border-color: color-mix(in srgb, var(--panel-accent) 72%, var(--panel-hover-tint)) !important;
+  box-shadow:
+    0 6px 14px rgba(15, 23, 42, .10),
+    inset 0 1px 0 rgba(255, 255, 255, .16),
+    inset 0 2px 8px color-mix(in srgb, var(--panel-accent) 14%, rgba(15, 23, 42, .12)) !important;
 }
 
 .widget-layout > .widget-card.db-panel-custom-color.active,
