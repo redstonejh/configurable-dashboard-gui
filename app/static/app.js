@@ -69,7 +69,86 @@ document.querySelectorAll(".range-custom").forEach((form) => {
 
 document.addEventListener("DOMContentLoaded", () => {
   let refreshWorkspaceMetaWidgets = () => {};
-  const workspaceActivityEvents = [];
+  const workspaceEvents = [];
+  const workspaceEventListeners = new Map();
+  let workspaceEventRetention = 120;
+  let workspaceEventSequence = 0;
+  const pendingMetaRefreshLayoutKeys = new Set();
+  let workspaceMetaRefreshScheduled = false;
+  const scheduleWorkspaceMetaRefresh = (layoutKey = "builder") => {
+    pendingMetaRefreshLayoutKeys.add(layoutKey || "builder");
+    if (workspaceMetaRefreshScheduled) return;
+    workspaceMetaRefreshScheduled = true;
+    requestAnimationFrame(() => {
+      workspaceMetaRefreshScheduled = false;
+      const keys = [...pendingMetaRefreshLayoutKeys];
+      pendingMetaRefreshLayoutKeys.clear();
+      keys.forEach((key) => refreshWorkspaceMetaWidgets(key));
+    });
+  };
+  const normalizeWorkspaceEvent = (event = {}) => {
+    const timestamp = Number(event.timestamp) || Date.now();
+    const layoutKey = event.layoutKey || event.payload?.layoutKey || document.querySelector(".panel-layout")?.dataset.layoutKey || "builder";
+    return {
+      id: event.id || `workspace-event-${timestamp.toString(36)}-${(++workspaceEventSequence).toString(36)}`,
+      type: String(event.type || "workspace-update"),
+      timestamp,
+      time: event.time || new Date(timestamp).toISOString(),
+      source: event.source || "workspace",
+      objectId: event.objectId || "",
+      objectType: event.objectType || "",
+      regionId: event.regionId || "",
+      panelId: event.panelId || "",
+      layoutKey,
+      label: String(event.label || event.payload?.label || "Workspace updated"),
+      detail: event.detail || "",
+      payload: event.payload && typeof event.payload === "object" ? { ...event.payload } : {},
+    };
+  };
+  const emitWorkspaceEvent = (event = {}) => {
+    const normalized = normalizeWorkspaceEvent(event);
+    workspaceEvents.unshift(normalized);
+    workspaceEvents.splice(Math.max(1, workspaceEventRetention));
+    const listeners = [
+      ...(workspaceEventListeners.get(normalized.type) || []),
+      ...(workspaceEventListeners.get("*") || []),
+    ];
+    listeners.forEach((listener) => {
+      try {
+        listener(normalized);
+      } catch (error) {
+        console.warn("Workspace event listener failed", error);
+      }
+    });
+    scheduleWorkspaceMetaRefresh(normalized.layoutKey);
+    return normalized;
+  };
+  const onWorkspaceEvent = (type, listener) => {
+    if (typeof listener !== "function") return () => {};
+    const key = String(type || "*");
+    const listeners = workspaceEventListeners.get(key) || new Set();
+    listeners.add(listener);
+    workspaceEventListeners.set(key, listeners);
+    return () => {
+      const current = workspaceEventListeners.get(key);
+      current?.delete(listener);
+      if (current && current.size <= 0) workspaceEventListeners.delete(key);
+    };
+  };
+  const recentWorkspaceEvents = (options = {}) => {
+    const maxItems = Math.max(1, Math.min(100, Number(options.maxItems) || 20));
+    const eventTypes = Array.isArray(options.eventTypes) ? options.eventTypes.filter(Boolean) : [];
+    const layoutKey = options.layoutKey || "";
+    const scope = options.scope || "workspace";
+    const regionId = options.regionId || options.resolvedContext?.regionId || "";
+    return workspaceEvents.filter((event) => {
+      if (eventTypes.length && !eventTypes.includes(event.type)) return false;
+      if (layoutKey && event.layoutKey !== layoutKey) return false;
+      if (scope === "currentRegion" && regionId && event.regionId && event.regionId !== regionId) return false;
+      if (scope === "currentPanel" && options.panelId && event.panelId && event.panelId !== options.panelId) return false;
+      return true;
+    }).slice(0, maxItems);
+  };
   const activityTypeFromMessage = (message = "", tone = "info") => {
     const text = String(message || "").toLowerCase();
     if (text.includes("deleted")) return "object-deleted";
@@ -82,22 +161,23 @@ document.addEventListener("DOMContentLoaded", () => {
     return "workspace-update";
   };
   const recordWorkspaceActivity = (type, label, detail = {}) => {
-    const event = {
-      id: `activity-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    return emitWorkspaceEvent({
       type: type || "workspace-update",
-      label: String(label || "Workspace updated"),
-      detail: detail.detail || detail.tone || "",
-      layoutKey: detail.layoutKey || document.querySelector(".panel-layout")?.dataset.layoutKey || "builder",
+      label,
+      source: detail.source || "activity",
+      objectId: detail.objectId || "",
+      objectType: detail.objectType || "",
       regionId: detail.regionId || "",
-      time: new Date().toISOString(),
-    };
-    workspaceActivityEvents.unshift(event);
-    workspaceActivityEvents.splice(60);
-    refreshWorkspaceMetaWidgets(event.layoutKey);
-    return event;
+      panelId: detail.panelId || "",
+      layoutKey: detail.layoutKey || document.querySelector(".panel-layout")?.dataset.layoutKey || "builder",
+      detail: detail.detail || detail.tone || "",
+      payload: detail.payload || {},
+    });
   };
-  const showToast = (message, tone = "info") => {
-    recordWorkspaceActivity(activityTypeFromMessage(message, tone), message, { tone });
+  const showToast = (message, tone = "info", detail = {}) => {
+    if (detail.activity !== false) {
+      recordWorkspaceActivity(detail.type || activityTypeFromMessage(message, tone), message, { ...detail, tone });
+    }
     showGlobalToast(message, tone);
   };
   const backgroundDefault = "frosted-light";
@@ -165,26 +245,67 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  const isEngineerMode = () => document.body.classList.contains("engineer-mode-active");
   let refreshWorkspaceMiniMaps = () => {};
+  let refreshEngineerOverlays = () => {};
+  const engineerModeListeners = new Set();
+  const engineerModeState = {
+    enabled: false,
+    source: "initial",
+    updatedAt: Date.now(),
+  };
+  const isEngineerMode = () => Boolean(engineerModeState.enabled);
+  const syncEngineerModeDom = () => {
+    document.body.classList.toggle("engineer-mode-active", engineerModeState.enabled);
+    document.documentElement.dataset.engineerMode = engineerModeState.enabled ? "true" : "false";
+    document.querySelectorAll(".engineer-mode-button").forEach((button) => {
+      button.setAttribute("aria-pressed", String(engineerModeState.enabled));
+    });
+  };
   const refreshEngineerContextVisibility = () => {
     document.querySelectorAll(".panel-layout").forEach((layout) => {
       const layoutKey = layout.dataset.layoutKey || "default";
       refreshResolvedContextDebug(layoutKey, getActivePanelProfile(layoutKey));
     });
     refreshWorkspaceMiniMaps();
+    refreshEngineerOverlays();
     refreshWorkspaceMetaWidgets();
   };
+  const setEngineerMode = (enabled, options = {}) => {
+    const nextEnabled = Boolean(enabled);
+    if (engineerModeState.enabled === nextEnabled && !options.force) return engineerModeState.enabled;
+    engineerModeState.enabled = nextEnabled;
+    engineerModeState.source = options.source || "api";
+    engineerModeState.updatedAt = Date.now();
+    syncEngineerModeDom();
+    refreshEngineerContextVisibility();
+    engineerModeListeners.forEach((listener) => {
+      try {
+        listener({ ...engineerModeState });
+      } catch (error) {
+        console.warn("Engineer Mode listener failed", error);
+      }
+    });
+    if (options.toast !== false) {
+      showToast(`Engineer ${nextEnabled ? "enabled" : "disabled"}.`, "info", {
+        type: "engineer-mode-toggled",
+        source: "engineer-mode",
+        payload: { enabled: nextEnabled },
+      });
+    }
+    return engineerModeState.enabled;
+  };
+  const toggleEngineerMode = () => setEngineerMode(!engineerModeState.enabled, { source: "button" });
+  const onEngineerModeChange = (listener) => {
+    if (typeof listener !== "function") return () => {};
+    engineerModeListeners.add(listener);
+    return () => engineerModeListeners.delete(listener);
+  };
+  syncEngineerModeDom();
   document.querySelectorAll(".workspace-mode-button").forEach((button) => {
     button.addEventListener("click", () => {
       const mode = button.dataset.workspaceMode || "";
-      const className = mode === "engineer" ? "engineer-mode-active" : "";
-      if (!className) return;
-      const enabled = !document.body.classList.contains(className);
-      document.body.classList.toggle(className, enabled);
-      button.setAttribute("aria-pressed", enabled.toString());
-      refreshEngineerContextVisibility();
-      showToast(`${button.textContent.trim()} ${enabled ? "enabled" : "disabled"}.`);
+      if (mode !== "engineer") return;
+      toggleEngineerMode();
     });
   });
 
@@ -389,7 +510,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const floatingAnchorsPrefix = "dashboard-floating-anchors:";
   const dataSourcesPrefix = "dashboard-data-sources:";
   const workspaceContextsPrefix = "dashboard-workspace-contexts:";
+  const workspaceAssetsPrefix = "dashboard-assets:";
+  const persistedWorkspacePrefix = "dashboard-persisted-workspace:";
   const layoutUndoPrefix = "dashboard-layout-undo:";
+  const PERSISTED_WORKSPACE_VERSION = 1;
   const getActivePanelProfile = (layoutKey) => {
     try {
       return localStorage.getItem(`${panelProfilePrefix}${layoutKey}`) || "1";
@@ -418,6 +542,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const floatingAnchorsKey = (layoutKey, profile = getActivePanelProfile(layoutKey)) => `${floatingAnchorsPrefix}${profile}:${layoutKey}`;
   const dataSourcesKey = (layoutKey, profile = getActivePanelProfile(layoutKey)) => `${dataSourcesPrefix}${profile}:${layoutKey}`;
   const workspaceContextsKey = (layoutKey, profile = getActivePanelProfile(layoutKey)) => `${workspaceContextsPrefix}${profile}:${layoutKey}`;
+  const workspaceAssetsKey = (layoutKey, profile = getActivePanelProfile(layoutKey)) => `${workspaceAssetsPrefix}${profile}:${layoutKey}`;
+  const persistedWorkspaceKey = (layoutKey, profile = getActivePanelProfile(layoutKey)) => `${persistedWorkspacePrefix}${profile}:${layoutKey}`;
   const layoutUndoKey = (layoutKey, profile = getActivePanelProfile(layoutKey)) => `${layoutUndoPrefix}${profile}:${layoutKey}`;
   let layoutUndoCaptureLock = false;
   const layoutScopedPrefixes = (layoutKey, profile = getActivePanelProfile(layoutKey)) => [
@@ -430,6 +556,8 @@ document.addEventListener("DOMContentLoaded", () => {
     `${floatingAnchorsPrefix}${profile}:${layoutKey}`,
     `${dataSourcesPrefix}${profile}:${layoutKey}`,
     `${workspaceContextsPrefix}${profile}:${layoutKey}`,
+    `${workspaceAssetsPrefix}${profile}:${layoutKey}`,
+    `${persistedWorkspacePrefix}${profile}:${layoutKey}`,
   ];
   const layoutStorageKeys = (layoutKey, profile = getActivePanelProfile(layoutKey)) => {
     const prefixes = layoutScopedPrefixes(layoutKey, profile);
@@ -471,6 +599,106 @@ document.addEventListener("DOMContentLoaded", () => {
       localStorage.setItem(key, JSON.stringify(value));
     } catch {}
   };
+  const assetId = () => `asset-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const mediaWidgetAssetTypes = new Set(["image", "video", "document"]);
+  const mimeTypeFromSource = (source = "") => {
+    const text = String(source || "");
+    const dataMatch = text.match(/^data:([^;,]+)/i);
+    if (dataMatch) return dataMatch[1].toLowerCase();
+    const path = text.split(/[?#]/)[0].toLowerCase();
+    if (path.endsWith(".svg")) return "image/svg+xml";
+    if (path.endsWith(".png")) return "image/png";
+    if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+    if (path.endsWith(".gif")) return "image/gif";
+    if (path.endsWith(".webp")) return "image/webp";
+    if (path.endsWith(".mp4")) return "video/mp4";
+    if (path.endsWith(".webm")) return "video/webm";
+    if (path.endsWith(".mov")) return "video/quicktime";
+    if (path.endsWith(".pdf")) return "application/pdf";
+    if (path.endsWith(".md") || path.endsWith(".markdown")) return "text/markdown";
+    if (path.endsWith(".txt")) return "text/plain";
+    if (path.endsWith(".html") || path.endsWith(".htm")) return "text/html";
+    return "";
+  };
+  const assetTypeFromMime = (mimeType = "", fallback = "document") => {
+    const mime = String(mimeType || "").toLowerCase();
+    if (mime.startsWith("image/")) return "image";
+    if (mime.startsWith("video/")) return "video";
+    return fallback || "document";
+  };
+  const assetSourceKind = (source = "") => {
+    const text = String(source || "");
+    if (text.startsWith("blob:")) return "blob-url";
+    if (text.startsWith("data:")) return "data-url";
+    if (/^https?:\/\//i.test(text) || text.startsWith("/") || text.startsWith("./") || text.startsWith("../")) return "url";
+    return "reference";
+  };
+  const normalizeAssetRecord = (asset = {}) => {
+    const source = typeof asset.source === "object" && asset.source
+      ? asset.source
+      : { kind: assetSourceKind(asset.src || asset.url || asset.ref || ""), ref: asset.src || asset.url || asset.ref || "" };
+    const mimeType = String(asset.mimeType || mimeTypeFromSource(source.ref) || "").toLowerCase();
+    const type = String(asset.type || asset.kind || assetTypeFromMime(mimeType, "document")).toLowerCase();
+    return {
+      id: String(asset.id || assetId()),
+      name: String(asset.name || source.name || "Untitled asset"),
+      type: mediaWidgetAssetTypes.has(type) ? type : "document",
+      mimeType,
+      size: Number(asset.size) || (source.ref ? String(source.ref).length : 0),
+      createdAt: String(asset.createdAt || new Date().toISOString()),
+      source: {
+        kind: String(source.kind || assetSourceKind(source.ref)),
+        ref: String(source.ref || ""),
+      },
+      thumbnailRef: asset.thumbnailRef || asset.thumbnail || "",
+      previewRef: asset.previewRef || asset.preview || "",
+    };
+  };
+  const loadAssets = (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) =>
+    readJsonStore(workspaceAssetsKey(layoutKey, profile), []).map(normalizeAssetRecord).filter((asset) => asset.id);
+  const saveAssets = (layoutKey = "builder", profile = getActivePanelProfile(layoutKey), assets = []) =>
+    writeJsonStore(workspaceAssetsKey(layoutKey, profile), assets.map(normalizeAssetRecord).filter((asset) => asset.id));
+  const assetById = (layoutKey, profile, id) => loadAssets(layoutKey, profile).find((asset) => asset.id === id) || null;
+  const findAssetBySource = (layoutKey, profile, sourceRef) => {
+    const ref = String(sourceRef || "");
+    if (!ref) return null;
+    return loadAssets(layoutKey, profile).find((asset) => asset.source?.ref === ref) || null;
+  };
+  const registerAsset = (layoutKey = "builder", asset = {}, profile = getActivePanelProfile(layoutKey)) => {
+    const normalized = normalizeAssetRecord(asset);
+    const assets = loadAssets(layoutKey, profile);
+    const existingIndex = assets.findIndex((entry) => entry.id === normalized.id);
+    const nextAssets = existingIndex >= 0
+      ? assets.map((entry, index) => index === existingIndex ? { ...entry, ...normalized, id: entry.id } : entry)
+      : [...assets, normalized];
+    saveAssets(layoutKey, profile, nextAssets);
+    return existingIndex >= 0 ? nextAssets[existingIndex] : normalized;
+  };
+  const createAssetFromSource = (layoutKey = "builder", sourceRef = "", options = {}, profile = getActivePanelProfile(layoutKey)) => {
+    const ref = String(sourceRef || "").trim();
+    if (!ref) return null;
+    const existing = findAssetBySource(layoutKey, profile, ref);
+    if (existing) return existing;
+    const mimeType = options.mimeType || mimeTypeFromSource(ref);
+    return registerAsset(layoutKey, {
+      id: options.id || assetId(),
+      name: options.name || ref.split(/[\\/]/).pop()?.split(/[?#]/)[0] || "Asset",
+      type: options.type || assetTypeFromMime(mimeType, options.type || "document"),
+      mimeType,
+      size: options.size || ref.length,
+      createdAt: options.createdAt,
+      source: { kind: options.sourceKind || assetSourceKind(ref), ref },
+      thumbnailRef: options.thumbnailRef || "",
+      previewRef: options.previewRef || "",
+    }, profile);
+  };
+  const assetSourceRef = (asset) => String(asset?.source?.ref || asset?.previewRef || asset?.thumbnailRef || "");
+  const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Unable to read file."));
+    reader.readAsDataURL(file);
+  });
   const syncLayoutToolsActive = () => {
     const hasOpenTools = Boolean(document.querySelector(".db-panel-tools-open, .widget-tools-open"));
     document.body.classList.toggle("layout-tools-active", hasOpenTools);
@@ -1053,7 +1281,20 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     saveWorkspaceDeleteLayouts(entries);
     syncLayoutToolsActive();
-    showToast(entries.length > 1 ? `${entries.length} objects deleted.` : `${entries[0].title} ${entries[0].kind} deleted.`);
+    entries.forEach((entry) => {
+      emitWorkspaceEvent({
+        type: entry.kind === "anchor" ? "anchor-deleted" : "object-deleted",
+        source: "object-delete",
+        layoutKey: entry.layoutKey,
+        objectId: entry.item.dataset.anchorKey || entry.item.dataset.widgetKey || entry.item.dataset.panelKey || "",
+        objectType: entry.kind,
+        regionId: regionIdForWorkspaceItem(entry.item),
+        panelId: entry.item.dataset.parentPanelKey || entry.item.closest?.(".db-panel")?.dataset?.panelKey || "",
+        label: `${entry.title} ${entry.kind} deleted`,
+        payload: { title: entry.title, extractedPanelChildren: entry.kind === "panel" ? panelChildWidgets(entry.item).length : 0 },
+      });
+    });
+    showToast(entries.length > 1 ? `${entries.length} objects deleted.` : `${entries[0].title} ${entries[0].kind} deleted.`, "info", { activity: false });
   };
   const requestWorkspaceObjectDelete = ({ targets }) => {
     const entries = workspaceDeleteEntries(targets);
@@ -1691,6 +1932,209 @@ document.addEventListener("DOMContentLoaded", () => {
       semanticMapping: resolvedContext.semanticMapping || {},
     });
   };
+  const QUERY_CACHE_TTL = 30_000;
+  const widgetQueryCache = new Map();
+  const widgetQueryInflight = new Map();
+  const widgetQueryKeys = new WeakMap();
+  const stableQueryValue = (value) => {
+    if (Array.isArray(value)) return value.map(stableQueryValue);
+    if (value && typeof value === "object") {
+      return Object.keys(value).sort().reduce((record, key) => {
+        const next = value[key];
+        if (next !== undefined) record[key] = stableQueryValue(next);
+        return record;
+      }, {});
+    }
+    return value;
+  };
+  const stableQueryStringify = (value) => JSON.stringify(stableQueryValue(value));
+  const resolvedContextQueryFingerprint = (context = {}) => ({
+    layoutKey: context.layoutKey || "",
+    profile: context.profile || "",
+    regionId: context.regionId || "",
+    dataSourceId: context.dataSourceId || "",
+    dataSourceKind: context.dataSourceKind || "",
+    adapterKind: context.adapterKind || "",
+    semanticMapping: context.semanticMapping || {},
+    filters: context.filters || [],
+    timeRange: context.timeRange || null,
+    tags: context.tags || [],
+  });
+  const queryRowsAreEmpty = (result) => {
+    if (!result || result.error) return false;
+    const rows = Array.isArray(result.rows) ? result.rows : [];
+    const total = Number.isFinite(Number(result.total)) ? Number(result.total) : rows.length;
+    return rows.length === 0 && total <= 0;
+  };
+  const widgetQueryKeyFor = ({ definition, instance, resolvedContext, query }) => stableQueryStringify({
+    widgetType: definition?.type || instance?.type || "widget",
+    queryConfig: queryRelevantWidgetConfig(definition, instance?.config || {}),
+    context: resolvedContextQueryFingerprint(resolvedContext),
+    query: query || null,
+  });
+  const stateFromQueryResult = (result, resolvedContext) => ({
+    status: result?.error ? "error" : queryRowsAreEmpty(result) ? "empty" : "ready",
+    data: {
+      ...(result || {}),
+      semanticMapping: resolvedContext?.semanticMapping || {},
+    },
+    error: result?.error || null,
+    lastUpdated: Date.now(),
+    isRefreshing: false,
+  });
+  const errorQueryState = (error) => ({
+    status: "error",
+    data: { error: error?.message || "Query failed" },
+    error: error?.message || "Query failed",
+    lastUpdated: Date.now(),
+    isRefreshing: false,
+  });
+  const beginManagedWidgetQuery = ({ definition, instance, resolvedContext, query, force = false }) => {
+    if (!query || !resolvedContext?.canQuery) {
+      return {
+        key: "",
+        state: {
+          status: "empty",
+          data: null,
+          error: null,
+          lastUpdated: null,
+          isRefreshing: false,
+        },
+        promise: null,
+      };
+    }
+    const key = widgetQueryKeyFor({ definition, instance, resolvedContext, query });
+    const cached = widgetQueryCache.get(key);
+    const cachedAge = cached?.lastUpdated ? Date.now() - cached.lastUpdated : Number.POSITIVE_INFINITY;
+    const inflight = widgetQueryInflight.get(key);
+    if (cached && !force && cachedAge < QUERY_CACHE_TTL && !inflight) {
+      return { key, state: { ...cached, isRefreshing: false }, promise: null };
+    }
+    if (inflight) {
+      return {
+        key,
+        state: cached
+          ? { ...cached, status: "stale", isRefreshing: true }
+          : { status: "loading", data: null, error: null, lastUpdated: null, isRefreshing: true },
+        promise: inflight.promise,
+      };
+    }
+    const controller = new AbortController();
+    emitWorkspaceEvent({
+      type: "data-query-started",
+      source: "query-runtime",
+      layoutKey: resolvedContext.layoutKey || "builder",
+      regionId: resolvedContext.regionId || "",
+      objectId: instance?.id || "",
+      objectType: definition?.type || instance?.type || "widget",
+      label: `${definition?.displayName || "Widget"} query started`,
+      payload: {
+        queryKey: key,
+        dataSourceId: resolvedContext.dataSourceId || "",
+        status: "loading",
+      },
+    });
+    const promise = queryResolvedWorkspaceContext(resolvedContext, {
+      ...query,
+      signal: controller.signal,
+    })
+      .then((result) => {
+        if (controller.signal.aborted) return cached || { status: "idle", data: null, error: null, lastUpdated: null, isRefreshing: false };
+        const state = stateFromQueryResult(result, resolvedContext);
+        widgetQueryCache.set(key, state);
+        emitWorkspaceEvent({
+          type: result?.error ? "data-query-failed" : "data-query-succeeded",
+          source: "query-runtime",
+          layoutKey: resolvedContext.layoutKey || "builder",
+          regionId: resolvedContext.regionId || "",
+          objectId: instance?.id || "",
+          objectType: definition?.type || instance?.type || "widget",
+          label: result?.error
+            ? `${definition?.displayName || "Widget"} query failed`
+            : `${definition?.displayName || "Widget"} query succeeded`,
+          detail: result?.error || "",
+          payload: {
+            queryKey: key,
+            dataSourceId: resolvedContext.dataSourceId || "",
+            rowCount: Array.isArray(result?.rows) ? result.rows.length : 0,
+            total: Number.isFinite(Number(result?.total)) ? Number(result.total) : null,
+            status: state.status,
+          },
+        });
+        return state;
+      })
+      .catch((error) => {
+        if (controller.signal.aborted || error?.name === "AbortError") {
+          return cached || { status: "idle", data: null, error: null, lastUpdated: null, isRefreshing: false };
+        }
+        const state = errorQueryState(error);
+        widgetQueryCache.set(key, state);
+        emitWorkspaceEvent({
+          type: "data-query-failed",
+          source: "query-runtime",
+          layoutKey: resolvedContext.layoutKey || "builder",
+          regionId: resolvedContext.regionId || "",
+          objectId: instance?.id || "",
+          objectType: definition?.type || instance?.type || "widget",
+          label: `${definition?.displayName || "Widget"} query failed`,
+          detail: error?.message || "Query failed",
+          payload: {
+            queryKey: key,
+            dataSourceId: resolvedContext.dataSourceId || "",
+            status: "error",
+          },
+        });
+        return state;
+      })
+      .finally(() => {
+        const current = widgetQueryInflight.get(key);
+        if (current?.controller === controller) widgetQueryInflight.delete(key);
+      });
+    widgetQueryInflight.set(key, { promise, controller, startedAt: Date.now() });
+    return {
+      key,
+      state: cached
+        ? { ...cached, status: "stale", isRefreshing: true }
+        : { status: "loading", data: null, error: null, lastUpdated: null, isRefreshing: true },
+      promise,
+    };
+  };
+  const invalidateManagedWidgetQueries = (predicate = null) => {
+    if (!predicate) {
+      widgetQueryCache.clear();
+      return;
+    }
+    [...widgetQueryCache.keys()].forEach((key) => {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(key);
+      } catch {}
+      if (predicate(parsed, key)) widgetQueryCache.delete(key);
+    });
+  };
+  const invalidateManagedWidgetQueriesForLayout = (layoutKey = "builder") => {
+    invalidateManagedWidgetQueries((entry) => !entry || entry.context?.layoutKey === layoutKey);
+  };
+  const invalidateManagedWidgetQueryForWidget = (widget) => {
+    const key = widget ? widgetQueryKeys.get(widget) || widget.dataset.widgetQueryKey || "" : "";
+    if (key) widgetQueryCache.delete(key);
+  };
+  const cancelManagedWidgetQueryKey = (key) => {
+    const inflight = key ? widgetQueryInflight.get(key) : null;
+    if (!inflight) return false;
+    inflight.controller.abort();
+    widgetQueryInflight.delete(key);
+    return true;
+  };
+  const cancelManagedWidgetQueryForWidget = (widget) => {
+    if (!widget) return false;
+    widget.dataset.widgetQuerySeq = String((Number(widget.dataset.widgetQuerySeq) || 0) + 1);
+    return cancelManagedWidgetQueryKey(widgetQueryKeys.get(widget) || widget.dataset.widgetQueryKey || "");
+  };
+  const managedQueryStateForWidget = (widget) => {
+    const key = widget ? widgetQueryKeys.get(widget) || widget.dataset.widgetQueryKey || "" : "";
+    return key ? widgetQueryCache.get(key) || null : null;
+  };
   const describeResolvedContext = (context) => {
     const mapping = context.semanticMapping || {};
     const mappedFields = [mapping.dateField, mapping.valueField, mapping.labelField, mapping.categoryField].filter(Boolean);
@@ -1747,6 +2191,7 @@ document.addEventListener("DOMContentLoaded", () => {
       byId.set(context.id, { ...byId.get(context.id), ...context });
     });
     saveWorkspaceContexts(layoutKey, profile, [...byId.values()]);
+    invalidateManagedWidgetQueriesForLayout(layoutKey);
     refreshResolvedContextDebug(layoutKey, profile);
     if (!persist && options.history !== false) pushLiveLayoutUndo(layoutKey, profile);
   };
@@ -2088,6 +2533,138 @@ document.addEventListener("DOMContentLoaded", () => {
     layer.__minimapObserver = observer;
     refreshWorkspaceMiniMaps(layoutKey);
   };
+
+  const engineerObjectLabel = (item) => {
+    const type = workspaceObjectType(item);
+    const id = item.dataset.widgetKey || item.dataset.panelKey || item.dataset.anchorKey || "unknown";
+    const domain = item.closest(".workspace-anchor-layer")
+      ? "anchor-rail"
+      : isPanelInternalGridItem(item)
+        ? "panel-grid"
+        : type === WORKSPACE_OBJECT_TYPES.widget
+          ? "global-widget-grid"
+          : "global-panel-grid";
+    const parent = item.dataset.parentPanelKey || item.closest(".db-panel")?.dataset.panelKey || "";
+    const lod = item.dataset.visualLod || item.dataset.lod || "";
+    return [
+      `${type}:${id}`,
+      domain,
+      parent ? `parent:${parent}` : "",
+      lod ? `lod:${lod}` : "",
+    ].filter(Boolean).join(" | ");
+  };
+
+  const ensureEngineerOverlayLayer = () => {
+    let layer = document.querySelector(".workspace-engineer-overlay-layer");
+    if (!layer) {
+      layer = document.createElement("div");
+      layer.className = "workspace-engineer-overlay-layer";
+      layer.setAttribute("aria-hidden", "true");
+      document.body.appendChild(layer);
+    }
+    return layer;
+  };
+
+  const renderEngineerRegionBands = (layer, layoutKey = "builder") => {
+    const geometry = minimapLayoutGeometry(layoutKey);
+    if (!geometry) return;
+    const { host, metrics, worldHeight } = geometry;
+    const hostRect = host.getBoundingClientRect();
+    deriveWorkspaceContextRegions(layoutKey).forEach((region) => {
+      const top = hostRect.top + ((Math.max(1, Number(region.startRow) || 1) - 1) * metrics.rowStep);
+      const endRow = region.endRow == null
+        ? Math.max(Number(region.startRow) || 1, Math.ceil(worldHeight / metrics.rowStep))
+        : Number(region.endRow) || Number(region.startRow) || 1;
+      const height = Math.max(18, ((endRow - (Number(region.startRow) || 1) + 1) * metrics.rowStep) - metrics.gap);
+      const band = document.createElement("div");
+      band.className = "workspace-engineer-region-band";
+      band.dataset.regionId = region.id || "";
+      band.style.left = `${Math.round(hostRect.left)}px`;
+      band.style.top = `${Math.round(top)}px`;
+      band.style.width = `${Math.round(hostRect.width)}px`;
+      band.style.height = `${Math.round(height)}px`;
+      band.textContent = regionLabelForSummary(region.id, layoutKey);
+      layer.appendChild(band);
+    });
+  };
+
+  const renderEngineerObjectChips = (layer, layoutKey = "builder") => {
+    const items = [
+      ...allCommittedWorkspaceGridItems(layoutKey),
+      ...document.querySelectorAll(`.workspace-anchor-layer[data-anchor-layout-key="${CSS.escape(layoutKey)}"] > .workspace-anchor-object:not([hidden])`),
+      ...document.querySelectorAll(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"] .panel-internal-widget-grid > .widget-card:not([hidden])`),
+    ].filter((item, index, list) => item?.isConnected && !item.hidden && list.indexOf(item) === index);
+    items.forEach((item) => {
+      const rect = item.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      if (rect.bottom < -60 || rect.top > window.innerHeight + 60) return;
+      const chip = document.createElement("div");
+      chip.className = "workspace-engineer-object-chip";
+      chip.dataset.objectType = workspaceObjectType(item);
+      chip.textContent = engineerObjectLabel(item);
+      chip.style.left = `${Math.round(Math.max(8, rect.left + 6))}px`;
+      chip.style.top = `${Math.round(Math.max(88, rect.top + 6))}px`;
+      layer.appendChild(chip);
+      const outline = document.createElement("div");
+      outline.className = "workspace-engineer-object-outline";
+      outline.dataset.objectType = workspaceObjectType(item);
+      outline.style.left = `${Math.round(rect.left)}px`;
+      outline.style.top = `${Math.round(rect.top)}px`;
+      outline.style.width = `${Math.round(rect.width)}px`;
+      outline.style.height = `${Math.round(rect.height)}px`;
+      layer.appendChild(outline);
+    });
+  };
+
+  const renderEngineerDiagnosticsPanel = (layer, layoutKey = "builder") => {
+    const events = recentWorkspaceEvents({ layoutKey, maxItems: 5 });
+    const queryStats = {
+      cache: widgetQueryCache.size,
+      inflight: widgetQueryInflight.size,
+    };
+    const lodCounts = [...document.querySelectorAll(`.widget-layout[data-widget-layout-key="${CSS.escape(layoutKey)}"] > .widget-card:not([hidden]), .panel-layout[data-layout-key="${CSS.escape(layoutKey)}"] > .db-panel:not([hidden])`)]
+      .reduce((counts, item) => {
+        const lod = item.dataset.visualLod || "unset";
+        counts[lod] = (counts[lod] || 0) + 1;
+        return counts;
+      }, {});
+    const anchors = document.querySelectorAll(`.workspace-anchor-layer[data-anchor-layout-key="${CSS.escape(layoutKey)}"] > .workspace-anchor-object:not([hidden])`).length;
+    const panelChildren = document.querySelectorAll(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"] .panel-internal-widget-grid > .widget-card:not([hidden])`).length;
+    const panel = document.createElement("section");
+    panel.className = "workspace-engineer-diagnostics";
+    panel.setAttribute("aria-label", "Engineer diagnostics");
+    panel.innerHTML = `
+      <strong>Engineer Mode</strong>
+      <span>events ${workspaceEvents.length} | query cache ${queryStats.cache} | inflight ${queryStats.inflight}</span>
+      <span>anchors ${anchors} | panel children ${panelChildren}</span>
+      <span>LOD ${Object.entries(lodCounts).map(([key, value]) => `${key}:${value}`).join(" ") || "none"}</span>
+      <ol>${events.map((event) => `<li>${escapeHtml(event.type)}</li>`).join("")}</ol>
+    `;
+    layer.appendChild(panel);
+  };
+
+  let engineerOverlayFrame = null;
+  const renderEngineerOverlays = () => {
+    const layer = ensureEngineerOverlayLayer();
+    layer.replaceChildren();
+    layer.hidden = !isEngineerMode();
+    if (!isEngineerMode()) return;
+    const layoutKey = document.querySelector(".panel-layout")?.dataset.layoutKey || "builder";
+    renderEngineerRegionBands(layer, layoutKey);
+    renderEngineerObjectChips(layer, layoutKey);
+    renderEngineerDiagnosticsPanel(layer, layoutKey);
+  };
+
+  refreshEngineerOverlays = () => {
+    window.cancelAnimationFrame(engineerOverlayFrame || 0);
+    engineerOverlayFrame = window.requestAnimationFrame(renderEngineerOverlays);
+  };
+  window.addEventListener("scroll", () => {
+    if (isEngineerMode()) refreshEngineerOverlays();
+  }, { passive: true });
+  window.addEventListener("resize", () => {
+    if (isEngineerMode()) refreshEngineerOverlays();
+  }, { passive: true });
 
   const gridItemMinimumSpan = (item) => {
     const explicit = Number(item?.dataset?.minW || item?.dataset?.minSpan);
@@ -2865,6 +3442,7 @@ document.addEventListener("DOMContentLoaded", () => {
   );
   const widgetDefinitionForElement = (widget) => widgetDefinitionFor(widgetRuntimeTypeFromElement(widget));
   const parseWidgetConfig = (value) => parseJsonRecord(value, {}) || {};
+  const uniqueValues = (values = []) => [...new Set(values.filter((value) => value != null && String(value).trim()))];
   const setWidgetConfig = (widget, config) => {
     if (!widget) return;
     widget.dataset.widgetConfig = JSON.stringify(config || {});
@@ -2888,7 +3466,72 @@ document.addEventListener("DOMContentLoaded", () => {
       ...current,
     };
   };
+  const widgetAvailableSizeForDensity = (widget) => {
+    if (!widget?.getBoundingClientRect) return { width: 0, height: 0, panelContained: false };
+    const rect = widget.getBoundingClientRect();
+    const tools = widget.querySelector(":scope > .widget-tools");
+    const controlReserve = tools ? Math.min(52, Math.max(0, rect.width * 0.3)) : 0;
+    return {
+      width: Math.max(0, rect.width - controlReserve),
+      height: Math.max(0, rect.height),
+      panelContained: isPanelInternalGridItem(widget),
+    };
+  };
+  const densityTiers = widgetRuntime?.densityTiers?.() || ["tiny", "compact", "standard", "expanded", "rich"];
+  const applyWidgetDensityMetadata = (widget, density) => {
+    if (!widget || !density) return;
+    densityTiers.forEach((tier) => widget.classList.remove(`widget-density-${tier}`));
+    widget.classList.add(`widget-density-${density}`);
+    widget.dataset.density = density;
+    widget.dataset.widgetDensity = density;
+  };
+  const resolveWidgetDensityForElement = (widget, definition = widgetDefinitionForElement(widget), availableSize = widgetAvailableSizeForDensity(widget)) => (
+    widgetRuntime?.resolveWidgetDensity?.({
+      cols: Number(widget?.dataset?.currentSpan || widget?.dataset?.defaultSpan) || definition.defaultSize?.cols || 1,
+      rows: Number(widget?.dataset?.gridRowSpan) || definition.defaultSize?.rows || 1,
+      parentPanelId: widget?.dataset?.parentPanelKey || null,
+    }, availableSize, definition) || "standard"
+  );
+  const isMediaWidgetDefinition = (definition) => mediaWidgetAssetTypes.has(definition?.type || "");
+  const mediaWidgetAssetState = (widget, config = widgetConfigFromElement(widget), definition = widgetDefinitionForElement(widget)) => {
+    if (!isMediaWidgetDefinition(definition)) return { persistedConfig: config, renderConfig: config, asset: null, changed: false };
+    const layoutKey = activeLayoutKeyForItem(widget);
+    const profile = getActivePanelProfile(layoutKey);
+    const persistedConfig = { ...config };
+    let asset = persistedConfig.assetId ? assetById(layoutKey, profile, persistedConfig.assetId) : null;
+    if (!asset && String(persistedConfig.src || "").trim()) {
+      asset = createAssetFromSource(layoutKey, persistedConfig.src, {
+        name: persistedConfig.title || persistedConfig.alt || definition.displayName || "Asset",
+        type: definition.type,
+      }, profile);
+      if (asset) persistedConfig.assetId = asset.id;
+    }
+    if (asset) delete persistedConfig.src;
+    const changed = JSON.stringify(persistedConfig) !== JSON.stringify(config);
+    const renderConfig = {
+      ...persistedConfig,
+      src: asset ? assetSourceRef(asset) : "",
+      assetId: persistedConfig.assetId || "",
+      assetName: asset?.name || "",
+      assetMimeType: asset?.mimeType || "",
+      assetMissing: Boolean(persistedConfig.assetId && !asset),
+    };
+    return { persistedConfig, renderConfig, asset, changed };
+  };
+  const widgetSettingsFields = (definition) => (definition?.settingsSchema?.sections || []).flatMap((section) => section.fields || []);
+  const queryRelevantWidgetConfig = (definition, config = {}) => {
+    const relevantKeys = widgetSettingsFields(definition)
+      .filter((field) => field.affectsQuery || field.affectsContext)
+      .map((field) => field.key);
+    return relevantKeys.reduce((record, key) => {
+      if (config[key] !== undefined) record[key] = config[key];
+      return record;
+    }, {});
+  };
   const widgetInstanceFromElement = (widget, definition = widgetDefinitionForElement(widget)) => widgetRuntime?.createWidgetInstance?.(definition, {
+    availableSize: widgetAvailableSizeForDensity(widget),
+    density: resolveWidgetDensityForElement(widget, definition),
+    parentPanelId: widget?.dataset?.parentPanelKey || null,
     id: widget?.dataset?.widgetKey || "",
     type: definition.type,
     x: Number(widget?.dataset?.gridCol) || 1,
@@ -2905,6 +3548,9 @@ document.addEventListener("DOMContentLoaded", () => {
     cols: Number(widget?.dataset?.currentSpan || widget?.dataset?.defaultSpan) || definition.defaultSize?.cols || 1,
     rows: Number(widget?.dataset?.gridRowSpan) || definition.defaultSize?.rows || 1,
     config: widgetConfigFromElement(widget, definition),
+    density: resolveWidgetDensityForElement(widget, definition),
+    availableSize: widgetAvailableSizeForDensity(widget),
+    parentPanelId: widget?.dataset?.parentPanelKey || null,
     contextOverrideId: widget?.dataset?.contextOverrideId || null,
   };
   const setWidgetRuntimeContent = (widget, html) => {
@@ -2932,15 +3578,175 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!widget?.classList?.contains("widget-card") || widget.classList.contains("workspace-anchor-object")) return;
     const definition = widgetDefinitionForElement(widget);
     const instance = widgetInstanceFromElement(widget, definition);
-    setWidgetConfig(widget, instance.config);
+    applyWidgetDensityMetadata(widget, instance.density || "standard");
+    const mediaState = mediaWidgetAssetState(widget, instance.config, definition);
+    const persistedConfig = isMediaWidgetDefinition(definition) ? mediaState.persistedConfig : instance.config;
+    setWidgetConfig(widget, persistedConfig);
+    const renderInstance = isMediaWidgetDefinition(definition)
+      ? { ...instance, config: mediaState.renderConfig }
+      : instance;
     const html = widgetRuntime?.renderWidget?.(definition, {
-      instance,
+      instance: renderInstance,
       definition,
       resolvedContext: options.resolvedContext || null,
       data: options.data,
       status: options.status || "empty",
-    }) || definition.render({ instance, definition, resolvedContext: options.resolvedContext || null, data: options.data, status: options.status || "empty" });
+    }) || definition.render({ instance: renderInstance, definition, resolvedContext: options.resolvedContext || null, data: options.data, status: options.status || "empty" });
     setWidgetRuntimeContent(widget, html);
+  };
+  const settingFieldOptionRecord = (option) => {
+    if (option && typeof option === "object") {
+      const value = String(option.value ?? option.id ?? option.key ?? option.label ?? "");
+      return { value, label: String(option.label ?? option.name ?? value) };
+    }
+    return { value: String(option ?? ""), label: String(option ?? "") };
+  };
+  const fieldPickerOptionsForWidget = (widget, config = widgetConfigFromElement(widget)) => {
+    const resolved = resolveWorkspaceContextForItem(widget);
+    const mapping = resolved.semanticMapping || {};
+    const cachedFields = managedQueryStateForWidget(widget)?.data?.schema?.fields?.map((field) => field.name) || [];
+    return uniqueValues([
+      ...cachedFields,
+      ...Object.values(mapping).filter((value) => typeof value === "string"),
+      ...(Array.isArray(config.columns) ? config.columns : []),
+      config.valueField,
+      config.xField,
+      config.yField,
+      config.seriesField,
+      config.sortBy,
+      config.dateField,
+      config.labelField,
+    ]).map((field) => ({ value: field, label: field }));
+  };
+  const settingRawValue = (config, field) => {
+    if (config[field.key] !== undefined) return config[field.key];
+    if (field.defaultValue !== undefined) return field.defaultValue;
+    return field.type === "toggle" ? false : field.valueType === "array" ? [] : "";
+  };
+  const settingInputValue = (config, field) => {
+    const value = settingRawValue(config, field);
+    if (field.valueType === "array") return Array.isArray(value) ? value.join(", ") : String(value || "");
+    if (typeof value === "object" && value !== null) return JSON.stringify(value, null, 2);
+    return String(value ?? "");
+  };
+  const renderWidgetSettingField = (widget, field, config) => {
+    const id = `${widget.dataset.widgetKey || "widget"}-${field.key}`;
+    const value = settingInputValue(config, field);
+    const common = `class="widget-setting-input" data-widget-setting-key="${escapeHtml(field.key)}" data-widget-setting-type="${escapeHtml(field.type)}" aria-label="${escapeHtml(field.label)}"`;
+    const placeholder = field.placeholder ? ` placeholder="${escapeHtml(field.placeholder)}"` : "";
+    if (field.type === "select" || field.type === "metricPicker" || field.type === "fieldPicker") {
+      const options = field.type === "fieldPicker"
+        ? fieldPickerOptionsForWidget(widget, config)
+        : (field.options || []).map(settingFieldOptionRecord);
+      const optionMarkup = [
+        field.required ? "" : `<option value="">${field.type === "fieldPicker" ? "Auto" : "Default"}</option>`,
+        ...options.map((option) => `<option value="${escapeHtml(option.value)}"${String(value) === option.value ? " selected" : ""}>${escapeHtml(option.label)}</option>`),
+      ].join("");
+      return `<label class="widget-setting-field widget-setting-field-${escapeHtml(field.type)}" for="${escapeHtml(id)}">
+        <span>${escapeHtml(field.label)}</span>
+        <select id="${escapeHtml(id)}" ${common}>${optionMarkup}</select>
+      </label>`;
+    }
+    if (field.type === "toggle") {
+      return `<label class="widget-setting-field widget-setting-field-toggle" for="${escapeHtml(id)}">
+        <span>${escapeHtml(field.label)}</span>
+        <input id="${escapeHtml(id)}" ${common} type="checkbox"${settingRawValue(config, field) ? " checked" : ""}>
+      </label>`;
+    }
+    if (field.type === "textarea" || field.type === "json") {
+      return `<label class="widget-setting-field widget-setting-field-${escapeHtml(field.type)}" for="${escapeHtml(id)}">
+        <span>${escapeHtml(field.label)}</span>
+        <textarea id="${escapeHtml(id)}" ${common}${placeholder}>${escapeHtml(value)}</textarea>
+      </label>`;
+    }
+    const inputType = field.type === "number" ? "number" : field.type === "dateRange" ? "date" : "text";
+    const numeric = field.type === "number"
+      ? `${field.min != null ? ` min="${escapeHtml(field.min)}"` : ""}${field.max != null ? ` max="${escapeHtml(field.max)}"` : ""}${field.step != null ? ` step="${escapeHtml(field.step)}"` : ""}`
+      : "";
+    return `<label class="widget-setting-field widget-setting-field-${escapeHtml(field.type)}" for="${escapeHtml(id)}">
+      <span>${escapeHtml(field.label)}</span>
+      <input id="${escapeHtml(id)}" ${common} type="${inputType}" value="${escapeHtml(value)}"${placeholder}${numeric}>
+    </label>`;
+  };
+  const renderWidgetSettingsSchemaPanel = (widget) => {
+    const definition = widgetDefinitionForElement(widget);
+    const schema = definition.settingsSchema || { sections: [] };
+    const config = widgetConfigFromElement(widget, definition);
+    const sections = schema.sections || [];
+    return `<div class="widget-settings-schema-head">
+      <span>${escapeHtml(definition.displayName || "Widget")} settings</span>
+    </div>
+    ${sections.map((section) => `<fieldset class="widget-settings-section" data-widget-settings-section="${escapeHtml(section.id)}">
+      <legend>${escapeHtml(section.label || "Settings")}</legend>
+      ${(section.fields || []).map((field) => renderWidgetSettingField(widget, field, config)).join("")}
+    </fieldset>`).join("")}`;
+  };
+  const ensureWidgetSettingsSchemaPanel = (widget) => {
+    const tools = widget?.querySelector(":scope > .widget-tools");
+    if (!tools) return null;
+    let panel = tools.querySelector(":scope > .widget-settings-schema-panel");
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.className = "widget-settings-schema-panel";
+      panel.setAttribute("role", "menu");
+      panel.setAttribute("aria-label", "Widget settings");
+      panel.hidden = true;
+      tools.appendChild(panel);
+    }
+    const isOpen = widget.classList.contains("widget-settings-schema-open");
+    if (isOpen) panel.innerHTML = renderWidgetSettingsSchemaPanel(widget);
+    else panel.replaceChildren();
+    panel.toggleAttribute("hidden", !isOpen);
+    return panel;
+  };
+  const coerceWidgetSettingValue = (input, field) => {
+    if (field.type === "toggle") return Boolean(input.checked);
+    if (field.type === "number") {
+      let value = Number(input.value);
+      if (!Number.isFinite(value)) value = Number(field.defaultValue) || 0;
+      if (field.min != null) value = Math.max(Number(field.min), value);
+      if (field.max != null) value = Math.min(Number(field.max), value);
+      return value;
+    }
+    if (field.type === "json") return parseJsonRecord(input.value, settingRawValue({}, field));
+    if (field.valueType === "array") {
+      return String(input.value || "").split(",").map((entry) => entry.trim()).filter(Boolean);
+    }
+    return String(input.value || "").trim();
+  };
+  const widgetSettingFieldForInput = (widget, input) => {
+    const key = input?.dataset?.widgetSettingKey;
+    if (!key) return null;
+    return widgetSettingsFields(widgetDefinitionForElement(widget)).find((field) => field.key === key) || null;
+  };
+  window.dashboardWidgetSettingsRuntime = {
+    schemaForWidget: (widget) => {
+      const node = typeof widget === "string" ? document.querySelector(widget) : widget;
+      return node ? widgetDefinitionForElement(node).settingsSchema || { sections: [] } : { sections: [] };
+    },
+    fieldsForWidget: (widget) => {
+      const node = typeof widget === "string" ? document.querySelector(widget) : widget;
+      return node ? widgetSettingsFields(widgetDefinitionForElement(node)) : [];
+    },
+    renderPanel: (widget) => {
+      const node = typeof widget === "string" ? document.querySelector(widget) : widget;
+      return node ? renderWidgetSettingsSchemaPanel(node) : "";
+    },
+    applySetting: (widget, key, value, options = {}) => {
+      const node = typeof widget === "string" ? document.querySelector(widget) : widget;
+      if (!node || !key) return false;
+      const field = widgetSettingsFields(widgetDefinitionForElement(node)).find((entry) => entry.key === key);
+      if (!field) return false;
+      const input = {
+        dataset: { widgetSettingKey: key },
+        value: field.valueType === "array" && Array.isArray(value) ? value.join(", ") : String(value ?? ""),
+        checked: Boolean(value),
+        type: field.type === "toggle" ? "checkbox" : field.type,
+        removeAttribute() {},
+        setAttribute() {},
+      };
+      return applyWidgetSettingsSchemaChange(node, input, options);
+    },
   };
   const syncWidgetContextOutputs = (widget) => {
     if (!widget?.classList?.contains("widget-card")) return;
@@ -2963,38 +3769,87 @@ document.addEventListener("DOMContentLoaded", () => {
       widget.dataset.contextFilters = JSON.stringify(normalizedFilterWidgetFilters(widget, resolvedContext));
     }
   };
-  const refreshWidgetRuntimeData = async (widget, resolvedContext) => {
+  const refreshWidgetRuntimeData = async (widget, resolvedContext, options = {}) => {
     if (!widget?.isConnected || widget.classList.contains("workspace-anchor-object")) return;
-    if (widget.contains(document.activeElement)) return;
+    if (widget.contains(document.activeElement) && !options.allowFocused) return;
     const definition = widgetDefinitionForElement(widget);
     const instance = widgetInstanceFromElement(widget, definition);
     const query = typeof definition.resolveQuery === "function"
       ? definition.resolveQuery(instance.config, resolvedContext)
       : null;
-    widget.dataset.widgetRuntimeStatus = query && resolvedContext?.canQuery ? "loading" : "empty";
     widget.dataset.widgetQueryRequirements = JSON.stringify(definition.queryRequirements || {});
-    if (!query || !resolvedContext?.canQuery) {
-      renderWidgetRuntimeContent(widget, { resolvedContext, status: "empty" });
+    const sequence = (Number(widget.dataset.widgetQuerySeq) || 0) + 1;
+    widget.dataset.widgetQuerySeq = String(sequence);
+    const managed = beginManagedWidgetQuery({
+      definition,
+      instance,
+      resolvedContext,
+      query,
+      force: Boolean(options.force),
+    });
+    if (managed.key) {
+      widget.dataset.widgetQueryKey = managed.key;
+      widgetQueryKeys.set(widget, managed.key);
+    } else {
+      delete widget.dataset.widgetQueryKey;
+      widgetQueryKeys.delete(widget);
+    }
+    widget.dataset.widgetRuntimeStatus = managed.state.status;
+    widget.dataset.widgetQueryRefreshing = managed.state.isRefreshing ? "true" : "false";
+    if (managed.state.error) widget.dataset.widgetQueryError = managed.state.error;
+    else delete widget.dataset.widgetQueryError;
+    if (managed.state.lastUpdated) widget.dataset.widgetQueryLastUpdated = String(managed.state.lastUpdated);
+    renderWidgetRuntimeContent(widget, {
+      resolvedContext,
+      data: managed.state.data,
+      status: managed.state.status,
+    });
+    if (!managed.promise) {
       return;
     }
-    renderWidgetRuntimeContent(widget, { resolvedContext, status: "loading" });
-    try {
-      const result = await queryResolvedWorkspaceContext(resolvedContext, query);
-      if (!widget.isConnected || widget.contains(document.activeElement)) return;
-      widget.dataset.widgetRuntimeStatus = result.error ? "error" : "ready";
-      renderWidgetRuntimeContent(widget, {
-        resolvedContext,
-        data: {
-          ...result,
-          semanticMapping: resolvedContext.semanticMapping || {},
-        },
-        status: result.error ? "error" : "ready",
-      });
-    } catch (error) {
-      if (!widget.isConnected || widget.contains(document.activeElement)) return;
-      widget.dataset.widgetRuntimeStatus = "error";
-      renderWidgetRuntimeContent(widget, { resolvedContext, data: { error: error?.message || "Query failed" }, status: "error" });
-    }
+    const finalState = await managed.promise;
+    if (!widget.isConnected || (widget.contains(document.activeElement) && !options.allowFocused)) return;
+    if (Number(widget.dataset.widgetQuerySeq) !== sequence) return;
+    widget.dataset.widgetRuntimeStatus = finalState.status;
+    widget.dataset.widgetQueryRefreshing = finalState.isRefreshing ? "true" : "false";
+    if (finalState.error) widget.dataset.widgetQueryError = finalState.error;
+    else delete widget.dataset.widgetQueryError;
+    if (finalState.lastUpdated) widget.dataset.widgetQueryLastUpdated = String(finalState.lastUpdated);
+    renderWidgetRuntimeContent(widget, {
+      resolvedContext,
+      data: finalState.data,
+      status: finalState.status,
+    });
+  };
+  window.dashboardQueryRuntime = {
+    statusValues: ["idle", "loading", "ready", "empty", "error", "stale"],
+    keyForWidget: (widget) => {
+      const node = typeof widget === "string" ? document.querySelector(widget) : widget;
+      if (!node) return "";
+      const definition = widgetDefinitionForElement(node);
+      const instance = widgetInstanceFromElement(node, definition);
+      const resolvedContext = resolveWorkspaceContextForItem(node);
+      const query = typeof definition.resolveQuery === "function"
+        ? definition.resolveQuery(instance.config, resolvedContext)
+        : null;
+      return query ? widgetQueryKeyFor({ definition, instance, resolvedContext, query }) : "";
+    },
+    stateForWidget: (widget) => managedQueryStateForWidget(typeof widget === "string" ? document.querySelector(widget) : widget),
+    refreshWidget: (widget, options = {}) => {
+      const node = typeof widget === "string" ? document.querySelector(widget) : widget;
+      if (!node) return Promise.resolve(false);
+      return refreshWidgetRuntimeData(node, resolveWorkspaceContextForItem(node), { force: options.force !== false }).then(() => true);
+    },
+    retryWidget: (widget) => window.dashboardQueryRuntime.refreshWidget(widget, { force: true }),
+    cancelWidget: (widget) => cancelManagedWidgetQueryForWidget(typeof widget === "string" ? document.querySelector(widget) : widget),
+    cancelKey: cancelManagedWidgetQueryKey,
+    invalidate: () => invalidateManagedWidgetQueries(),
+    invalidateLayout: invalidateManagedWidgetQueriesForLayout,
+    stats: () => ({
+      cacheSize: widgetQueryCache.size,
+      inflight: widgetQueryInflight.size,
+      keys: [...widgetQueryCache.keys()],
+    }),
   };
   const hydrateWidgetRuntime = (widget, saved = null) => {
     if (!widget?.classList?.contains("widget-card") || widget.classList.contains("workspace-anchor-object")) return null;
@@ -3009,6 +3864,7 @@ document.addEventListener("DOMContentLoaded", () => {
     widget.dataset.contextRole = definition.contextRole || widget.dataset.contextRole || "content";
     widget.dataset.widgetCapabilities = JSON.stringify(definition.capabilities || {});
     widget.dataset.widgetSupportedSettings = JSON.stringify(definition.supportedSettings || []);
+    widget.dataset.widgetSettingsSchema = JSON.stringify(definition.settingsSchema || { sections: [] });
     widget.dataset.widgetQueryRequirements = JSON.stringify(definition.queryRequirements || {});
     if (!widget.dataset.defaultSpan) widget.dataset.defaultSpan = String(definition.defaultSize?.cols || 1);
     if (!widget.dataset.minW && definition.minSize?.cols) widget.dataset.minW = String(definition.minSize.cols);
@@ -3039,6 +3895,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const layoutKey = activeLayoutKeyForItem(widget);
     const profile = getActivePanelProfile(layoutKey);
     const layout = widget.closest(".widget-layout");
+    if (options.invalidateQuery !== false) invalidateManagedWidgetQueryForWidget(widget);
     if (layout) saveWidgetLayouts(layout, profile, { history: false });
     refreshResolvedContextDebug(layoutKey, profile);
     if (options.activity !== false) {
@@ -3053,6 +3910,73 @@ document.addEventListener("DOMContentLoaded", () => {
     const layoutKey = activeLayoutKeyForItem(widget);
     const profile = getActivePanelProfile(layoutKey);
     pushLiveLayoutUndo(layoutKey, profile);
+  };
+  const applyWidgetSettingsSchemaChange = (widget, input, options = {}) => {
+    const field = widgetSettingFieldForInput(widget, input);
+    if (!field) return false;
+    if (field.required && !String(input.type === "checkbox" ? input.checked : input.value || "").trim()) {
+      input.setAttribute("aria-invalid", "true");
+      return false;
+    }
+    input.removeAttribute("aria-invalid");
+    const definition = widgetDefinitionForElement(widget);
+    const config = widgetConfigFromElement(widget, definition);
+    const nextValue = coerceWidgetSettingValue(input, field);
+    const before = JSON.stringify(config[field.key] ?? null);
+    const after = JSON.stringify(nextValue ?? null);
+    if (before === after) return true;
+    if (options.history !== false) captureRuntimeControlBaselineForWidget(widget);
+    setWidgetConfig(widget, { ...config, [field.key]: nextValue });
+    syncWidgetContextOutputs(widget);
+    const affectsQuery = Boolean(field.affectsQuery || field.affectsContext);
+    persistRuntimeControlChangeForWidget(widget, { history: options.history !== false, invalidateQuery: affectsQuery });
+    if (affectsQuery) {
+      refreshWidgetRuntimeData(widget, resolveWorkspaceContextForItem(widget), { force: true, allowFocused: true });
+    } else {
+      const queryState = managedQueryStateForWidget(widget);
+      renderWidgetRuntimeContent(widget, {
+        resolvedContext: resolveWorkspaceContextForItem(widget),
+        data: queryState?.data,
+        status: queryState?.status || widget.dataset.widgetRuntimeStatus || "empty",
+      });
+    }
+    ensureWidgetSettingsSchemaPanel(widget);
+    return true;
+  };
+  window.dashboardAssetRuntime = {
+    keyForLayout: workspaceAssetsKey,
+    listAssets: (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => loadAssets(layoutKey, profile),
+    getAsset: (id, layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => assetById(layoutKey, profile, id),
+    registerAsset: (asset, layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => registerAsset(layoutKey, asset, profile),
+    createAssetFromUrl: (src, options = {}, layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) =>
+      createAssetFromSource(layoutKey, src, { ...options, sourceKind: options.sourceKind || "url" }, profile),
+    createAssetFromDataUrl: (dataUrl, options = {}, layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) =>
+      createAssetFromSource(layoutKey, dataUrl, { ...options, sourceKind: "data-url" }, profile),
+    registerAssetFromFile: async (file, options = {}, layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+      if (!file) return null;
+      const dataUrl = await fileToDataUrl(file);
+      return createAssetFromSource(layoutKey, dataUrl, {
+        ...options,
+        name: options.name || file.name || "Uploaded asset",
+        mimeType: options.mimeType || file.type || mimeTypeFromSource(dataUrl),
+        size: options.size || file.size || dataUrl.length,
+        type: options.type || assetTypeFromMime(file.type || mimeTypeFromSource(dataUrl), "document"),
+        sourceKind: "data-url",
+      }, profile);
+    },
+    setWidgetAsset: (widget, assetIdValue, options = {}) => {
+      const node = typeof widget === "string" ? document.querySelector(widget) : widget;
+      if (!node || !isMediaWidgetDefinition(widgetDefinitionForElement(node))) return false;
+      if (options.history !== false) captureRuntimeControlBaselineForWidget(node);
+      const config = widgetConfigFromElement(node);
+      const nextConfig = { ...config, assetId: assetIdValue || "" };
+      delete nextConfig.src;
+      setWidgetConfig(node, nextConfig);
+      renderWidgetRuntimeContent(node, { resolvedContext: resolveWorkspaceContextForItem(node), status: node.dataset.widgetRuntimeStatus || "empty" });
+      persistRuntimeControlChangeForWidget(node, { history: options.history !== false, invalidateQuery: false });
+      return true;
+    },
+    sourceForAsset: assetSourceRef,
   };
   const commitTimeframeDateInput = (input, eventType = "input") => {
     const widget = input?.closest?.(".widget-card[data-widget-definition='timeframe']");
@@ -3623,6 +4547,19 @@ document.addEventListener("DOMContentLoaded", () => {
         anchor.querySelector(".anchor-link-toggle")?.setAttribute("aria-expanded", "false");
         syncLayoutToolsActive();
         saveFloatingAnchors(layoutKey, getActivePanelProfile(layoutKey));
+        emitWorkspaceEvent({
+          type: "anchor-linked",
+          source: "anchor-menu",
+          layoutKey,
+          objectId: anchor.dataset.anchorKey || "",
+          objectType: "anchor",
+          regionId: anchor.dataset.workspaceRegionId || "",
+          label: dividerId ? "Anchor linked to divider" : "Anchor link cleared",
+          payload: {
+            linkedDividerId: anchor.dataset.linkedDividerId || null,
+            navigationTargetType: anchor.dataset.navigationTargetType || "workspace-top",
+          },
+        });
       });
       menu.appendChild(option);
     };
@@ -3936,6 +4873,18 @@ document.addEventListener("DOMContentLoaded", () => {
       if (commit && state?.previewOrder?.length) {
         commitAnchorRailOrder(layer, state.previewOrder);
         saveFloatingAnchors(layoutKey, getActivePanelProfile(layoutKey));
+        emitWorkspaceEvent({
+          type: "anchor-reordered",
+          source: "anchor-rail",
+          layoutKey,
+          objectId: anchor.dataset.anchorKey || "",
+          objectType: "anchor",
+          label: "Anchor reordered",
+          payload: {
+            railOrder: Number(anchor.dataset.anchorRailOrder) || 0,
+            offset: Number(anchor.dataset.anchorOffset) || 0,
+          },
+        });
       } else {
         commitAnchorRailOrder(layer);
       }
@@ -4098,8 +5047,11 @@ document.addEventListener("DOMContentLoaded", () => {
     widget.insertAdjacentHTML("beforeend", `
       <div class="widget-tools" aria-label="Widget tools">
         <div class="panel-tool-drawer widget-tool-drawer">
-          ${panelToolButtonsMarkup(theme, true)}
+          ${panelToolButtonsMarkup(theme, true, {
+            extraButtons: '<button class="panel-tool-button widget-config-toggle" type="button" aria-label="Configure widget" aria-expanded="false" title="Configure widget"><span class="settings-icon" aria-hidden="true"></span></button>',
+          })}
         </div>
+        <div class="widget-settings-schema-panel" role="menu" aria-label="Widget settings" hidden></div>
         <button class="panel-settings-toggle widget-settings-toggle" type="button" aria-label="Widget settings" aria-expanded="false" title="Widget settings"><span class="settings-icon" aria-hidden="true"></span></button>
       </div>`);
   };
@@ -4155,6 +5107,9 @@ document.addEventListener("DOMContentLoaded", () => {
     widget.style.gridColumn = `${safeCol} / span ${Math.round(safeSpan)}`;
     widget.style.gridRow = `${safeRow} / span ${safeRows}`;
     syncWidgetRenderedHeightToFootprint(widget, safeRows);
+    if (widget.classList.contains("widget-card") && !widget.classList.contains("workspace-anchor-object")) {
+      applyWidgetDensityMetadata(widget, resolveWidgetDensityForElement(widget));
+    }
   };
 
   const widgetGridCellFromPoint = (layout, widget, clientX, clientY) => gridCellFromPoint(layout, widget, clientX, clientY);
@@ -6498,6 +7453,21 @@ document.addEventListener("DOMContentLoaded", () => {
     initWidgetLayout(internalGrid);
     updatePanelChildEmptyState(panel);
     animateAbsorbedWidgetIntoPanel(clone, fromRect);
+    emitWorkspaceEvent({
+      type: "widget-moved-into-panel",
+      source: "panel-containment",
+      layoutKey: gridItemLayoutKey(sourceLayout || internalGrid),
+      objectId: clone.dataset.widgetKey || "",
+      objectType: "widget",
+      panelId: panel.dataset.panelKey || "",
+      regionId: regionIdForWorkspaceItem(panel),
+      label: `${clone.dataset.widgetDisplayName || "Widget"} moved into panel`,
+      payload: {
+        parentPanelId: panel.dataset.panelKey || "",
+        col: Number(clone.dataset.gridCol) || 0,
+        row: Number(clone.dataset.gridRow) || 0,
+      },
+    });
     return clone;
   };
 
@@ -6521,6 +7491,21 @@ document.addEventListener("DOMContentLoaded", () => {
     updatePanelChildEmptyState(panel);
     animateAbsorbedWidgetIntoPanel(clone, fromRect);
     cleanupWidgetRowBreaks(targetLayout);
+    emitWorkspaceEvent({
+      type: "widget-moved-out-of-panel",
+      source: "panel-containment",
+      layoutKey: gridItemLayoutKey(targetLayout),
+      objectId: clone.dataset.widgetKey || "",
+      objectType: "widget",
+      panelId: panel.dataset.panelKey || "",
+      regionId: regionIdForWorkspaceItem(clone),
+      label: `${clone.dataset.widgetDisplayName || "Widget"} moved out of panel`,
+      payload: {
+        fromPanelId: panel.dataset.panelKey || "",
+        col: Number(clone.dataset.gridCol) || 0,
+        row: Number(clone.dataset.gridRow) || 0,
+      },
+    });
     return { widget: clone, ...result };
   };
 
@@ -7997,6 +8982,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const tools = widget.querySelector(".widget-tools");
       const drawer = widget.querySelector(".widget-tool-drawer");
       const settings = widget.querySelector(".widget-settings-toggle");
+      const configToggle = widget.querySelector(".widget-config-toggle");
       const moveHandle = widget.querySelector(".panel-move-handle");
       const resizeHandle = widget.querySelector(".panel-resize-handle");
       const pinButton = widget.querySelector(".panel-pin-toggle");
@@ -8004,6 +8990,19 @@ document.addEventListener("DOMContentLoaded", () => {
       const colorToggle = widget.querySelector(".panel-color-toggle");
       const deleteButton = widget.querySelector(".panel-delete-handle");
       const colorMenu = buildPanelColorMenu(widget, layout, colorToggle);
+      const settingsSchemaPanel = ensureWidgetSettingsSchemaPanel(widget);
+      const syncOpenWidgetToolPosition = () => {
+        if (!widget.classList.contains("widget-tools-open")) return;
+        if (isDashboardInteractionActive()) return;
+        positionDashboardToolDrawer(widget, settings, drawer);
+      };
+      if (!widget.__widgetToolPositionObserver) {
+        widget.__widgetToolPositionObserver = new MutationObserver(syncOpenWidgetToolPosition);
+        widget.__widgetToolPositionObserver.observe(widget, {
+          attributes: true,
+          attributeFilter: ["style", "data-grid-col", "data-grid-row", "data-current-span", "data-grid-row-span"],
+        });
+      }
       let closeTimer;
       let suppressToolOpenUntil = 0;
       let suppressWidgetClickUntil = 0;
@@ -8043,7 +9042,10 @@ document.addEventListener("DOMContentLoaded", () => {
         toolsOpenedByApproach = false;
         if (tools?.contains(document.activeElement)) document.activeElement?.blur?.();
         widget.classList.remove("widget-tools-open");
+        widget.classList.remove("widget-settings-schema-open");
         settings?.setAttribute("aria-expanded", "false");
+        configToggle?.setAttribute("aria-expanded", "false");
+        settingsSchemaPanel?.setAttribute("hidden", "");
         colorMenu?.classList.remove("panel-color-menu-open");
         colorToggle?.setAttribute("aria-expanded", "false");
         syncLayoutToolsActive();
@@ -8060,6 +9062,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const resumeToolHoverClose = () => {
         const wasOpen = widget.classList.contains("widget-tools-open");
         releaseToolLeaveClose();
+        if (wasOpen) {
+          window.clearTimeout(closeTimer);
+          return;
+        }
         openTools();
         if (!wasOpen && widget.classList.contains("widget-tools-open")) toolsOpenedByApproach = true;
       };
@@ -8085,6 +9091,31 @@ document.addEventListener("DOMContentLoaded", () => {
       }, true);
       tools?.addEventListener("mouseenter", resumeToolHoverClose);
       tools?.addEventListener("mouseleave", scheduleClose);
+      settingsSchemaPanel?.addEventListener("mouseenter", resumeToolHoverClose);
+      settingsSchemaPanel?.addEventListener("mouseleave", scheduleClose);
+      settingsSchemaPanel?.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+      settingsSchemaPanel?.addEventListener("input", (event) => {
+        event.stopPropagation();
+      });
+      settingsSchemaPanel?.addEventListener("change", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const input = event.target?.closest?.(".widget-setting-input");
+        if (!input || !widget.contains(input)) return;
+        applyWidgetSettingsSchemaChange(widget, input, { history: true });
+      });
+      settingsSchemaPanel?.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.key === "Escape") {
+          event.preventDefault();
+          widget.classList.remove("widget-settings-schema-open");
+          configToggle?.setAttribute("aria-expanded", "false");
+          settingsSchemaPanel.hidden = true;
+          configToggle?.focus?.({ preventScroll: true });
+        }
+      });
       settings?.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -8100,9 +9131,30 @@ document.addEventListener("DOMContentLoaded", () => {
           openTools();
         }
       });
+      configToggle?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        releaseToolLeaveClose();
+        if (!canOpenDashboardTools(widget)) return;
+        closeInactiveDashboardTools(widget);
+        openTools();
+        colorMenu?.classList.remove("panel-color-menu-open");
+        colorToggle?.setAttribute("aria-expanded", "false");
+        const nextOpen = !widget.classList.contains("widget-settings-schema-open");
+        widget.classList.toggle("widget-settings-schema-open", nextOpen);
+        configToggle.setAttribute("aria-expanded", nextOpen.toString());
+        const panel = ensureWidgetSettingsSchemaPanel(widget);
+        if (panel) {
+          panel.hidden = !nextOpen;
+          positionDashboardToolDrawer(widget, settings, drawer);
+        }
+      });
       colorToggle?.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        widget.classList.remove("widget-settings-schema-open");
+        configToggle?.setAttribute("aria-expanded", "false");
+        settingsSchemaPanel?.setAttribute("hidden", "");
         const nextOpen = !colorMenu?.classList.contains("panel-color-menu-open");
         if (nextOpen) {
           syncPanelThemeVars(widget, colorMenu);
@@ -8120,6 +9172,11 @@ document.addEventListener("DOMContentLoaded", () => {
       document.addEventListener("pointerdown", (event) => {
         if (!colorMenu?.classList.contains("panel-color-menu-open")) return;
         if (widget.contains(event.target) || colorMenu.contains(event.target)) return;
+        closeTools();
+      });
+      document.addEventListener("pointerdown", (event) => {
+        if (!widget.classList.contains("widget-settings-schema-open")) return;
+        if (widget.contains(event.target) || colorMenu?.contains(event.target)) return;
         closeTools();
       });
       pinButton?.addEventListener("click", (event) => {
@@ -8193,6 +9250,20 @@ document.addEventListener("DOMContentLoaded", () => {
           onCommit: () => {
             cleanupWidgetRowBreaks(layout);
             saveSharedGridLayouts(layout);
+            emitWorkspaceEvent({
+              type: "object-moved",
+              source: "drag",
+              layoutKey,
+              objectId: widget.dataset.widgetKey || "",
+              objectType: "widget",
+              regionId: regionIdForWorkspaceItem(widget),
+              panelId: widget.dataset.parentPanelKey || "",
+              label: `${widget.dataset.widgetDisplayName || "Widget"} moved`,
+              payload: {
+                col: Number(widget.dataset.gridCol) || 0,
+                row: Number(widget.dataset.gridRow) || 0,
+              },
+            });
           },
           onEnd: (didDrag) => {
             dragging = false;
@@ -8356,6 +9427,20 @@ document.addEventListener("DOMContentLoaded", () => {
               applyOrderedGridLayout(layout);
             }, widget, { items: reflowItems, metrics: layoutMetrics });
             saveSharedGridLayouts(layout);
+            emitWorkspaceEvent({
+              type: "object-resized",
+              source: "resize",
+              layoutKey,
+              objectId: widget.dataset.widgetKey || "",
+              objectType: "widget",
+              regionId: regionIdForWorkspaceItem(widget),
+              panelId: widget.dataset.parentPanelKey || "",
+              label: `${widget.dataset.widgetDisplayName || "Widget"} resized`,
+              payload: {
+                cols: Number(widget.dataset.currentSpan) || 0,
+                rows: Number(widget.dataset.gridRowSpan) || 0,
+              },
+            });
             syncCommittedWorkspaceScrollFloor(layout, {
               preserveViewport: document.body.classList.contains("dashboard-interaction-scroll-extended"),
             });
@@ -8586,6 +9671,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const resumePanelToolHoverClose = () => {
         const wasOpen = panel.classList.contains("db-panel-tools-open");
         releasePanelToolLeaveClose();
+        if (wasOpen) {
+          window.clearTimeout(toolsCloseTimer);
+          return;
+        }
         openPanelTools();
         if (!wasOpen && panel.classList.contains("db-panel-tools-open")) panelToolsOpenedByApproach = true;
       };
@@ -8767,6 +9856,19 @@ document.addEventListener("DOMContentLoaded", () => {
         }, panel);
         if (capabilities.canExpand) header.setAttribute("aria-expanded", (!collapsed).toString());
         savePanelLayouts(layout);
+        emitWorkspaceEvent({
+          type: collapsed ? "panel-collapsed" : "panel-opened",
+          source: "panel-toggle",
+          layoutKey,
+          objectId: panel.dataset.panelKey || "",
+          objectType: workspaceObjectType(panel) === WORKSPACE_OBJECT_TYPES.divider ? "divider" : "panel",
+          regionId: regionIdForWorkspaceItem(panel),
+          label: `${panel.dataset.panelTitle || panel.dataset.defaultTitle || "Panel"} ${collapsed ? "collapsed" : "opened"}`,
+          payload: {
+            collapsed,
+            rows: Number(panel.dataset.gridRowSpan) || 0,
+          },
+        });
       };
       header.addEventListener("click", (event) => {
         if (event.target?.closest?.(".panel-tools")) return;
@@ -8801,6 +9903,19 @@ document.addEventListener("DOMContentLoaded", () => {
           onCommit: () => {
             cleanupPanelRowBreaks(layout);
             saveSharedGridLayouts(layout);
+            emitWorkspaceEvent({
+              type: workspaceObjectType(panel) === WORKSPACE_OBJECT_TYPES.divider ? "divider-moved" : "object-moved",
+              source: "drag",
+              layoutKey,
+              objectId: panel.dataset.panelKey || "",
+              objectType: workspaceObjectType(panel) === WORKSPACE_OBJECT_TYPES.divider ? "divider" : "panel",
+              regionId: regionIdForWorkspaceItem(panel),
+              label: `${panel.dataset.panelTitle || panel.dataset.defaultTitle || "Panel"} moved`,
+              payload: {
+                col: Number(panel.dataset.gridCol) || 0,
+                row: Number(panel.dataset.gridRow) || 0,
+              },
+            });
           },
           onEnd: (didDrag) => {
             toolPointerCapture = false;
@@ -8989,6 +10104,19 @@ document.addEventListener("DOMContentLoaded", () => {
               applyOrderedGridLayout(layout);
             }, panel, { items: reflowItems, metrics: layoutMetrics });
             saveSharedGridLayouts(layout);
+            emitWorkspaceEvent({
+              type: workspaceObjectType(panel) === WORKSPACE_OBJECT_TYPES.divider ? "divider-resized" : "object-resized",
+              source: "resize",
+              layoutKey,
+              objectId: panel.dataset.panelKey || "",
+              objectType: workspaceObjectType(panel) === WORKSPACE_OBJECT_TYPES.divider ? "divider" : "panel",
+              regionId: regionIdForWorkspaceItem(panel),
+              label: `${panel.dataset.panelTitle || panel.dataset.defaultTitle || "Panel"} resized`,
+              payload: {
+                cols: Number(panel.dataset.currentSpan) || 0,
+                rows: Number(panel.dataset.gridRowSpan) || 0,
+              },
+            });
             syncCommittedWorkspaceScrollFloor(layout, {
               preserveViewport: document.body.classList.contains("dashboard-interaction-scroll-extended"),
             });
@@ -9041,6 +10169,290 @@ document.addEventListener("DOMContentLoaded", () => {
     refreshMiniMaps: refreshWorkspaceMiniMaps,
     regionSummaryForWidget: (widgetKey) => workspaceRegionSummaryForItem(widgetKey),
   };
+  const canonicalWidgetInstanceForPersistence = (widget, parentPanel = null) => {
+    const definition = widgetDefinitionForElement(widget);
+    const instance = widgetInstanceFromElement(widget, definition);
+    const mediaState = mediaWidgetAssetState(widget, instance.config || {}, definition);
+    const config = isMediaWidgetDefinition(definition) ? mediaState.persistedConfig : instance.config || {};
+    if (mediaState.changed) setWidgetConfig(widget, config);
+    const parentPanelId = parentPanel?.dataset?.panelKey || widget.dataset.parentPanelKey || null;
+    return {
+      id: instance.id || widget.dataset.widgetKey || "",
+      type: instance.type || definition.type || "unsupported",
+      layoutDomain: parentPanelId ? "panel-internal-grid" : "global-workspace-grid",
+      parentPanelId,
+      x: instance.x,
+      y: instance.y,
+      cols: instance.cols,
+      rows: instance.rows,
+      config,
+      contextOverrideId: instance.contextOverrideId || widget.dataset.contextOverrideId || null,
+      color: widget.dataset.panelColor || null,
+      title: widget.dataset.panelTitle || instance.config?.title || null,
+      pinned: widget.classList.contains("db-panel-pinned"),
+      locked: widget.dataset.locked === "true",
+      resizable: widget.dataset.resizable === "false" ? false : true,
+      minSize: {
+        cols: Number(widget.dataset.minW) || definition.minSize?.cols || 1,
+        rows: Number(widget.dataset.minH) || definition.minSize?.rows || 1,
+      },
+      workspaceObjectType: WORKSPACE_OBJECT_TYPES.widget,
+      context: workspaceContextFromElement(widget),
+    };
+  };
+
+  const canonicalPanelInstanceForPersistence = (panel) => {
+    const isDivider = workspaceObjectType(panel) === WORKSPACE_OBJECT_TYPES.divider;
+    const bounds = gridBoundsForItem(panel);
+    return {
+      id: panel.dataset.panelKey || "",
+      type: isDivider ? WORKSPACE_OBJECT_TYPES.divider : WORKSPACE_OBJECT_TYPES.panel,
+      layoutDomain: "global-workspace-grid",
+      x: bounds.col,
+      y: bounds.row,
+      cols: bounds.span,
+      rows: bounds.rowSpan,
+      title: panel.dataset.panelTitle || panel.querySelector(":scope > .db-panel-hd .db-panel-title")?.textContent?.trim() || null,
+      color: panel.dataset.panelColor || null,
+      collapsed: panel.classList.contains("db-panel-collapsed"),
+      pinned: panel.classList.contains("db-panel-pinned"),
+      locked: panel.dataset.locked === "true",
+      resizable: panel.dataset.resizable === "false" ? false : true,
+      savedHeight: panel.dataset.savedHeight ? Number(panel.dataset.savedHeight) : null,
+      expansionBaseline: serializableExpansionBaselineState(expansionBaselineSnapshotForLayoutKey(activeLayoutKeyForItem(panel)), panel),
+      childWidgetIds: panelChildWidgets(panel).map((widget) => widget.dataset.widgetKey).filter(Boolean),
+      context: workspaceContextFromElement(panel),
+      ...workspaceObjectPersistence(panel),
+    };
+  };
+
+  const canonicalAnchorInstanceForPersistence = (anchor) => ({
+    id: anchor.dataset.anchorKey || "",
+    type: WORKSPACE_OBJECT_TYPES.anchor,
+    layoutDomain: "anchor-rail",
+    railOrder: Number(anchor.dataset.anchorRailOrder) || 0,
+    railY: Number(anchor.dataset.anchorOffset) || ANCHOR_RAIL_START,
+    side: "left",
+    title: anchor.dataset.anchorTitle || anchor.querySelector(".workspace-anchor-label")?.textContent?.trim() || "Anchor",
+    color: anchor.dataset.panelColor || null,
+    linkedDividerId: anchor.dataset.linkedDividerId || null,
+    navigationTargetType: anchor.dataset.navigationTargetType || (anchor.dataset.linkedDividerId ? "divider" : "workspace-top"),
+    navigationTargetId: anchor.dataset.navigationTargetId || null,
+    workspaceObjectType: WORKSPACE_OBJECT_TYPES.anchor,
+    contextRole: anchor.dataset.contextRole || "navigation-reference",
+  });
+
+  const assetReferencesFromWidget = (widgetRecord) => {
+    if (!["image", "video", "document"].includes(widgetRecord.type)) return [];
+    const assetIdValue = String(widgetRecord.config?.assetId || "").trim();
+    if (!assetIdValue) return [];
+    return [{
+      id: assetIdValue,
+      widgetId: widgetRecord.id,
+      kind: widgetRecord.type,
+      persistence: "registry",
+    }];
+  };
+
+  const currentTransientPersistenceWarnings = (layoutKey = "builder") => {
+    const objectSelector = [
+      `.widget-layout[data-widget-layout-key="${CSS.escape(layoutKey)}"] .widget-card`,
+      `.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"] .db-panel`,
+      `.workspace-anchor-layer[data-anchor-layout-key="${CSS.escape(layoutKey)}"] .workspace-anchor-object`,
+    ].join(",");
+    const warnings = [];
+    document.querySelectorAll(objectSelector).forEach((item) => {
+      const classes = undoTransientItemClasses.filter((className) => item.classList.contains(className));
+      if (!classes.length) return;
+      warnings.push({
+        severity: "warning",
+        code: "transient-object-state",
+        objectId: workspaceObjectKey(item),
+        objectType: workspaceObjectType(item),
+        message: `Transient UI classes are active and will not be persisted: ${classes.join(", ")}`,
+      });
+    });
+    const transientNodes = document.querySelectorAll(
+      ".dashboard-live-resize, .dashboard-resize-preview, .dashboard-expanded-footprint-ghost, .dashboard-group-boundary, .dashboard-group-member-preview, .widget-placeholder, .db-panel-placeholder, .workspace-anchor-drag-ghost, .workspace-anchor-rail-placeholder"
+    );
+    if (transientNodes.length) {
+      warnings.push({
+        severity: "warning",
+        code: "transient-preview-nodes",
+        objectId: "",
+        objectType: "workspace",
+        message: `${transientNodes.length} transient preview node(s) are active and excluded from persistence.`,
+      });
+    }
+    return warnings;
+  };
+
+  const currentPersistedWorkspaceSnapshot = (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+    const panelLayout = document.querySelector(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"]`);
+    const widgetLayout = document.querySelector(`.widget-layout[data-widget-layout-key="${CSS.escape(layoutKey)}"]`);
+    if (panelLayout) syncWorkspaceRegions(panelLayout);
+    if (widgetLayout) syncWorkspaceRegions(widgetLayout);
+
+    const panels = panelLayout
+      ? [...panelLayout.querySelectorAll(":scope > .db-panel:not([hidden])")]
+          .filter((panel) => workspaceObjectType(panel) !== WORKSPACE_OBJECT_TYPES.divider)
+          .map(canonicalPanelInstanceForPersistence)
+      : [];
+    const dividers = panelLayout
+      ? [...panelLayout.querySelectorAll(":scope > .db-panel:not([hidden])")]
+          .filter((panel) => workspaceObjectType(panel) === WORKSPACE_OBJECT_TYPES.divider)
+          .map(canonicalPanelInstanceForPersistence)
+      : [];
+    const rootWidgets = widgetLayout
+      ? [...widgetLayout.querySelectorAll(":scope > .widget-card:not(.workspace-anchor-object):not([hidden])")]
+          .map((widget) => canonicalWidgetInstanceForPersistence(widget, null))
+      : [];
+    const childWidgets = panelLayout
+      ? [...panelLayout.querySelectorAll(":scope > .db-panel:not([hidden])")]
+          .flatMap((panel) => panelChildWidgets(panel).map((widget) => canonicalWidgetInstanceForPersistence(widget, panel)))
+      : [];
+    const widgets = [...rootWidgets, ...childWidgets];
+    const anchorLayer = anchorLayerForLayoutKey(layoutKey);
+    const anchors = anchorLayer ? anchorRailAnchors(anchorLayer).map(canonicalAnchorInstanceForPersistence) : [];
+    const objects = [
+      ...widgets.map((widget) => ({ id: widget.id, type: WORKSPACE_OBJECT_TYPES.widget, layoutDomain: widget.layoutDomain, parentId: widget.parentPanelId || null })),
+      ...panels.map((panel) => ({ id: panel.id, type: WORKSPACE_OBJECT_TYPES.panel, layoutDomain: panel.layoutDomain, parentId: null })),
+      ...dividers.map((divider) => ({ id: divider.id, type: WORKSPACE_OBJECT_TYPES.divider, layoutDomain: divider.layoutDomain, parentId: null })),
+      ...anchors.map((anchor) => ({ id: anchor.id, type: WORKSPACE_OBJECT_TYPES.anchor, layoutDomain: anchor.layoutDomain, parentId: null })),
+    ];
+    return {
+      version: PERSISTED_WORKSPACE_VERSION,
+      layoutKey,
+      profile,
+      savedAt: new Date().toISOString(),
+      objects,
+      widgets,
+      panels,
+      dividers,
+      anchors,
+      contexts: loadWorkspaceContexts(layoutKey, profile),
+      dataSources: loadDataSources(layoutKey, profile),
+      assets: loadAssets(layoutKey, profile),
+      assetReferences: widgets.flatMap(assetReferencesFromWidget),
+    };
+  };
+
+  const knownWidgetRuntimeTypes = () => new Set(
+    (widgetRuntime?.listWidgetDefinitions?.() || []).map((definition) => definition.type)
+  );
+
+  const validatePersistedWorkspaceSnapshot = (snapshot = currentPersistedWorkspaceSnapshot()) => {
+    const diagnostics = [];
+    const addDiagnostic = (severity, code, message, objectId = "", objectType = "") => {
+      diagnostics.push({ severity, code, message, objectId, objectType });
+    };
+    const ids = new Map();
+    const addId = (type, id) => {
+      if (!id) {
+        addDiagnostic("error", "missing-object-id", `${type} is missing a stable id.`, "", type);
+        return;
+      }
+      if (ids.has(id)) {
+        addDiagnostic("error", "duplicate-object-id", `Duplicate object id "${id}" found for ${type}.`, id, type);
+        return;
+      }
+      ids.set(id, type);
+    };
+    const panelIds = new Set((snapshot.panels || []).map((panel) => panel.id).filter(Boolean));
+    const dividerIds = new Set((snapshot.dividers || []).map((divider) => divider.id).filter(Boolean));
+    const assetIds = new Set((snapshot.assets || []).map((asset) => asset.id).filter(Boolean));
+    const contextIds = new Set();
+    const widgetTypes = knownWidgetRuntimeTypes();
+    (snapshot.widgets || []).forEach((widget) => {
+      addId(WORKSPACE_OBJECT_TYPES.widget, widget.id);
+      if (!widget.type) addDiagnostic("error", "missing-widget-type", "Widget is missing a runtime type.", widget.id, WORKSPACE_OBJECT_TYPES.widget);
+      if (widget.type && !widgetTypes.has(widget.type)) {
+        addDiagnostic("warning", "unknown-widget-type", `Widget type "${widget.type}" will render through the unsupported-widget fallback.`, widget.id, WORKSPACE_OBJECT_TYPES.widget);
+      }
+      if (widget.parentPanelId && !panelIds.has(widget.parentPanelId)) {
+        addDiagnostic("error", "missing-parent-panel", `Panel child widget references missing panel "${widget.parentPanelId}".`, widget.id, WORKSPACE_OBJECT_TYPES.widget);
+      }
+      if (["image", "video", "document"].includes(widget.type) && widget.config?.assetId && !assetIds.has(widget.config.assetId)) {
+        addDiagnostic("warning", "missing-asset", `Media widget references missing asset "${widget.config.assetId}".`, widget.id, WORKSPACE_OBJECT_TYPES.widget);
+      }
+      if (["image", "video", "document"].includes(widget.type) && widget.config?.src) {
+        addDiagnostic("warning", "legacy-media-src", "Media widget config still contains a legacy src field; it should migrate to assetId.", widget.id, WORKSPACE_OBJECT_TYPES.widget);
+      }
+    });
+    (snapshot.panels || []).forEach((panel) => addId(WORKSPACE_OBJECT_TYPES.panel, panel.id));
+    (snapshot.dividers || []).forEach((divider) => {
+      addId(WORKSPACE_OBJECT_TYPES.divider, divider.id);
+      if (divider.contextScopeId && !String(divider.contextScopeId).includes(":region:")) {
+        addDiagnostic("warning", "divider-context-id-format", "Divider context id does not look like a workspace region id.", divider.id, WORKSPACE_OBJECT_TYPES.divider);
+      }
+    });
+    (snapshot.anchors || []).forEach((anchor) => {
+      addId(WORKSPACE_OBJECT_TYPES.anchor, anchor.id);
+      if (anchor.linkedDividerId && !dividerIds.has(anchor.linkedDividerId)) {
+        addDiagnostic("warning", "missing-linked-divider", `Anchor references missing divider "${anchor.linkedDividerId}" and will fall back to Top.`, anchor.id, WORKSPACE_OBJECT_TYPES.anchor);
+      }
+      if ("linkedDividerTop" in anchor || "targetTop" in anchor || "scrollTop" in anchor) {
+        addDiagnostic("error", "anchor-stores-pixel-target", "Anchor persistence must store divider identity only, not cached pixel coordinates.", anchor.id, WORKSPACE_OBJECT_TYPES.anchor);
+      }
+    });
+    (snapshot.contexts || []).forEach((context) => {
+      if (!context?.id) {
+        addDiagnostic("error", "missing-context-id", "Workspace context is missing an id.", "", "context");
+        return;
+      }
+      if (contextIds.has(context.id)) addDiagnostic("error", "duplicate-context-id", `Duplicate context id "${context.id}".`, context.id, "context");
+      contextIds.add(context.id);
+    });
+    (snapshot.assets || []).forEach((asset) => {
+      addId("asset", asset.id);
+      if (asset.source?.kind === "blob-url" || String(asset.source?.ref || "").startsWith("blob:")) {
+        addDiagnostic("warning", "temporary-asset-reference", "Temporary blob URLs are not durable saved asset references.", asset.id, "asset");
+      }
+    });
+    currentTransientPersistenceWarnings(snapshot.layoutKey).forEach((warning) => diagnostics.push(warning));
+    const errors = diagnostics.filter((entry) => entry.severity === "error");
+    const warnings = diagnostics.filter((entry) => entry.severity !== "error");
+    return {
+      ok: errors.length === 0,
+      version: snapshot.version || 0,
+      layoutKey: snapshot.layoutKey || "builder",
+      profile: snapshot.profile || getActivePanelProfile(snapshot.layoutKey || "builder"),
+      errors,
+      warnings,
+      diagnostics,
+    };
+  };
+
+  const savePersistedWorkspaceSnapshot = (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+    const snapshot = currentPersistedWorkspaceSnapshot(layoutKey, profile);
+    writeJsonStore(persistedWorkspaceKey(layoutKey, profile), snapshot);
+    return snapshot;
+  };
+
+  const loadPersistedWorkspaceSnapshot = (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+    const saved = readJsonStore(persistedWorkspaceKey(layoutKey, profile), null);
+    if (!saved || Number(saved.version) !== PERSISTED_WORKSPACE_VERSION) return currentPersistedWorkspaceSnapshot(layoutKey, profile);
+    return saved;
+  };
+
+  const migratePersistedWorkspaceSnapshot = (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+    const saved = readJsonStore(persistedWorkspaceKey(layoutKey, profile), null);
+    if (saved && Number(saved.version) === PERSISTED_WORKSPACE_VERSION) return saved;
+    return savePersistedWorkspaceSnapshot(layoutKey, profile);
+  };
+
+  window.dashboardPersistenceRuntime = {
+    version: PERSISTED_WORKSPACE_VERSION,
+    keyForLayout: persistedWorkspaceKey,
+    snapshot: currentPersistedWorkspaceSnapshot,
+    saveSnapshot: savePersistedWorkspaceSnapshot,
+    loadSnapshot: loadPersistedWorkspaceSnapshot,
+    migrateLegacyLayout: migratePersistedWorkspaceSnapshot,
+    validate: (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) =>
+      validatePersistedWorkspaceSnapshot(currentPersistedWorkspaceSnapshot(layoutKey, profile)),
+    validateSnapshot: validatePersistedWorkspaceSnapshot,
+  };
+
   const selectedWorkspaceObjectSummary = () => {
     const selected = selectedGroupItems(null);
     const active = document.querySelector(".widget-tools-open, .db-panel-tools-open, .workspace-anchor-object.anchor-tools-open") ||
@@ -9065,6 +10477,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const regionSummary = widget
       ? workspaceRegionSummaryForItem(widget)
       : workspaceRegionSummaryForItem(null, { layoutKey });
+    const persistenceValidation = validatePersistedWorkspaceSnapshot(currentPersistedWorkspaceSnapshot(layoutKey, getActivePanelProfile(layoutKey)));
     return {
       engineerMode: isEngineerMode(),
       target,
@@ -9090,21 +10503,31 @@ document.addEventListener("DOMContentLoaded", () => {
         startRow: region.startRow,
         endRow: region.endRow,
       })),
+      persistence: {
+        version: persistenceValidation.version,
+        ok: persistenceValidation.ok,
+        errors: persistenceValidation.errors,
+        warnings: persistenceValidation.warnings.slice(0, 12),
+      },
     };
+  };
+  window.dashboardEngineerMode = {
+    isEnabled: isEngineerMode,
+    getState: () => ({ ...engineerModeState }),
+    set: (enabled) => setEngineerMode(Boolean(enabled), { source: "api" }),
+    toggle: () => toggleEngineerMode(),
+    onChange: onEngineerModeChange,
+    refresh: () => {
+      refreshEngineerContextVisibility();
+      return { ...engineerModeState };
+    },
   };
   window.dashboardMetaRuntime = {
     isEngineerMode,
     recordActivity: recordWorkspaceActivity,
     recentActivity: (options = {}) => {
       const maxItems = Math.max(1, Math.min(20, Number(options.maxItems) || 8));
-      const eventTypes = Array.isArray(options.eventTypes) ? options.eventTypes.filter(Boolean) : [];
-      const scope = options.scope || "workspace";
-      const regionId = options.regionId || options.resolvedContext?.regionId || "";
-      const filtered = workspaceActivityEvents.filter((event) => {
-        if (eventTypes.length && !eventTypes.includes(event.type)) return false;
-        if (scope === "currentRegion" && regionId && event.regionId && event.regionId !== regionId) return false;
-        return true;
-      });
+      const filtered = recentWorkspaceEvents({ ...options, maxItems });
       return (filtered.length ? filtered : [{
         id: "activity-workspace-ready",
         type: "workspace-update",
@@ -9134,6 +10557,25 @@ document.addEventListener("DOMContentLoaded", () => {
     },
     contextSnapshot: currentContextInspectorSnapshot,
     selectedObject: selectedWorkspaceObjectSummary,
+  };
+  window.dashboardWorkspaceEvents = {
+    emit: emitWorkspaceEvent,
+    on: onWorkspaceEvent,
+    subscribe: onWorkspaceEvent,
+    recent: recentWorkspaceEvents,
+    history: () => [...workspaceEvents],
+    clear: () => {
+      workspaceEvents.splice(0);
+      scheduleWorkspaceMetaRefresh();
+    },
+    configure: ({ retention } = {}) => {
+      if (Number.isFinite(Number(retention))) {
+        workspaceEventRetention = Math.max(1, Math.min(1000, Number(retention)));
+        workspaceEvents.splice(workspaceEventRetention);
+      }
+      return { retention: workspaceEventRetention };
+    },
+    retention: () => workspaceEventRetention,
   };
 
   const bindRangeCustomControls = (root = document) => {
@@ -9291,23 +10733,48 @@ document.addEventListener("DOMContentLoaded", () => {
     adapters: () => [...dataSourceAdapters.keys()],
     setDataSources: (layoutKey = "builder", sources = [], profile = getActivePanelProfile(layoutKey)) => {
       saveDataSources(layoutKey, profile, sources);
+      invalidateManagedWidgetQueriesForLayout(layoutKey);
       refreshResolvedContextDebug(layoutKey, profile);
       pushLiveLayoutUndo(layoutKey, profile);
+      emitWorkspaceEvent({
+        type: "context-changed",
+        source: "context-engine",
+        layoutKey,
+        label: "Data sources changed",
+        payload: { profile, dataSourceCount: Array.isArray(sources) ? sources.length : 0 },
+      });
       return loadDataSources(layoutKey, profile);
     },
     getDataSources: (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => loadDataSources(layoutKey, profile),
     setWorkspaceContexts: (layoutKey = "builder", contexts = [], profile = getActivePanelProfile(layoutKey)) => {
       saveWorkspaceContexts(layoutKey, profile, contexts);
+      invalidateManagedWidgetQueriesForLayout(layoutKey);
       refreshResolvedContextDebug(layoutKey, profile);
       pushLiveLayoutUndo(layoutKey, profile);
+      emitWorkspaceEvent({
+        type: "context-changed",
+        source: "context-engine",
+        layoutKey,
+        label: "Workspace contexts changed",
+        payload: { profile, contextCount: Array.isArray(contexts) ? contexts.length : 0 },
+      });
       return loadWorkspaceContexts(layoutKey, profile);
     },
     setWorkspaceContext: (layoutKey = "builder", context, profile = getActivePanelProfile(layoutKey)) => {
       const contexts = loadWorkspaceContexts(layoutKey, profile).filter((entry) => entry.id !== context?.id);
       if (context?.id) contexts.push(context);
       saveWorkspaceContexts(layoutKey, profile, contexts);
+      invalidateManagedWidgetQueriesForLayout(layoutKey);
       refreshResolvedContextDebug(layoutKey, profile);
       pushLiveLayoutUndo(layoutKey, profile);
+      emitWorkspaceEvent({
+        type: "context-changed",
+        source: "context-engine",
+        layoutKey,
+        regionId: context?.id || "",
+        label: "Workspace context changed",
+        payload: { profile, contextId: context?.id || "" },
+      });
       return context;
     },
     getWorkspaceContexts: (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => loadWorkspaceContexts(layoutKey, profile),
@@ -9320,7 +10787,18 @@ document.addEventListener("DOMContentLoaded", () => {
       const regionId = workspaceRegionIdForDivider(node, layoutKey);
       const nextContext = { ...context, id: regionId, name: context?.name || node.dataset.defaultTitle || "Workspace context" };
       applyWorkspaceContextToElement(node, nextContext);
+      invalidateManagedWidgetQueriesForLayout(layoutKey);
       saveWorkspaceContextState(layoutKey, resolvedProfile);
+      emitWorkspaceEvent({
+        type: "divider-context-changed",
+        source: "context-engine",
+        layoutKey,
+        objectId: node.dataset.panelKey || "",
+        objectType: "divider",
+        regionId,
+        label: "Divider context changed",
+        payload: { profile: resolvedProfile, contextId: regionId },
+      });
       return nextContext;
     },
     resolveContextForElement: (item) => resolveWorkspaceContextForItem(typeof item === "string" ? document.querySelector(item) : item),
@@ -9441,7 +10919,12 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         localStorage.setItem(`${panelProfilePrefix}${layoutKey}`, selected);
       } catch {}
-      showToast(`Loading layout ${selected}.`);
+      showToast(`Loading layout ${selected}.`, "info", {
+        type: "layout-load-completed",
+        source: "layout-load",
+        layoutKey,
+        payload: { profile: selected },
+      });
       window.location.reload();
     });
   });
@@ -9453,19 +10936,27 @@ document.addEventListener("DOMContentLoaded", () => {
       const currentProfile = getActivePanelProfile(layoutKey);
       const currentDataSources = loadDataSources(layoutKey, currentProfile);
       const currentWorkspaceContexts = loadWorkspaceContexts(layoutKey, currentProfile);
+      const currentAssets = loadAssets(layoutKey, currentProfile);
       try {
         localStorage.setItem(`${panelProfilePrefix}${layoutKey}`, selected);
         layoutStorageKeys(layoutKey, selected).forEach((key) => localStorage.removeItem(key));
       } catch {}
       saveDataSources(layoutKey, selected, currentDataSources);
       saveWorkspaceContexts(layoutKey, selected, currentWorkspaceContexts);
+      saveAssets(layoutKey, selected, currentAssets);
       const layout = document.querySelector(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"]`);
       if (layout) savePanelLayouts(layout, selected, { persist: true });
       const widgetLayout = document.querySelector(`.widget-layout[data-widget-layout-key="${CSS.escape(layoutKey)}"]`);
       if (widgetLayout) saveWidgetLayouts(widgetLayout, selected, { persist: true });
       saveFloatingAnchors(layoutKey, selected, { persist: true });
       saveWorkspaceContextState(layoutKey, selected, { persist: true, history: false });
-      showToast(`Layout ${selected} saved.`);
+      savePersistedWorkspaceSnapshot(layoutKey, selected);
+      showToast(`Layout ${selected} saved.`, "info", {
+        type: "layout-save-completed",
+        source: "layout-save",
+        layoutKey,
+        payload: { profile: selected },
+      });
     });
   });
 
@@ -9578,7 +11069,15 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       layout.__initPanel?.(panel);
       savePanelLayouts(layout, selected);
-      showToast(`${title} added.`);
+      showToast(`${title} added.`, "info", {
+        type: "object-created",
+        source: "object-add",
+        layoutKey,
+        objectId: key,
+        objectType: "panel",
+        regionId: regionIdForWorkspaceItem(panel),
+        payload: { title, cols: Number(panel.dataset.currentSpan) || 1, rows: Number(panel.dataset.gridRowSpan) || 1 },
+      });
     });
   });
 
@@ -9624,7 +11123,15 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       layout.__initPanel?.(divider);
       savePanelLayouts(layout, selected);
-      showToast(`${definition.title} added.`);
+      showToast(`${definition.title} added.`, "info", {
+        type: "object-created",
+        source: "object-add",
+        layoutKey,
+        objectId: key,
+        objectType: "divider",
+        regionId: regionIdForWorkspaceItem(divider),
+        payload: { title: definition.title, dividerKind: button.dataset.dividerKind || "divider" },
+      });
     });
   });
 
@@ -9657,7 +11164,14 @@ document.addEventListener("DOMContentLoaded", () => {
         normalizeAnchorLayer(layer);
         saveFloatingAnchors(layoutKey, selected);
         refreshWorkspaceMiniMaps(layoutKey);
-        showToast(`${title} added.`);
+        showToast(`${title} added.`, "info", {
+          type: "object-created",
+          source: "object-add",
+          layoutKey,
+          objectId: anchor.dataset.anchorKey,
+          objectType: "anchor",
+          payload: { title, railOrder: Number(anchor.dataset.anchorRailOrder) || 0, offset: Number(anchor.dataset.anchorOffset) || 0 },
+        });
         return;
       }
       if (!layout) return;
@@ -9710,7 +11224,20 @@ document.addEventListener("DOMContentLoaded", () => {
       bindDashboardKeywordForms(widget);
       refreshResolvedContextDebug(layoutKey, selected);
       saveWidgetLayouts(layout, selected);
-      showToast(`${objectName || title} added.`);
+      showToast(`${objectName || title} added.`, "info", {
+        type: "object-created",
+        source: "object-add",
+        layoutKey,
+        objectId: key,
+        objectType: "widget",
+        regionId: regionIdForWorkspaceItem(widget),
+        payload: {
+          title,
+          widgetType: runtimeDefinition.type,
+          cols: Number(widget.dataset.currentSpan) || definition.span,
+          rows: Number(widget.dataset.gridRowSpan) || definition.rowSpan,
+        },
+      });
     });
   });
 
@@ -9719,7 +11246,16 @@ document.addEventListener("DOMContentLoaded", () => {
       if (options.toast !== false) showToast("No layout change to undo.", "warn");
       return false;
     }
-    if (options.toast !== false) showToast("Layout change undone.");
+    if (options.toast !== false) {
+      showToast("Layout change undone.", "info", {
+        type: "history-undo",
+        source: "history",
+        layoutKey,
+        payload: { profile },
+      });
+    } else {
+      emitWorkspaceEvent({ type: "history-undo", source: "history", layoutKey, label: "Layout change undone", payload: { profile } });
+    }
     return true;
   };
 
@@ -9728,7 +11264,16 @@ document.addEventListener("DOMContentLoaded", () => {
       if (options.toast !== false) showToast("No layout change to redo.", "warn");
       return false;
     }
-    if (options.toast !== false) showToast("Layout change redone.");
+    if (options.toast !== false) {
+      showToast("Layout change redone.", "info", {
+        type: "history-redo",
+        source: "history",
+        layoutKey,
+        payload: { profile },
+      });
+    } else {
+      emitWorkspaceEvent({ type: "history-redo", source: "history", layoutKey, label: "Layout change redone", payload: { profile } });
+    }
     return true;
   };
 
@@ -9804,6 +11349,7 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         localStorage.removeItem(dataSourcesKey(layoutKey, profile));
         localStorage.removeItem(workspaceContextsKey(layoutKey, profile));
+        localStorage.removeItem(persistedWorkspaceKey(layoutKey, profile));
       } catch {}
       widgetLayouts.forEach((layout) => {
         writeDraftList(layout, "hiddenWidgetsDraft", []);

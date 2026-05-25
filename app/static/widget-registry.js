@@ -26,6 +26,41 @@
     rows: Math.max(1, Number(size?.rows) || fallbackRows),
   });
 
+  const normalizedSettingsSchema = (schema = {}, fallbackSettings = []) => {
+    const sections = Array.isArray(schema.sections) ? schema.sections : [];
+    const normalizedSections = sections.map((section, sectionIndex) => ({
+      id: String(section.id || `section-${sectionIndex}`),
+      label: String(section.label || "Settings"),
+      fields: (Array.isArray(section.fields) ? section.fields : []).map((field) => ({
+        key: String(field.key || "").trim(),
+        label: String(field.label || field.key || ""),
+        type: String(field.type || "text"),
+        defaultValue: field.defaultValue,
+        options: Array.isArray(field.options) ? field.options : [],
+        placeholder: field.placeholder || "",
+        min: field.min,
+        max: field.max,
+        step: field.step,
+        required: Boolean(field.required),
+        multiple: Boolean(field.multiple),
+        valueType: field.valueType || null,
+        affectsQuery: Boolean(field.affectsQuery),
+        affectsContext: Boolean(field.affectsContext),
+        validation: field.validation || {},
+      })).filter((field) => field.key),
+    })).filter((section) => section.fields.length);
+    return {
+      version: Number(schema.version) || 1,
+      sections: normalizedSections.length ? normalizedSections : [{
+        id: "general",
+        label: "General",
+        fields: fallbackSettings
+          .filter((setting) => ["title", "label"].includes(setting))
+          .map((setting) => ({ key: setting, label: "Title", type: "text", affectsQuery: false, affectsContext: false, validation: {} })),
+      }].filter((section) => section.fields.length),
+    };
+  };
+
   const defaultQueryFields = (resolvedContext) => {
     const mapping = resolvedContext?.semanticMapping || {};
     return [
@@ -40,6 +75,38 @@
   };
 
   const unique = (values) => [...new Set(values.filter(Boolean))];
+  const DENSITY_TIERS = ["tiny", "compact", "standard", "expanded", "rich"];
+  const normalizeDensity = (value, fallback = "standard") => DENSITY_TIERS.includes(value) ? value : fallback;
+  const resolveWidgetDensity = (instance = {}, availableSize = {}, definition = null) => {
+    if (definition?.densityBehavior?.resolve && typeof definition.densityBehavior.resolve === "function") {
+      return normalizeDensity(definition.densityBehavior.resolve(instance, availableSize), "standard");
+    }
+    const cols = Number(instance.cols) || Number(definition?.defaultSize?.cols) || 1;
+    const rows = Number(instance.rows) || Number(definition?.defaultSize?.rows) || 1;
+    const width = Number(availableSize.width) || 0;
+    const height = Number(availableSize.height) || 0;
+    const panelContained = Boolean(availableSize.panelContained || instance.parentPanelId);
+    let score = cols + (rows * 1.35);
+    if (width && width < 132) score -= 1.25;
+    else if (width && width >= 520) score += 1;
+    if (height && height < 82) score -= 1.15;
+    else if (height && height >= 280) score += 1;
+    if (panelContained) score -= 0.35;
+    if ((width && width < 118) || (height && height < 58)) return "tiny";
+    if (score <= 4) return "compact";
+    if (score >= 10) return "rich";
+    if (score >= 7) return "expanded";
+    return "standard";
+  };
+  const compactDensity = (density) => ["tiny", "compact"].includes(normalizeDensity(density));
+  const richDensity = (density) => ["expanded", "rich"].includes(normalizeDensity(density));
+  const chartVisualDensity = (density) => {
+    const tier = normalizeDensity(density);
+    if (tier === "tiny") return "tiny";
+    if (tier === "compact") return "small";
+    if (tier === "rich") return "large";
+    return "medium";
+  };
 
   const numberValue = (value) => {
     if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -268,12 +335,11 @@
   };
 
   const chartDensityFor = (instance) => {
-    const cols = Number(instance?.cols) || 2;
-    const rows = Number(instance?.rows) || 2;
+    const cols = Number(instance?.cols) || 1;
+    const rows = Number(instance?.rows) || 1;
     if (cols <= 2 && rows <= 1) return "tiny";
-    if (cols <= 2 || rows <= 2) return "small";
-    if (cols >= 4 && rows >= 4) return "large";
-    return "medium";
+    const tier = normalizeDensity(instance?.density, resolveWidgetDensity(instance));
+    return chartVisualDensity(tier);
   };
 
   const chartSemantic = (resolvedContext) => resolvedContext?.semanticMapping || {};
@@ -367,8 +433,9 @@
   })).filter((entry) => entry.value != null);
   const chartFrame = ({ instance, definition, density, body, meta = "", legend = "" }) => {
     const title = instance.config?.title || definition.displayName || "Chart";
+    const densityTier = normalizeDensity(instance?.density, resolveWidgetDensity(instance));
     return `
-      <div class="runtime-chart-widget runtime-chart-density-${density}" data-chart-type="${escapeHtml(definition.chartType)}" data-chart-category="${escapeHtml(definition.category || "general")}">
+      <div class="runtime-chart-widget runtime-chart-density-${density} widget-density-${densityTier}" data-density="${escapeHtml(densityTier)}" data-chart-type="${escapeHtml(definition.chartType)}" data-chart-category="${escapeHtml(definition.category || "general")}">
         <div class="runtime-chart-header">
           <span class="stat-lbl">${escapeHtml(title)}</span>
           ${meta ? `<span class="runtime-chart-meta">${escapeHtml(meta)}</span>` : ""}
@@ -823,6 +890,8 @@
       supportedSettings: Array.isArray(definition.supportedSettings)
         ? definition.supportedSettings
         : ["title", "color", "pin", "delete"],
+      settingsSchema: normalizedSettingsSchema(definition.settingsSchema, definition.supportedSettings || ["title"]),
+      densityBehavior: definition.densityBehavior || {},
       queryRequirements: definition.queryRequirements || { fields: [] },
       getDefaultConfig,
       resolveQuery: typeof definition.resolveQuery === "function" ? definition.resolveQuery : () => null,
@@ -852,14 +921,24 @@
       ...resolvedDefinition.getDefaultConfig(),
       ...parseConfig(overrides.config),
     };
+    const cols = Number(overrides.cols) || Number(overrides.span) || resolvedDefinition.defaultSize.cols;
+    const rows = Number(overrides.rows) || Number(overrides.rowSpan) || resolvedDefinition.defaultSize.rows;
+    const density = normalizeDensity(overrides.density, resolveWidgetDensity({
+      cols,
+      rows,
+      parentPanelId: overrides.parentPanelId || null,
+    }, overrides.availableSize || {}, resolvedDefinition));
     return {
       id: overrides.id || overrides.key || "",
       type: resolvedDefinition.type,
       x: Number(overrides.x) || Number(overrides.gridCol) || 1,
       y: Number(overrides.y) || Number(overrides.gridRow) || 1,
-      cols: Number(overrides.cols) || Number(overrides.span) || resolvedDefinition.defaultSize.cols,
-      rows: Number(overrides.rows) || Number(overrides.rowSpan) || resolvedDefinition.defaultSize.rows,
+      cols,
+      rows,
       config,
+      density,
+      availableSize: overrides.availableSize || null,
+      parentPanelId: overrides.parentPanelId || null,
       contextOverrideId: overrides.contextOverrideId || null,
     };
   };
@@ -867,11 +946,13 @@
   const renderWidget = (definition, props = {}) => {
     const resolvedDefinition = typeof definition === "string" ? getWidgetDefinition(definition) : definition;
     const instance = props.instance || createWidgetInstance(resolvedDefinition, {});
+    const density = normalizeDensity(props.density || instance.density, resolveWidgetDensity(instance, instance.availableSize || {}, resolvedDefinition));
     const status = props.status || "empty";
     try {
       return resolvedDefinition.render({
         ...props,
-        instance,
+        density,
+        instance: { ...instance, density },
         definition: resolvedDefinition,
         status,
       });
@@ -899,6 +980,18 @@
       supportsResize: true,
     },
     supportedSettings: ["title", "value", "color", "pin", "duplicate", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "metric",
+        label: "Metric",
+        fields: [
+          { key: "label", label: "Label", type: "text", defaultValue: "Widget" },
+          { key: "metric", label: "Metric", type: "metricPicker", defaultValue: "count", options: ["count", "sum", "avg", "min", "max"], affectsQuery: true },
+          { key: "valueField", label: "Value field", type: "fieldPicker", affectsQuery: true },
+          { key: "format", label: "Format", type: "select", defaultValue: "number", options: ["number", "currency", "percent"] },
+        ],
+      }],
+    },
     queryRequirements: { fields: ["semantic"], metric: ["count", "sum", "avg", "min", "max"] },
     getDefaultConfig: () => ({ label: "Widget", title: "Widget", metric: "count", format: "number" }),
     resolveQuery: (config, resolvedContext) => {
@@ -918,8 +1011,9 @@
         sort: Array.isArray(config.sort) ? config.sort : [],
       };
     },
-    render: ({ instance, resolvedContext, data, status }) => {
+    render: ({ instance, resolvedContext, data, status, density = instance.density || "standard" }) => {
       const config = instance.config || {};
+      const densityTier = normalizeDensity(density);
       const label = statLabelFor(config);
       const metric = ["count", "sum", "avg", "min", "max"].includes(config.metric) ? config.metric : "count";
       const mapping = resolvedContext?.semanticMapping || data?.semanticMapping || {};
@@ -944,7 +1038,7 @@
       }
       return `
         <span class="stat-val">${escapeHtml(formatMetricValue(value, config.format))}</span>
-        <span class="stat-lbl">${escapeHtml(label)}</span>`;
+        ${densityTier === "tiny" ? "" : `<span class="stat-lbl">${escapeHtml(label)}</span>`}`;
     },
   });
 
@@ -978,7 +1072,7 @@
       presets: TIMEFRAME_PRESETS.map((preset) => preset.id),
     }),
     resolveQuery: () => null,
-    render: ({ instance, resolvedContext }) => {
+    render: ({ instance, resolvedContext, density: densityProp = instance.density || "standard" }) => {
       const config = instance.config || {};
       const configuredPresets = Array.isArray(config.presets) && config.presets.length
         ? config.presets
@@ -991,20 +1085,23 @@
       const selectedPreset = String(config.selectedPreset || config.preset || "").trim();
       const timeRange = resolveTimeRangeConfig(config, resolvedContext);
       const label = timeframeLabel(timeRange, config.activeLabel || "Any time");
+      const densityTier = normalizeDensity(densityProp);
       const cols = Number(instance.cols) || 4;
       const rows = Number(instance.rows) || 1;
       const density = cols <= 2
         ? "small"
-        : rows >= 2 || cols >= 5
+        : rows >= 2 || cols >= 5 || richDensity(densityTier)
           ? "large"
-          : "medium";
+          : compactDensity(densityTier)
+            ? "small"
+            : "medium";
       const visiblePresets = density === "large"
         ? presets
         : presets.filter((preset) => ["today", "last_7_days", "last_30_days"].includes(preset.id));
       const customStart = config.customStart || timeRange?.start || "";
       const customEnd = config.customEnd || timeRange?.end || "";
       return `
-        <div class="timeframe-command-surface timeframe-density-${density}" data-timeframe-current-label="${escapeHtml(label)}">
+        <div class="timeframe-command-surface timeframe-density-${density} widget-density-${densityTier}" data-density="${escapeHtml(densityTier)}" data-timeframe-current-label="${escapeHtml(label)}">
           ${density === "small" ? "" : `<div class="range-controls timeframe-controls">
             <div class="range-presets timeframe-presets" role="group" aria-label="Time range presets">
               ${visiblePresets.map((preset) => `<button class="preset-btn${preset.id === selectedPreset ? " active" : ""}" type="button" data-timeframe-preset="${escapeHtml(preset.id)}" aria-pressed="${preset.id === selectedPreset ? "true" : "false"}">${escapeHtml(preset.label)}</button>`).join("")}
@@ -1048,10 +1145,11 @@
     resolveQuery: (config) => config.query
       ? { filters: [{ field: config.field || "query", operator: "contains", value: config.query }] }
       : null,
-    render: ({ instance }) => {
+    render: ({ instance, density = instance.density || "standard" }) => {
       const title = instance.config.title || "Search";
+      const densityTier = normalizeDensity(density);
       return `
-        <div class="search-widget-content">
+        <div class="search-widget-content search-widget-density-${densityTier}" data-density="${escapeHtml(densityTier)}">
           <div class="range-search search-widget-control" role="search" aria-label="${escapeHtml(title)}">
             <input class="range-search-input search-widget-input" type="search" placeholder="${escapeHtml(instance.config.placeholder || " ")}" autocomplete="off" aria-label="${escapeHtml(title)}" value="${escapeHtml(instance.config.query || "")}">
           </div>
@@ -1352,6 +1450,11 @@
       const mapping = context.semanticMapping || {};
       const filters = Array.isArray(context.filters) ? context.filters : [];
       const regions = Array.isArray(snapshot.regions) ? snapshot.regions : [];
+      const persistence = snapshot.persistence || {};
+      const persistenceWarnings = [
+        ...(Array.isArray(persistence.errors) ? persistence.errors : []),
+        ...(Array.isArray(persistence.warnings) ? persistence.warnings : []),
+      ];
       const density = metaDensity(instance);
       return `
         <div class="meta-widget context-inspector-widget meta-density-${density}" data-meta-widget="context-inspector" data-inspector-target="${escapeHtml(config.target || "currentRegion")}">
@@ -1376,6 +1479,10 @@
               <span>Time range</span>
               <strong>${escapeHtml(timeRangeDisplay(context.timeRange) || "None")}</strong>
             </section>
+            <section>
+              <span>Persistence</span>
+              <strong>${persistenceWarnings.length ? `${persistenceWarnings.length} warning${persistenceWarnings.length === 1 ? "" : "s"}` : "OK"}</strong>
+            </section>
           </div>
           <pre class="context-inspector-code">${escapeHtml(JSON.stringify({
             contextId: context.id || "",
@@ -1385,6 +1492,15 @@
             timeRange: context.timeRange || null,
             selectedObject: snapshot.selectedObject || null,
             regions: config.showInheritanceTree === false ? undefined : regions.slice(0, 6),
+            persistence: {
+              version: persistence.version || 0,
+              ok: persistence.ok !== false,
+              diagnostics: persistenceWarnings.map((entry) => ({
+                code: entry.code,
+                objectId: entry.objectId,
+                message: entry.message,
+              })),
+            },
           }, null, 2))}</pre>
         </div>`;
     },
@@ -1409,14 +1525,15 @@
     },
     supportedSettings: ["source", "fit", "caption", "color", "pin", "duplicate", "delete"],
     queryRequirements: { fields: [] },
-    getDefaultConfig: () => ({ title: "Image", src: "", alt: "", fit: "contain", caption: "" }),
+    getDefaultConfig: () => ({ title: "Image", assetId: "", alt: "", fit: "contain", caption: "" }),
     resolveQuery: () => null,
     render: ({ instance }) => {
       const config = instance.config || {};
       const title = mediaTitle(config, "Image");
       const src = safeMediaUrl(config.src, "image");
       const caption = String(config.caption || "").trim();
-      if (!String(config.src || "").trim()) return mediaState(title, "Configure image URL", "empty");
+      if (config.assetMissing) return mediaState(title, "Missing image asset", "error");
+      if (!String(config.src || "").trim()) return mediaState(title, "Configure image asset", "empty");
       if (src == null) return mediaState(title, "Unsupported image URL", "error");
       const fit = safeMediaFit(config.fit);
       const alt = String(config.alt || caption || title || "Image").trim();
@@ -1452,14 +1569,15 @@
     },
     supportedSettings: ["source", "caption", "color", "pin", "duplicate", "delete"],
     queryRequirements: { fields: [] },
-    getDefaultConfig: () => ({ title: "Video", src: "", embedType: "url", autoplay: false, muted: true, caption: "" }),
+    getDefaultConfig: () => ({ title: "Video", assetId: "", embedType: "url", autoplay: false, muted: true, caption: "" }),
     resolveQuery: () => null,
     render: ({ instance }) => {
       const config = instance.config || {};
       const title = mediaTitle(config, "Video");
       const caption = String(config.caption || "").trim();
       const embedType = String(config.embedType || "url").toLowerCase();
-      if (!String(config.src || "").trim()) return mediaState(title, "Configure video URL", "empty");
+      if (config.assetMissing) return mediaState(title, "Missing video asset", "error");
+      if (!String(config.src || "").trim()) return mediaState(title, "Configure video asset", "empty");
       let stage = "";
       if (embedType === "youtube") {
         const embed = youtubeEmbedUrl(config.src);
@@ -1504,7 +1622,7 @@
     },
     supportedSettings: ["source", "page", "caption", "color", "pin", "duplicate", "delete"],
     queryRequirements: { fields: [] },
-    getDefaultConfig: () => ({ title: "Document", src: "", documentType: "unknown", currentPage: 1, caption: "", content: "" }),
+    getDefaultConfig: () => ({ title: "Document", assetId: "", documentType: "unknown", currentPage: 1, caption: "", content: "" }),
     resolveQuery: () => null,
     render: ({ instance }) => {
       const config = instance.config || {};
@@ -1520,7 +1638,8 @@
             ${mediaCaptionMarkup(caption)}
           </div>`;
       }
-      if (!String(config.src || "").trim()) return mediaState(title, "Configure document URL", "empty");
+      if (config.assetMissing) return mediaState(title, "Missing document asset", "error");
+      if (!String(config.src || "").trim()) return mediaState(title, "Configure document asset", "empty");
       const src = safeMediaUrl(config.src, "document");
       if (src == null) return mediaState(title, "Unsupported document URL", "error");
       const page = Math.max(1, Number(config.currentPage) || 1);
@@ -1560,6 +1679,19 @@
       supportsResize: true,
     },
     supportedSettings: ["columns", "limit", "color", "pin", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "table",
+        label: "Rows",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Table" },
+          { key: "columns", label: "Columns", type: "textarea", valueType: "array", placeholder: "name, amount, category", affectsQuery: true },
+          { key: "limit", label: "Limit", type: "number", defaultValue: 50, min: 1, max: 200, step: 1, affectsQuery: true },
+          { key: "sortBy", label: "Sort field", type: "fieldPicker", affectsQuery: true },
+          { key: "sortDirection", label: "Sort direction", type: "select", defaultValue: "asc", options: ["asc", "desc"], affectsQuery: true },
+        ],
+      }],
+    },
     queryRequirements: { fields: "semantic-or-configured", limit: 50, sort: true },
     getDefaultConfig: () => ({ title: "Table", columns: [], limit: 50, sortBy: "", sortDirection: "asc" }),
     resolveQuery: (config, resolvedContext) => {
@@ -1576,8 +1708,9 @@
         limit: Number(config.limit) || 50,
       };
     },
-    render: ({ instance, resolvedContext, data, status }) => {
+    render: ({ instance, resolvedContext, data, status, density = instance.density || "standard" }) => {
       const config = instance.config || {};
+      const densityTier = normalizeDensity(density);
       const title = config.title || "Table";
       if (!resolvedContext?.dataSourceId) return runtimeState(title, "No data source");
       if (status === "loading") return runtimeState(title, "Loading");
@@ -1592,10 +1725,14 @@
       if (!rows.length) return runtimeState(title, "Empty result");
       const visibleFields = allFields.slice(0, tableVisibleColumnCount(instance.cols));
       const visibleRows = rows.slice(0, tableVisibleRowCount(instance.rows, config.limit));
-      const density = Number(instance.rows) <= 2 || Number(instance.cols) <= 2 ? "compact" : Number(instance.rows) >= 4 || Number(instance.cols) >= 4 ? "rich" : "comfortable";
+      const tableDensity = Number(instance.rows) <= 2 || Number(instance.cols) <= 2
+        ? "compact"
+        : Number(instance.rows) >= 4 || Number(instance.cols) >= 4 || densityTier === "rich"
+          ? "rich"
+          : "comfortable";
       const total = Number.isFinite(Number(data?.total)) ? Number(data.total) : rows.length;
       return `
-        <div class="runtime-table-widget runtime-table-density-${density}" data-visible-rows="${visibleRows.length}" data-visible-columns="${visibleFields.length}">
+        <div class="runtime-table-widget runtime-table-density-${tableDensity} widget-density-${densityTier}" data-density="${escapeHtml(densityTier)}" data-visible-rows="${visibleRows.length}" data-visible-columns="${visibleFields.length}">
           <div class="runtime-table-header">
             <span class="stat-lbl">${escapeHtml(title)}</span>
             <span class="runtime-table-meta">${escapeHtml(`${visibleRows.length} of ${total}`)}</span>
@@ -1629,6 +1766,21 @@
       supportsResize: true,
     },
     supportedSettings: ["chartType", "xField", "yField", "series", "aggregation", "color", "pin", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "chart",
+        label: "Chart",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Chart" },
+          { key: "chartType", label: "Type", type: "select", defaultValue: "bar", options: ["bar", "line", "area", "pie", "donut", "scatter", "histogram", "heatmap", "gauge", "sparkline"], affectsQuery: true },
+          { key: "xField", label: "X field", type: "fieldPicker", affectsQuery: true },
+          { key: "yField", label: "Y field", type: "fieldPicker", affectsQuery: true },
+          { key: "seriesField", label: "Series field", type: "fieldPicker", affectsQuery: true },
+          { key: "aggregation", label: "Aggregation", type: "select", defaultValue: "count", options: CHART_AGGREGATIONS, affectsQuery: true },
+          { key: "limit", label: "Limit", type: "number", defaultValue: 60, min: 1, max: 200, step: 1, affectsQuery: true },
+        ],
+      }],
+    },
     queryRequirements: {
       chartTypes: listChartDefinitions().map((definition) => definition.chartType),
       fields: "chart-definition",
@@ -1731,15 +1883,40 @@
       supportsResize: true,
     },
     supportedSettings: ["dateField", "labelField", "color", "pin", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "calendar",
+        label: "Calendar",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Calendar" },
+          { key: "dateField", label: "Date field", type: "fieldPicker", affectsQuery: true },
+          { key: "labelField", label: "Label field", type: "fieldPicker", affectsQuery: true },
+          { key: "limit", label: "Limit", type: "number", defaultValue: 12, min: 1, max: 100, step: 1, affectsQuery: true },
+        ],
+      }],
+    },
     getDefaultConfig: () => ({ title: "Calendar" }),
     resolveQuery: (config, resolvedContext) => {
       if (!resolvedContext?.canQuery) return null;
-      return { fields: defaultQueryFields(resolvedContext).slice(0, 3), limit: Number(config.limit) || 12 };
+      const mapping = resolvedContext.semanticMapping || {};
+      return {
+        fields: unique([
+          config.dateField || mapping.dateField,
+          config.labelField || mapping.labelField,
+          ...defaultQueryFields(resolvedContext),
+        ]).slice(0, 4),
+        limit: Number(config.limit) || 12,
+      };
     },
-    render: ({ instance, resolvedContext }) => runtimeState(
-      instance.config.title || "Calendar",
-      resolvedContext?.dataSourceId ? "Ready for date mapping" : "Configure a data source"
-    ),
+    render: ({ instance, resolvedContext, data, status }) => {
+      const title = instance.config.title || "Calendar";
+      if (!resolvedContext?.dataSourceId) return runtimeState(title, "Configure a data source");
+      if (status === "loading") return runtimeState(title, "Loading");
+      if (status === "error") return runtimeState(title, data?.error || "Unable to load dates");
+      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      if (!rows.length) return runtimeState(title, "No date rows");
+      return runtimeState(title, `${rows.length} date row${rows.length === 1 ? "" : "s"}`);
+    },
   });
 
   window.dashboardWidgetRuntime = {
@@ -1747,7 +1924,9 @@
     getWidgetDefinition,
     createWidgetInstance,
     renderWidget,
+    resolveWidgetDensity,
     resolveTimeRangeConfig,
+    densityTiers: () => [...DENSITY_TIERS],
     listWidgetDefinitions: () => [...definitions.values()].map((definition) => ({
       type: definition.type,
       displayName: definition.displayName,
@@ -1755,6 +1934,8 @@
       minSize: definition.minSize,
       capabilities: definition.capabilities,
       supportedSettings: definition.supportedSettings,
+      settingsSchema: definition.settingsSchema,
+      densityBehavior: definition.densityBehavior,
       queryRequirements: definition.queryRequirements,
       aliases: definition.aliases,
     })),

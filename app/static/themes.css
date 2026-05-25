@@ -288,7 +288,17 @@
   transition: opacity .14s ease, transform .16s ease, visibility 0s linear .16s;
 }
 
+.panel-add-menu:not(.open) {
+  max-height: 0;
+  overflow: hidden;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+}
+
 .panel-add-menu.open {
+  max-height: min(80vh, 520px);
+  overflow: visible;
   opacity: 1;
   visibility: visible;
   pointer-events: auto;

@@ -951,6 +951,151 @@ def test_search_bar_widget_uses_normal_widget_creation_and_controls(page: Page, 
     assert_clean_browser(page)
 
 
+def test_adaptive_density_engine_marks_widgets_without_layout_mutation(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="search"]').click()
+    search_widget = page.locator(
+        '.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-definition="search"]'
+    ).last
+    expect(search_widget).to_be_visible()
+
+    state = page.evaluate(
+        """
+        async () => {
+          const runtime = window.dashboardWidgetRuntime;
+          const rank = ["tiny", "compact", "standard", "expanded", "rich"];
+          const search = document.querySelector('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-definition="search"][data-custom-widget="true"]');
+          const readLayout = () => ({
+            col: search.dataset.gridCol,
+            row: search.dataset.gridRow,
+            span: search.dataset.currentSpan,
+            rows: search.dataset.gridRowSpan,
+          });
+          const setWidgetSize = async (cols, rows) => {
+            search.dataset.currentSpan = String(cols);
+            search.dataset.gridRowSpan = String(rows);
+            search.style.gridColumn = `${search.dataset.gridCol || 1} / span ${cols}`;
+            search.style.gridRow = `${search.dataset.gridRow || 1} / span ${rows}`;
+            window.dashboardContextEngine.refresh("builder");
+            await new Promise((resolve) => setTimeout(resolve, 40));
+          };
+
+          await setWidgetSize(2, 1);
+          const compactLayout = readLayout();
+          const compactDensity = search.dataset.density;
+          const input = search.querySelector(".search-widget-input");
+          const settings = search.querySelector(".widget-settings-toggle");
+          const compactInputRect = input.getBoundingClientRect();
+          const compactSettingsRect = settings.getBoundingClientRect();
+          const compactOverlap = compactInputRect.right > compactSettingsRect.left - 4;
+
+          await setWidgetSize(5, 3);
+          const richLayout = readLayout();
+          const richDensity = search.dataset.density;
+          const richInput = search.querySelector(".search-widget-input");
+          const richSettings = search.querySelector(".widget-settings-toggle");
+          const richInputRect = richInput.getBoundingClientRect();
+          const richSettingsRect = richSettings.getBoundingClientRect();
+
+          const statHtml = runtime.renderWidget("stat", {
+            instance: runtime.createWidgetInstance("stat", {
+              cols: 1,
+              rows: 1,
+              density: "tiny",
+              config: { label: "Revenue", metric: "count" },
+            }),
+            resolvedContext: { dataSourceId: "manual", canQuery: true, semanticMapping: {} },
+            data: { rows: [{ id: 1 }, { id: 2 }] },
+            status: "ready",
+          });
+          const tableHtml = runtime.renderWidget("table", {
+            instance: runtime.createWidgetInstance("table", {
+              cols: 5,
+              rows: 4,
+              density: "rich",
+              config: { title: "Rows", columns: ["name", "value"], limit: 4 },
+            }),
+            resolvedContext: {
+              dataSourceId: "manual",
+              canQuery: true,
+              semanticMapping: { labelField: "name", valueField: "value" },
+            },
+            data: {
+              rows: [{ name: "Alpha", value: 1 }, { name: "Beta", value: 2 }],
+              schema: { fields: [{ name: "name" }, { name: "value" }] },
+              total: 2,
+            },
+            status: "ready",
+          });
+          const chartHtml = runtime.renderWidget("chart", {
+            instance: runtime.createWidgetInstance("chart", {
+              cols: 2,
+              rows: 1,
+              density: "compact",
+              config: { title: "Trend", chartType: "sparkline", xField: "name", yField: "value" },
+            }),
+            resolvedContext: {
+              dataSourceId: "manual",
+              canQuery: true,
+              semanticMapping: { labelField: "name", valueField: "value" },
+            },
+            data: { rows: [{ name: "Alpha", value: 1 }, { name: "Beta", value: 2 }] },
+            status: "ready",
+          });
+
+          return {
+            tiers: runtime.densityTiers(),
+            directTiny: runtime.resolveWidgetDensity({ cols: 1, rows: 1 }, { width: 92, height: 48 }),
+            directCompact: runtime.resolveWidgetDensity({ cols: 2, rows: 1 }, { width: 180, height: 80 }),
+            directRich: runtime.resolveWidgetDensity({ cols: 6, rows: 4 }, { width: 720, height: 360 }),
+            panelContainedRank: rank.indexOf(runtime.resolveWidgetDensity(
+              { cols: 3, rows: 2, parentPanelId: "panel-1" },
+              { width: 320, height: 162, panelContained: true }
+            )),
+            workspaceRank: rank.indexOf(runtime.resolveWidgetDensity(
+              { cols: 3, rows: 2 },
+              { width: 320, height: 162, panelContained: false }
+            )),
+            compactDensity,
+            richDensity,
+            compactLayout,
+            richLayout,
+            compactOverlap,
+            richOverlap: richInputRect.right > richSettingsRect.left - 4,
+            statHidesMetadata: !statHtml.includes("stat-lbl"),
+            tableRich: tableHtml.includes("runtime-table-density-rich") && tableHtml.includes('data-density="rich"'),
+            chartTiny: chartHtml.includes("runtime-chart-density-tiny"),
+          };
+        }
+        """
+    )
+
+    assert state["tiers"] == ["tiny", "compact", "standard", "expanded", "rich"]
+    assert state["directTiny"] == "tiny"
+    assert state["directCompact"] in ["compact", "standard"]
+    assert state["directRich"] == "rich"
+    assert state["panelContainedRank"] <= state["workspaceRank"]
+    assert state["compactDensity"] in ["compact", "standard"]
+    assert state["richDensity"] in ["expanded", "rich"]
+    assert state["compactLayout"]["span"] == "2"
+    assert state["compactLayout"]["rows"] == "1"
+    assert state["compactLayout"]["col"] == state["richLayout"]["col"]
+    assert state["compactLayout"]["row"] == state["richLayout"]["row"]
+    assert state["richLayout"]["span"] == "5"
+    assert state["richLayout"]["rows"] == "3"
+    assert state["compactOverlap"] is False
+    assert state["richOverlap"] is False
+    assert state["statHidesMetadata"] is True
+    assert state["tableRich"] is True
+    assert state["chartTiny"] is True
+    assert_clean_browser(page)
+
+
 def test_add_widget_uses_default_top_region_when_no_dividers_exist(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate("localStorage.clear()")
@@ -1453,6 +1598,279 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
     assert_clean_browser(page)
 
 
+def test_widget_settings_schema_renders_persists_and_scopes_query_invalidation(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.evaluate(
+        """
+        () => {
+          window.__settingsQueryCount = 0;
+          const engine = window.dashboardContextEngine;
+          engine.registerAdapter({
+            kind: "settings-source",
+            introspect: async () => ({ fields: [
+              { name: "amount", type: "number" },
+              { name: "name", type: "string" },
+              { name: "category", type: "category" }
+            ] }),
+            query: async () => {
+              window.__settingsQueryCount += 1;
+              return {
+                schema: { fields: [
+                  { name: "amount", type: "number" },
+                  { name: "name", type: "string" },
+                  { name: "category", type: "category" }
+                ] },
+                rows: [
+                  { amount: 10, name: "Alpha", category: "A" },
+                  { amount: 20, name: "Beta", category: "B" }
+                ],
+                total: 2,
+                sourceId: "settings-source",
+                sourceKind: "settings-source"
+              };
+            }
+          });
+          engine.setDataSources("builder", [{
+            id: "settings-source",
+            name: "Settings Source",
+            kind: "settings-source",
+            config: {}
+          }]);
+          engine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Settings Root",
+            dataSourceId: "settings-source",
+            semanticMapping: { valueField: "amount", labelField: "name", categoryField: "category" }
+          }]);
+          engine.refresh("builder");
+        }
+        """
+    )
+
+    stat = page.locator('.widget-layout > .widget-card[data-widget-definition="stat"]').first
+    expect(stat.locator(".stat-val")).to_have_text("2")
+    assert page.evaluate("() => window.__settingsQueryCount") == 1
+
+    stat.click()
+    stat.locator(".widget-config-toggle").click()
+    stat_settings = stat.locator(".widget-settings-schema-panel")
+    expect(stat_settings).to_be_visible()
+    expect(stat_settings.locator('[data-widget-setting-key="label"]')).to_be_visible()
+    expect(stat_settings.locator('[data-widget-setting-key="metric"]')).to_be_visible()
+    expect(stat_settings.locator('[data-widget-setting-key="valueField"]')).to_be_visible()
+    expect(stat_settings.locator('[data-widget-setting-key="format"]')).to_be_visible()
+
+    stat_settings.locator('[data-widget-setting-key="label"]').evaluate(
+        """node => {
+          node.value = "Revenue";
+          node.dispatchEvent(new Event("change", { bubbles: true }));
+        }"""
+    )
+    expect(stat.locator(".stat-lbl")).to_have_text("Revenue")
+    assert page.evaluate("() => window.__settingsQueryCount") == 1
+
+    page.mouse.click(20, 20)
+    press_dashboard_undo(page)
+    expect(stat.locator(".stat-lbl")).to_have_text(re.compile("Widget", re.IGNORECASE))
+    press_dashboard_redo(page)
+    expect(stat.locator(".stat-lbl")).to_have_text("Revenue")
+
+    before_metric_query_count = page.evaluate("() => window.__settingsQueryCount")
+    page.evaluate(
+        """
+        () => window.dashboardWidgetSettingsRuntime.applySetting(
+          document.querySelector('.widget-layout > .widget-card[data-widget-definition="stat"]'),
+          "metric",
+          "sum"
+        )
+        """
+    )
+    expect(stat.locator(".stat-val")).to_have_text("30")
+    assert page.evaluate("() => window.__settingsQueryCount") > before_metric_query_count
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="table"]').click()
+    table = page.locator('.widget-layout > .widget-card[data-widget-definition="table"]').last
+    expect(table).to_be_visible()
+    table.click()
+    table.locator(".widget-config-toggle").click()
+    table_settings = table.locator(".widget-settings-schema-panel")
+    expect(table_settings).to_be_visible()
+    expect(table_settings.locator('[data-widget-setting-key="columns"]')).to_be_visible()
+    expect(table_settings.locator('[data-widget-setting-key="limit"]')).to_be_visible()
+    table_settings.locator('[data-widget-setting-key="columns"]').evaluate(
+        """node => {
+          node.value = "name, amount";
+          node.dispatchEvent(new Event("change", { bubbles: true }));
+        }"""
+    )
+    expect(table.locator(".runtime-table")).to_contain_text("Alpha")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="graph"]').click()
+    chart = page.locator('.widget-layout > .widget-card[data-widget-definition="chart"]').last
+    expect(chart).to_be_visible()
+    chart.click()
+    chart.locator(".widget-config-toggle").click()
+    chart_settings = chart.locator(".widget-settings-schema-panel")
+    expect(chart_settings).to_be_visible()
+    expect(chart_settings.locator('[data-widget-setting-key="chartType"]')).to_be_visible()
+    expect(chart_settings.locator('[data-widget-setting-key="xField"]')).to_be_visible()
+    expect(chart_settings.locator('[data-widget-setting-key="yField"]')).to_be_visible()
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    reloaded_stat_config = page.locator('.widget-layout > .widget-card[data-widget-definition="stat"]').first.evaluate(
+        "node => JSON.parse(node.dataset.widgetConfig || '{}')"
+    )
+    assert reloaded_stat_config["label"] == "Revenue"
+    assert reloaded_stat_config["metric"] == "sum"
+    assert_clean_browser(page)
+
+
+def test_persistence_runtime_exports_versioned_snapshot_and_validation(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    divider = page.locator('.panel-layout > .db-panel[data-workspace-object-type="divider"]').last
+    expect(divider).to_be_visible()
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    anchor = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]').last
+    expect(anchor).to_be_visible()
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="image"]').click()
+    image_widget = page.locator('.widget-layout > .widget-card[data-widget-definition="image"]').last
+    expect(image_widget).to_be_visible()
+
+    setup_state = page.evaluate(
+        """
+        () => {
+          const divider = document.querySelector('.panel-layout > .db-panel[data-workspace-object-type="divider"]');
+          const anchor = document.querySelector('.workspace-anchor-object[data-workspace-object-type="anchor"]');
+          const image = document.querySelector('.widget-layout > .widget-card[data-widget-definition="image"]');
+          anchor.dataset.linkedDividerId = divider.dataset.panelKey;
+          anchor.dataset.navigationTargetType = "divider";
+          anchor.dataset.navigationTargetId = divider.dataset.panelKey;
+          image.dataset.widgetConfig = JSON.stringify({
+            title: "Reference image",
+            src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%232563eb'/%3E%3C/svg%3E",
+            fit: "contain",
+            caption: "Persistence-safe URL"
+          });
+          window.dashboardContextEngine.setDataSources("builder", [{
+            id: "persistence-source",
+            name: "Persistence Source",
+            kind: "manual",
+            config: { rows: [{ label: "Alpha", value: 4 }] }
+          }]);
+          window.dashboardContextEngine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Persistence Root",
+            dataSourceId: "persistence-source",
+            semanticMapping: { labelField: "label", valueField: "value" }
+          }]);
+          return {
+            dividerId: divider.dataset.panelKey,
+            anchorId: anchor.dataset.anchorKey,
+            imageId: image.dataset.widgetKey
+          };
+        }
+        """
+    )
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+
+    state = page.evaluate(
+        """
+        ({ dividerId, anchorId, imageId }) => {
+          const runtime = window.dashboardPersistenceRuntime;
+          const snapshot = runtime.snapshot("builder", "1");
+          const validation = runtime.validate("builder", "1");
+          const stored = runtime.loadSnapshot("builder", "1");
+          const rawStored = localStorage.getItem(runtime.keyForLayout("builder", "1")) || "";
+          const invalid = JSON.parse(JSON.stringify(snapshot));
+          invalid.widgets.push({
+            id: "broken-widget",
+            type: "not-registered",
+            layoutDomain: "panel-internal-grid",
+            parentPanelId: "missing-panel",
+            x: 1,
+            y: 1,
+            cols: 1,
+            rows: 1,
+            config: {}
+          });
+          invalid.anchors.push({
+            id: "broken-anchor",
+            type: "anchor",
+            layoutDomain: "anchor-rail",
+            linkedDividerId: "missing-divider",
+            linkedDividerTop: 500
+          });
+          const invalidValidation = runtime.validateSnapshot(invalid);
+          const image = snapshot.widgets.find((widget) => widget.id === imageId);
+          const anchor = snapshot.anchors.find((entry) => entry.id === anchorId);
+          const assetReference = snapshot.assetReferences.find((asset) => asset.widgetId === imageId);
+          const asset = snapshot.assets.find((entry) => entry.id === assetReference?.id);
+          return {
+            version: snapshot.version,
+            storedVersion: stored.version,
+            objectCount: snapshot.objects.length,
+            widgetType: image?.type,
+            widgetConfig: image?.config,
+            assetReference,
+            asset,
+            anchorLinkedDividerId: anchor?.linkedDividerId,
+            anchorHasCachedPosition: Boolean(anchor && ("linkedDividerTop" in anchor || "targetTop" in anchor || "scrollTop" in anchor)),
+            contextIds: snapshot.contexts.map((context) => context.id),
+            dataSourceIds: snapshot.dataSources.map((source) => source.id),
+            validationOk: validation.ok,
+            validationErrors: validation.errors,
+            invalidCodes: invalidValidation.diagnostics.map((entry) => entry.code),
+            rawStored,
+          };
+        }
+        """,
+        setup_state,
+    )
+
+    assert state["version"] == 1
+    assert state["storedVersion"] == 1
+    assert state["objectCount"] >= 3
+    assert state["widgetType"] == "image"
+    assert state["widgetConfig"]["assetId"]
+    assert "src" not in state["widgetConfig"]
+    assert state["assetReference"]["persistence"] == "registry"
+    assert state["asset"]["source"]["ref"].startswith("data:image/svg+xml")
+    assert state["anchorLinkedDividerId"] == setup_state["dividerId"]
+    assert state["anchorHasCachedPosition"] is False
+    assert "builder:region:root" in state["contextIds"]
+    assert "persistence-source" in state["dataSourceIds"]
+    assert state["validationOk"] is True
+    assert state["validationErrors"] == []
+    assert "missing-parent-panel" in state["invalidCodes"]
+    assert "unknown-widget-type" in state["invalidCodes"]
+    assert "missing-linked-divider" in state["invalidCodes"]
+    assert "anchor-stores-pixel-target" in state["invalidCodes"]
+    assert "widget-tools-open" not in state["rawStored"]
+    assert "dashboard-resize-preview" not in state["rawStored"]
+    assert_clean_browser(page)
+
+
 def test_stat_widget_consumes_context_query_and_renders_metric_states(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate("localStorage.clear()")
@@ -1637,6 +2055,257 @@ def test_stat_widget_consumes_context_query_and_renders_metric_states(page: Page
     expect(stat).to_contain_text("Metric adapter failed")
     assert stat.evaluate("node => node.dataset.widgetRuntimeStatus") == "error"
 
+    assert_clean_browser(page)
+
+
+def test_widget_query_runtime_dedupes_caches_retries_and_cancels(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="stat"]').click()
+    stats = page.locator('.widget-layout > .widget-card[data-widget-definition="stat"]')
+    expect(stats.first).to_be_visible()
+    expect(stats.last).to_be_visible()
+
+    page.evaluate(
+        """
+        () => {
+          window.__queryLifecycle = { count: 0, resolvers: [] };
+          const engine = window.dashboardContextEngine;
+          engine.registerAdapter({
+            kind: "lifecycle-source",
+            introspect: async () => ({ fields: [{ name: "amount", type: "number" }] }),
+            query: async (_source, request = {}) => {
+              window.__queryLifecycle.count += 1;
+              return new Promise((resolve, reject) => {
+                const entry = { resolve, reject };
+                window.__queryLifecycle.resolvers.push(entry);
+                request.signal?.addEventListener?.("abort", () => {
+                  reject(new DOMException("Aborted", "AbortError"));
+                }, { once: true });
+              });
+            }
+          });
+          document.querySelectorAll('.widget-card[data-widget-definition="stat"]').forEach((widget) => {
+            widget.dataset.widgetConfig = JSON.stringify({ label: "Lifecycle Count", metric: "count" });
+          });
+          engine.setDataSources("builder", [{ id: "lifecycle-source", name: "Lifecycle Source", kind: "lifecycle-source", config: {} }]);
+          engine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Lifecycle Context",
+            dataSourceId: "lifecycle-source",
+            semanticMapping: { valueField: "amount" }
+          }]);
+        }
+        """
+    )
+    expect(stats.nth(0)).to_contain_text("Loading")
+    expect(stats.nth(1)).to_contain_text("Loading")
+    assert page.evaluate("() => window.__queryLifecycle.count") == 1
+    assert page.evaluate("() => window.dashboardQueryRuntime.stats().inflight") == 1
+
+    page.evaluate(
+        """
+        () => window.__queryLifecycle.resolvers.splice(0).forEach(({ resolve }) => resolve({
+          schema: { fields: [{ name: "amount", type: "number" }] },
+          rows: [{ amount: 1 }, { amount: 2 }],
+          total: 2,
+          sourceId: "lifecycle-source",
+          sourceKind: "lifecycle-source"
+        }))
+        """
+    )
+    expect(stats.nth(0).locator(".stat-val")).to_have_text("2")
+    expect(stats.nth(1).locator(".stat-val")).to_have_text("2")
+    page.wait_for_function("() => window.dashboardQueryRuntime.stats().inflight === 0")
+    assert page.evaluate("() => window.dashboardQueryRuntime.stats().cacheSize") == 1
+
+    page.evaluate("() => window.dashboardContextEngine.refresh('builder')")
+    expect(stats.nth(0).locator(".stat-val")).to_have_text("2")
+    assert page.evaluate("() => window.__queryLifecycle.count") == 1
+
+    retry_state = page.evaluate(
+        """
+        () => {
+          const widget = document.querySelector('.widget-card[data-widget-definition="stat"]');
+          window.__retryPromise = window.dashboardQueryRuntime.refreshWidget(widget, { force: true });
+          return {
+            status: widget.dataset.widgetRuntimeStatus,
+            refreshing: widget.dataset.widgetQueryRefreshing,
+            text: widget.textContent,
+            count: window.__queryLifecycle.count,
+          };
+        }
+        """
+    )
+    assert retry_state["status"] == "stale"
+    assert retry_state["refreshing"] == "true"
+    assert "2" in retry_state["text"]
+    assert retry_state["count"] == 2
+
+    page.evaluate(
+        """
+        () => {
+          window.__queryLifecycle.resolvers.shift().resolve({
+            schema: { fields: [{ name: "amount", type: "number" }] },
+            rows: [{ amount: 1 }, { amount: 2 }, { amount: 3 }],
+            total: 3,
+            sourceId: "lifecycle-source",
+            sourceKind: "lifecycle-source"
+          });
+          return window.__retryPromise;
+        }
+        """
+    )
+    expect(stats.nth(0).locator(".stat-val")).to_have_text("3")
+    assert stats.nth(0).evaluate("node => node.dataset.widgetRuntimeStatus") == "ready"
+
+    cancel_state = page.evaluate(
+        """
+        () => {
+          const widget = document.querySelector('.widget-card[data-widget-definition="stat"]');
+          window.__cancelPromise = window.dashboardQueryRuntime.refreshWidget(widget, { force: true });
+          const beforeCancel = {
+            status: widget.dataset.widgetRuntimeStatus,
+            refreshing: widget.dataset.widgetQueryRefreshing,
+            count: window.__queryLifecycle.count,
+          };
+          const canceled = window.dashboardQueryRuntime.cancelWidget(widget);
+          return { ...beforeCancel, canceled };
+        }
+        """
+    )
+    assert cancel_state == {"status": "stale", "refreshing": "true", "count": 3, "canceled": True}
+    page.evaluate("() => window.__cancelPromise")
+    expect(stats.nth(0).locator(".stat-val")).to_have_text("3")
+    assert page.evaluate("() => window.dashboardQueryRuntime.stats().inflight") == 0
+    assert "Metric adapter failed" not in stats.nth(0).inner_text()
+    assert_clean_browser(page)
+
+
+def test_workspace_event_bus_emits_structured_events_and_feeds_activity_widget(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    setup = page.evaluate(
+        """
+        () => {
+          window.__workspaceEventsSeen = [];
+          const bus = window.dashboardWorkspaceEvents;
+          bus.clear();
+          bus.configure({ retention: 40 });
+          window.__workspaceEventsUnsubscribe = bus.on("*", (event) => {
+            window.__workspaceEventsSeen.push({
+              type: event.type,
+              objectId: event.objectId,
+              objectType: event.objectType,
+              source: event.source,
+              timestamp: event.timestamp,
+              payload: event.payload,
+            });
+          });
+          return {
+            retention: bus.retention(),
+            initialCount: bus.history().length,
+          };
+        }
+        """
+    )
+    assert setup == {"retention": 40, "initialCount": 0}
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="search"]').click()
+    search_widget = page.locator('.widget-layout > .widget-card[data-widget-definition="search"][data-custom-widget="true"]').last
+    expect(search_widget).to_be_visible()
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    press_dashboard_undo(page)
+    press_dashboard_redo(page)
+
+    page.evaluate(
+        """
+        () => {
+          window.__failingQueryCount = 0;
+          const engine = window.dashboardContextEngine;
+          engine.registerAdapter({
+            kind: "event-fail-source",
+            introspect: async () => ({ fields: [{ name: "amount", type: "number" }] }),
+            query: async () => {
+              window.__failingQueryCount += 1;
+              throw new Error("Event query failed");
+            }
+          });
+          document.querySelector('[data-widget-key="widget-1"]').dataset.widgetConfig = JSON.stringify({
+            label: "Event failure",
+            metric: "count"
+          });
+          engine.setDataSources("builder", [{ id: "event-fail-source", name: "Event Fail", kind: "event-fail-source", config: {} }]);
+          engine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Event Root",
+            dataSourceId: "event-fail-source",
+            semanticMapping: { valueField: "amount" }
+          }]);
+        }
+        """
+    )
+    expect(page.locator('[data-widget-key="widget-1"]')).to_contain_text("Event query failed")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="activity-feed"]').click()
+    feed = page.locator('.widget-layout > .widget-card[data-widget-definition="activity-feed"]').last
+    expect(feed.locator(".activity-feed-widget")).to_be_visible()
+
+    state = page.evaluate(
+        """
+        () => {
+          const bus = window.dashboardWorkspaceEvents;
+          const history = bus.history();
+          const byType = (type) => history.filter((event) => event.type === type);
+          const recent = bus.recent({ maxItems: 20 });
+          const feed = document.querySelector('.widget-card[data-widget-definition="activity-feed"] .activity-feed-widget');
+          return {
+            listenerCount: window.__workspaceEventsSeen.length,
+            retainedCount: history.length,
+            recentCount: recent.length,
+            created: byType("object-created").length,
+            save: byType("layout-save-completed").length,
+            undo: byType("history-undo").length,
+            redo: byType("history-redo").length,
+            queryStarted: byType("data-query-started").length,
+            queryFailed: byType("data-query-failed").length,
+            structured: history.every((event) => event.id && event.type && Number.isFinite(event.timestamp) && event.payload && typeof event.payload === "object"),
+            activityCount: Number(feed?.dataset.eventCount || 0),
+            activityText: feed?.textContent || "",
+            firstSeen: window.__workspaceEventsSeen[0],
+            saveSources: byType("layout-save-completed").map((event) => event.source),
+          };
+        }
+        """
+    )
+
+    assert state["listenerCount"] >= 6
+    assert state["retainedCount"] <= 40
+    assert state["recentCount"] <= 20
+    assert state["created"] >= 1
+    assert state["save"] == 1
+    assert state["undo"] >= 1
+    assert state["redo"] >= 1
+    assert state["queryStarted"] >= 1
+    assert state["queryFailed"] >= 1
+    assert state["structured"] is True
+    assert state["activityCount"] > 0
+    assert "Query Failed" in state["activityText"] or "query failed" in state["activityText"].lower()
+    assert state["firstSeen"]["timestamp"] > 0
+    assert state["saveSources"] == ["layout-save"]
+
+    page.evaluate("() => window.__workspaceEventsUnsubscribe?.()")
     assert_clean_browser(page)
 
 
@@ -4556,6 +5225,121 @@ def test_source_agnostic_context_inheritance_uses_adapters_and_semantic_mappings
     assert_clean_browser(page)
 
 
+def test_engineer_mode_infrastructure_centralizes_debug_overlays(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.evaluate(
+        """
+        () => {
+          window.dashboardContextEngine.setDataSources("builder", [{
+            id: "engineer-source",
+            name: "Engineer Source",
+            kind: "manual",
+            config: { rows: [{ label: "Alpha", value: 1 }] }
+          }]);
+          window.dashboardContextEngine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Engineer Root",
+            dataSourceId: "engineer-source",
+            semanticMapping: { labelField: "label", valueField: "value" }
+          }]);
+        }
+        """
+    )
+
+    off_state = page.evaluate(
+        """
+        () => ({
+          enabled: window.dashboardEngineerMode.isEnabled(),
+          bodyClass: document.body.classList.contains("engineer-mode-active"),
+          htmlState: document.documentElement.dataset.engineerMode || "",
+          overlayCount: document.querySelectorAll(".workspace-engineer-overlay-layer:not([hidden])").length,
+          badgeCount: document.querySelectorAll(".workspace-context-badge").length,
+          minimapVisible: getComputedStyle(document.querySelector(".workspace-minimap-layer")).display !== "none",
+        })
+        """
+    )
+    assert off_state == {
+        "enabled": False,
+        "bodyClass": False,
+        "htmlState": "false",
+        "overlayCount": 0,
+        "badgeCount": 0,
+        "minimapVisible": False,
+    }
+
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
+    page.wait_for_function(
+        """
+        () => document.querySelectorAll(".workspace-engineer-object-chip").length > 0 &&
+          document.querySelector(".workspace-engineer-diagnostics")
+        """
+    )
+    on_state = page.evaluate(
+        """
+        () => {
+          const stat = document.querySelector('[data-widget-key="widget-1"]');
+          const settings = stat.querySelector(".widget-settings-toggle");
+          settings.click();
+          const snapshot = window.dashboardPersistenceRuntime.snapshot("builder", "1");
+          return {
+            enabled: window.dashboardEngineerMode.getState().enabled,
+            bodyClass: document.body.classList.contains("engineer-mode-active"),
+            button: document.querySelector(".engineer-mode-button").getAttribute("aria-pressed"),
+            overlayHidden: document.querySelector(".workspace-engineer-overlay-layer")?.hidden,
+            chips: document.querySelectorAll(".workspace-engineer-object-chip").length,
+            outlines: document.querySelectorAll(".workspace-engineer-object-outline").length,
+            regions: document.querySelectorAll(".workspace-engineer-region-band").length,
+            diagnostics: document.querySelector(".workspace-engineer-diagnostics")?.textContent || "",
+            badgeText: stat.querySelector(":scope > .workspace-context-badge")?.textContent || "",
+            minimapVisible: getComputedStyle(document.querySelector(".workspace-minimap-layer")).display !== "none",
+            toolsOpen: stat.classList.contains("widget-tools-open"),
+            persistedHasEngineerMode: Object.prototype.hasOwnProperty.call(snapshot, "engineerMode"),
+          };
+        }
+        """
+    )
+    assert on_state["enabled"] is True
+    assert on_state["bodyClass"] is True
+    assert on_state["button"] == "true"
+    assert on_state["overlayHidden"] is False
+    assert on_state["chips"] > 0
+    assert on_state["outlines"] > 0
+    assert on_state["regions"] > 0
+    assert "events" in on_state["diagnostics"]
+    assert "query cache" in on_state["diagnostics"]
+    assert "LOD" in on_state["diagnostics"]
+    assert "Engineer Source" in on_state["badgeText"]
+    assert on_state["minimapVisible"] is True
+    assert on_state["toolsOpen"] is True
+    assert on_state["persistedHasEngineerMode"] is False
+
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "false")
+    page.wait_for_function("() => document.querySelector('.workspace-engineer-overlay-layer')?.hidden === true")
+    hidden_state = page.evaluate(
+        """
+        () => ({
+          enabled: window.dashboardEngineerMode.isEnabled(),
+          overlayHidden: document.querySelector(".workspace-engineer-overlay-layer")?.hidden,
+          badgeCount: document.querySelectorAll(".workspace-context-badge").length,
+          minimapVisible: getComputedStyle(document.querySelector(".workspace-minimap-layer")).display !== "none",
+        })
+        """
+    )
+    assert hidden_state == {
+        "enabled": False,
+        "overlayHidden": True,
+        "badgeCount": 0,
+        "minimapVisible": False,
+    }
+    assert_clean_browser(page)
+
+
 def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate("localStorage.clear()")
@@ -5645,27 +6429,39 @@ def test_media_rich_content_widgets_render_safely_and_persist(page: Page, app_se
     expect(image).to_be_visible()
     expect(video).to_be_visible()
     expect(document).to_be_visible()
-    expect(image.locator(".media-widget-state")).to_contain_text("Configure image URL")
-    expect(video.locator(".media-widget-state")).to_contain_text("Configure video URL")
-    expect(document.locator(".media-widget-state")).to_contain_text("Configure document URL")
+    expect(image.locator(".media-widget-state")).to_contain_text("Configure image asset")
+    expect(video.locator(".media-widget-state")).to_contain_text("Configure video asset")
+    expect(document.locator(".media-widget-state")).to_contain_text("Configure document asset")
 
     media_state = page.evaluate(
         """
-        () => {
+        async () => {
           const image = document.querySelector('.image-widget-card[data-widget-definition="image"]');
           const video = document.querySelector('.video-widget-card[data-widget-definition="video"]');
           const doc = document.querySelector('.document-widget-card[data-widget-definition="document"]');
           const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" rx="22" fill="#2563eb"/><circle cx="82" cy="90" r="38" fill="#bfdbfe"/><text x="142" y="101" font-size="34" font-family="Arial" fill="#eff6ff">Image</text></svg>`;
+          const imageAsset = window.dashboardAssetRuntime.createAssetFromDataUrl(`data:image/svg+xml,${encodeURIComponent(svg)}`, {
+            name: "Reference diagram.svg",
+            type: "image",
+            mimeType: "image/svg+xml"
+          });
+          const file = new File(["uploaded document"], "reference.txt", { type: "text/plain" });
+          const uploadedAsset = await window.dashboardAssetRuntime.registerAssetFromFile(file, { type: "document" });
+          const videoAsset = window.dashboardAssetRuntime.createAssetFromDataUrl("data:video/mp4;base64,AAAA", {
+            name: "Walkthrough clip.mp4",
+            type: "video",
+            mimeType: "video/mp4"
+          });
           image.dataset.widgetConfig = JSON.stringify({
             title: "Reference Image",
-            src: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+            assetId: imageAsset.id,
             alt: "Reference diagram",
             fit: "contain",
             caption: "Diagram reference"
           });
           video.dataset.widgetConfig = JSON.stringify({
             title: "Demo Clip",
-            src: "data:video/mp4;base64,AAAA",
+            assetId: videoAsset.id,
             embedType: "url",
             muted: true,
             caption: "Walkthrough clip"
@@ -5681,6 +6477,9 @@ def test_media_rich_content_widgets_render_safely_and_persist(page: Page, app_se
             imageKey: image.dataset.widgetKey,
             videoKey: video.dataset.widgetKey,
             documentKey: doc.dataset.widgetKey,
+            imageAssetId: imageAsset.id,
+            videoAssetId: videoAsset.id,
+            uploadedAssetId: uploadedAsset.id,
           };
         }
         """
@@ -5722,28 +6521,38 @@ def test_media_rich_content_widgets_render_safely_and_persist(page: Page, app_se
         """
         () => {
           const image = document.querySelector('.image-widget-card[data-widget-definition="image"]');
-          image.dataset.widgetConfig = JSON.stringify({ title: "Unsafe Image", src: "javascript:alert(1)" });
+          const unsafeAsset = window.dashboardAssetRuntime.createAssetFromUrl("javascript:alert(1)", {
+            name: "Unsafe image",
+            type: "image"
+          });
+          image.dataset.widgetConfig = JSON.stringify({ title: "Unsafe Image", assetId: unsafeAsset.id });
           window.dashboardContextEngine.refresh("builder");
           return {
             hasImage: Boolean(image.querySelector("img")),
             text: image.textContent,
             config: JSON.parse(image.dataset.widgetConfig || "{}"),
+            asset: unsafeAsset,
           };
         }
         """
     )
     assert invalid["hasImage"] is False
     assert "Unsupported image URL" in invalid["text"]
-    assert invalid["config"]["src"].startswith("javascript:")
+    assert invalid["config"]["assetId"] == invalid["asset"]["id"]
 
     page.evaluate(
         """
         () => {
           const image = document.querySelector('.image-widget-card[data-widget-definition="image"]');
           const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" rx="22" fill="#2563eb"/><text x="32" y="102" font-size="34" font-family="Arial" fill="#eff6ff">Persisted</text></svg>`;
+          const asset = window.dashboardAssetRuntime.createAssetFromDataUrl(`data:image/svg+xml,${encodeURIComponent(svg)}`, {
+            name: "Persisted diagram.svg",
+            type: "image",
+            mimeType: "image/svg+xml"
+          });
           image.dataset.widgetConfig = JSON.stringify({
             title: "Reference Image",
-            src: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+            assetId: asset.id,
             fit: "cover",
             caption: "Persisted diagram"
           });
@@ -5786,6 +6595,49 @@ def test_media_rich_content_widgets_render_safely_and_persist(page: Page, app_se
     expect(page.locator(f'.image-widget-card[data-widget-key="{media_state["imageKey"]}"]')).to_contain_text("Persisted diagram")
     expect(page.locator(f'.video-widget-card[data-widget-key="{media_state["videoKey"]}"] .media-widget-video')).to_be_visible()
     expect(page.locator(f'.document-widget-card[data-widget-key="{media_state["documentKey"]}"] .document-widget-text')).to_contain_text("Stored in widget config")
+
+    asset_state = page.evaluate(
+        """
+        ({ imageKey }) => {
+          const image = document.querySelector(`.image-widget-card[data-widget-key="${imageKey}"]`);
+          const config = JSON.parse(image.dataset.widgetConfig || "{}");
+          const assets = window.dashboardAssetRuntime.listAssets("builder");
+          image.dataset.widgetConfig = JSON.stringify({ title: "Missing Image", assetId: "missing-asset" });
+          window.dashboardContextEngine.refresh("builder");
+          const missingText = image.textContent;
+          image.dataset.widgetConfig = JSON.stringify(config);
+          window.dashboardContextEngine.refresh("builder");
+          return {
+            config,
+            assets,
+            missingText,
+          };
+        }
+        """,
+        media_state,
+    )
+    assert asset_state["config"]["assetId"]
+    assert "src" not in asset_state["config"]
+    assert any(asset["id"] == asset_state["config"]["assetId"] for asset in asset_state["assets"])
+    assert any(asset["id"] == media_state["uploadedAssetId"] for asset in asset_state["assets"])
+    assert "Missing image asset" in asset_state["missingText"]
+
+    page.locator(".layout-group-button").click()
+    page.locator(f'.image-widget-card[data-widget-key="{media_state["imageKey"]}"]').click(position={"x": 20, "y": 20})
+    page.keyboard.press("Control+C")
+    page.keyboard.press("Control+V")
+    pasted_assets = page.evaluate(
+        """
+        () => [...document.querySelectorAll('.widget-layout > .image-widget-card[data-widget-definition="image"]')]
+          .map((widget) => ({
+            key: widget.dataset.widgetKey,
+            config: JSON.parse(widget.dataset.widgetConfig || "{}"),
+          }))
+        """
+    )
+    image_asset_ids = [entry["config"].get("assetId") for entry in pasted_assets if entry["config"].get("assetId")]
+    assert len(image_asset_ids) >= 2
+    assert len(set(image_asset_ids)) < len(image_asset_ids)
 
     page.evaluate(
         """

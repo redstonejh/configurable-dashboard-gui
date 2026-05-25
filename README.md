@@ -47,6 +47,7 @@ The upcoming work is intentionally staged around stabilization first, then large
 - Engineer Mode now includes an optional right-side mini-map overlay rendered from committed workspace geometry, and Region Summary is available as a normal spatial-awareness widget.
 - Image, Video, and PDF / Document are now registry-backed rich content widgets with safe URL/reference previews, captions, resize-aware containment, save/load persistence, and normal workspace/panel behavior.
 - Activity Feed, AI Assistant placeholder, and Engineer-gated Context Inspector widgets are now registry-backed workspace meta widgets that consume resolved workspace/context state without dashboard-renderer special cases.
+- Workspace infrastructure now includes centralized query lifecycle/caching, schema-driven widget settings, asset references for rich media, adaptive density tiers, a structured workspace event bus, and centralized Engineer Mode diagnostics for context, layout, ownership, cache, event, and LOD visibility.
 
 ### Near-Term Stabilization
 

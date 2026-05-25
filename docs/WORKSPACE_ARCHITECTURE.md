@@ -40,6 +40,7 @@ Each widget definition declares:
 - `defaultSize` and `minSize`
 - `capabilities`
 - `supportedSettings`
+- `settingsSchema`
 - `queryRequirements`
 - `getDefaultConfig()`
 - `resolveQuery(config, resolvedContext)`
@@ -48,6 +49,24 @@ Each widget definition declares:
 The registry currently includes first-class definitions for stat, timeframe, search, table, chart, stat-filter, and calendar widgets. Timeframe and Search Bar are widget types, not special dashboard chrome. Unknown widget types resolve through the unsupported-widget fallback instead of breaking the renderer.
 
 Core layout, drag, resize, collision, save/load, and menu code should not need edits when a new widget type is added. New widget behavior belongs in the widget definition and should consume a resolved context rather than raw data-source details.
+
+Widget settings use the centralized schema path exposed as `window.dashboardWidgetSettingsRuntime`. A widget definition declares grouped fields, defaults, validation hints, and whether a field affects query/context resolution. The dashboard generates the readable widget settings menu from that schema where possible; custom settings panels are reserved for controls that need bespoke interaction. Schema commits update widget config, save with normal layout persistence, create undo history checkpoints, and invalidate the shared query cache only for fields marked as query/context affecting.
+
+Data-bound widgets use the shared query lifecycle in `window.dashboardQueryRuntime`. Widget definitions still declare `resolveQuery(config, resolvedContext)` and `render(props)`, but loading, ready, empty, error, stale refresh, retry, cancellation, cache invalidation, and in-flight query deduplication are centralized. Query keys are deterministic fingerprints of widget type/config, resolved context, semantic mapping, filters, time range, data source identity, and the normalized query request. Stat, Table, Chart, and Calendar widgets therefore share the same context -> adapter -> cache -> render lifecycle instead of each owning ad hoc async state.
+
+The widget runtime also owns adaptive visual density through `resolveWidgetDensity(instance, availableSize, definition)`. Density tiers are `tiny`, `compact`, `standard`, `expanded`, and `rich`; the dashboard stamps widget surfaces with matching `data-density` and `widget-density-*` classes. Density responds to committed widget cols/rows, measured content space after controls, and whether the widget is panel-contained. It may change typography, spacing, visible metadata, chart/table detail, and internal control composition, but it must never change grid footprint, collision behavior, context membership, save/load records, or undo history.
+
+## Workspace Event Bus
+
+`window.dashboardWorkspaceEvents` is the centralized event layer for workspace activity. It exposes `emit(event)`, `on(type, listener)`, `recent(options)`, `history()`, `clear()`, and configurable retention. Events are structured records with `id`, `type`, `timestamp`, `source`, optional object/region/panel ids, and a `payload` object.
+
+Events describe what happened; they are not canonical state and are not persisted with layouts. The bus currently emits object creation/deletion/move/resize, panel open/collapse, widget panel-containment transitions, anchor link/reorder/delete, divider movement/context changes, context updates, query start/success/failure, save/load completion, and undo/redo. Activity Feed and Engineer/debug surfaces consume the same bus so future AI/context tooling can subscribe without coupling directly to widget, query, or history internals.
+
+## Engineer Mode Infrastructure
+
+`window.dashboardEngineerMode` is the centralized Engineer Mode store. The Engineer button is the only normal UI control that toggles the mode, while the runtime exposes `isEnabled()`, `getState()`, `set(enabled)`, `toggle()`, `onChange(listener)`, and `refresh()` for tests and developer tooling.
+
+Normal mode hides debug/context UI. Engineer Mode adds `body.engineer-mode-active`, reveals context badges/minimap/Context Inspector surfaces, and renders a non-interactive `.workspace-engineer-overlay-layer` for context regions, object ids/types, layout domains, parent/child ownership, anchor rail state, panel-local child state, query/cache status, recent event diagnostics, and LOD indicators. The overlay uses `pointer-events: none`; it must never replace canonical state or change committed layout, collision, save/load, undo/redo, or query behavior. Engineer visibility is not part of the persisted workspace snapshot.
 
 ## Context Inheritance Backbone
 
@@ -82,9 +101,27 @@ The top-level layout state owns:
 - data sources and workspace contexts;
 - active layout/profile snapshots.
 
+`app/static/app.js` now exposes `window.dashboardPersistenceRuntime` as the canonical persistence contract for architecture checks. Existing per-object localStorage records remain the app's load path, while the runtime derives a versioned `PersistedWorkspace` sidecar on save:
+
+- `version`;
+- `objects`;
+- `widgets`;
+- `panels`;
+- `dividers`;
+- `anchors`;
+- `contexts`;
+- `dataSources`;
+- optional `assets`.
+
+The sidecar stores committed layout ownership only. Root widgets use the global workspace grid, panel-contained widgets use `parentPanelId` plus panel-local coordinates, anchors use rail position/order and `linkedDividerId`, and dividers/context regions use semantic ids rather than cached pixels.
+
 Undo/redo checkpoints are created through the shared layout history paths. Preview state, drag ghosts, collision placeholders, hover-only context, and temporary region previews are not durable state and must not be persisted.
 
 Save/load restores committed records first, then recomputes derived region membership and resolved context. Anchor links persist by target id, not by cached pixel coordinates.
+
+Persistence validation is centralized through `dashboardPersistenceRuntime.validate()` and `validateSnapshot()`. Validation checks duplicate ids, missing widget types, unknown widget fallback, missing panel parents, missing linked dividers, temporary asset references, and transient preview/tool state. Context Inspector surfaces these diagnostics in Engineer Mode so invalid persisted objects are visible without exposing context-debug clutter in normal user mode.
+
+Media and document widgets use a separate asset registry exposed as `window.dashboardAssetRuntime`. Image, video, and document widget config stores stable `assetId` references plus display settings; raw URLs/data URLs live in asset metadata under the layout-scoped asset store. Legacy `src` widget configs are migrated into assets when rendered or saved. Deleting a widget does not remove its asset record because other widgets may share the same `assetId`; unused-asset cleanup is intentionally deferred.
 
 ## Intentionally Deferred
 
