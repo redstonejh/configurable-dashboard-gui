@@ -20,7 +20,7 @@ The desired structure is:
 
 - One workspace anchor: the dashboard selector and subtle accent presence.
 - One quiet creation affordance: compact floating creation lens with a menu surface.
-- Secondary ambient controls: layout, save/load, undo, group, engineer, context view.
+- Secondary ambient controls: layout, save/load, undo, Select mode, engineer, context view.
 - Utility controls: status, background tone, restore, settings.
 
 Grouping is implied through placement, depth, rhythm, and opacity. Avoid rows of outlined containers.

@@ -116,7 +116,7 @@ Avoid:
 
 Use spacing, opacity, hover states, and one shared glass surface to imply grouping. Menus may be richer floating glass surfaces, but the persistent chrome should breathe.
 
-Primary emphasis belongs to Dashboard, Add Widget, and Engineer Mode. Save, Load, Undo, Restore, Group, background, and settings controls are secondary or utility actions. Do not let every button compete at the same weight.
+Primary emphasis belongs to Dashboard, Add Widget, and Engineer Mode. Save, Load, Undo, Restore, Select, background, and settings controls are secondary or utility actions. Do not let every button compete at the same weight.
 
 Details live in `docs/workspace-toolbar.md`.
 

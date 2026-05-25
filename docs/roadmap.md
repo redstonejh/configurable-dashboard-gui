@@ -4,7 +4,7 @@
 
 Status: Active baseline.
 
-The app currently provides a generic configurable dashboard shell with theme-aware glass styling, configurable panels/widgets, drag, resize, pinning, sparse placement, group mode, layout save/load/reset, settings, and automated browser coverage.
+The app currently provides a generic configurable dashboard shell with theme-aware glass styling, configurable panels/widgets, drag, resize, pinning, sparse placement, Select mode, layout save/load/reset, settings, and automated browser coverage.
 
 Maintain this as the stable foundation while planning the next major version.
 

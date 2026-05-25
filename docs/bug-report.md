@@ -1532,6 +1532,102 @@ Passed coverage included app/dashboard/settings load, CSS imports, absence of mo
 - Fix notes: Added a shared visible-region insertion helper that builds regions from current divider DOM/grid positions, scores visible open grid cells in the viewport, finds an ordered available slot inside the selected region, and routes widget, panel, and divider creation through the existing commit/pushdown and persistence paths.
 - Validation: Added `test_add_widget_uses_default_top_region_when_no_dividers_exist` and `test_add_widget_targets_visible_divider_region_and_next_open_slot`; updated the panel-add regression to assert next visible top-slot insertion instead of the old fixed collision target. Targeted add/widget/divider/anchor tests passed, and manual inspection screenshots were captured in `test-results/manual-smart-insertion/`.
 
+### BUG-076: Search Bar Kept Redundant Text And Split Search Icon Geometry
+
+- Status: Verified
+- Area: Widgets / visual composition
+- Severity: Low
+- Environment: Dashboard workspace, Chromium desktop, default and cool-grey backgrounds
+- Observed: The Search Bar widget still rendered the visible `Search` label inside the input and drew the magnifying glass from separate circle and stem pseudo-elements, which made the handle feel slightly detached and misaligned.
+- Expected: The Search Bar should be a minimal embedded glass input with no visible placeholder text, a single centered search icon, preserved settings-button spacing, and no clipping at compact widget widths.
+- Suspected cause: The previous compact input fix reused the generic floating label and two-part pseudo-element icon from the broader range-search control.
+- Fix notes: Removed the Search Bar's visible label span from the registry renderer, kept the accessible input label, and replaced the Search Bar icon override with a single masked SVG magnifying-glass icon while disabling the separate stem pseudo-element.
+- Validation: Updated `test_search_bar_widget_uses_normal_widget_creation_and_controls` to assert no visible Search text, no range-search label, a masked centered icon, disabled secondary stem, and preserved input/settings spacing. Targeted desktop Search Bar test passed, and manual inspection screenshots were captured in `test-results/manual-search-widget-icon-only/`.
+
+### BUG-077: Individual Widget Resize Was Width-Only
+
+- Status: Verified
+- Area: Widgets / resize / persistence
+- Severity: Medium
+- Environment: Dashboard workspace, Chromium desktop, widget resize handle
+- Observed: Widget resize previews and commits changed column span but kept the widget row span at one row, even though widget definitions already expose `minSize.rows` and saved widget layout records can persist `rowSpan`.
+- Expected: Widgets that support resize should resize vertically and horizontally through the same live ghost, snapped preview, collision/reflow, committed layout, undo/redo, and save/load model used by the grid.
+- Suspected cause: The individual widget resize lifecycle only computed span deltas from pointer X and always rendered live previews at the starting height. Widget row-span support existed for group resize and persistence but was not wired into individual widget resize.
+- Fix notes: Extended individual widget resize to compute snapped row deltas from pointer Y, clamp to each widget's minimum rows, update live height, apply preview row spans through `applyWidgetGridPosition`, commit row spans on release, and keep selected peer widgets aligned when that path is used. Anchors remain outside widget resize controls.
+- Validation: Added `test_widget_vertical_resize_commits_rows_and_respects_widget_types` for stat, Search Bar, Timeframe, min-row clamp, collision pushdown, undo/redo, save/load, and anchor non-resizability. Targeted widget resize, group resize, timeframe resize, and anchor tests passed.
+
+### BUG-113: Panel Menu Open State Revealed Contained Widget Menus
+
+- Status: Verified
+- Area: Panel controls / contained widgets / menu isolation
+- Severity: Medium
+- Environment: Dashboard workspace, Chromium desktop, open panels with panel-contained widgets
+- Observed: Opening a panel settings menu also made contained widget tool drawers appear visually open. The child widget state was not always marked open, but the parent panel's broad open-menu selectors matched descendant `.panel-tool-drawer` and `.panel-settings-toggle` elements inside the panel body.
+- Expected: Panel settings should affect only the panel chrome menu, child widget settings should affect only that widget's menu, and clicking outside active menu chrome should close the relevant open menu without leaking state across parent/child boundaries.
+- Suspected cause: Shared panel/widget menu classes were styled with descendant selectors such as `.db-panel-tools-open .panel-tool-drawer`, so a panel open class applied to all nested menu drawers. Panel initialization also used broad descendant queries for panel controls, leaving future contained-widget controls too easy to confuse with panel chrome.
+- Fix notes: Scoped panel-open menu selectors to the panel's direct header chrome, kept widget menu selectors on widget-owned tools, hardened panel initialization and menu close helpers to query owner-specific controls, and added a central outside-pointer close boundary for dashboard menus.
+- Validation: Added `test_panel_and_internal_widget_settings_menus_are_isolated` to verify panel settings, child widget settings, body/outside click close, drawer opacity/pointer state, and open class counts. Targeted contained-widget/menu interaction tests passed.
+
+### BUG-114: Deleting A Panel-Child Widget Left The Workspace Interaction-Locked
+
+- Status: Verified
+- Area: Panel-contained widgets / delete / interaction state
+- Severity: High
+- Environment: Dashboard workspace, Chromium desktop, open panel with contained widget
+- Observed: Deleting a widget inside an open panel could remove the widget but leave the workspace feeling non-interactive. The deleted child had owned the only open widget tools menu, while the global `layout-tools-active` state could remain active and continue disabling pointer events for inactive workspace objects.
+- Expected: Deleting a panel-child widget should remove only that child, clear stale menu/selection/preview state, leave the parent panel and dashboard controls interactive, and support undo/redo restoration without locking the workspace.
+- Suspected cause: The panel-child delete branch removed the widget before shared menu and selection cleanup ran, then saved the parent panel layout while the global tools-active body class could still reflect the deleted menu.
+- Fix notes: Added shared delete cleanup that clears owner-scoped menu state, color/link submenus, group selection references, and stale dashboard tool activity before removal. The delete path now syncs interaction state again after layout persistence so removed child menus cannot leave the workspace in a pointer-blocking mode.
+- Validation: Added `test_deleting_panel_child_widget_clears_interaction_lock` to cover contained-widget deletion, immediate panel/header/navbar/other-widget interaction, undo restoration, redo deletion, and absence of stale drag/preview/menu artifacts. Targeted contained-widget, smart-delete, panel extraction, and menu isolation tests passed.
+
+### BUG-115: Panel-Internal Widgets Touched The Header Boundary
+
+- Status: Verified
+- Area: Panel-contained widgets / internal grid spacing
+- Severity: Medium
+- Environment: Dashboard workspace, Chromium desktop, open panels with contained widgets
+- Observed: Widgets dragged into an open panel could sit directly against the panel header/chevron boundary because the panel-local grid had no explicit internal inset and the placement math used the outer grid box as the cell origin.
+- Expected: Panel-contained widgets, drag placeholders, and committed positions should use a shared panel-local inset/gutter system so child widgets never touch the header, panel edges, or each other.
+- Suspected cause: `.panel-internal-widget-grid` defined a local row height and gap, but not padding, and shared grid metrics did not account for panel-local grid padding when converting pointer positions to cells.
+- Fix notes: Added panel-internal grid inset tokens/padding, made the panel-local grid box use `border-box`, and taught grid metrics to use the padded content rect plus the panel-local row-height token for child-widget placement, previews, visual LOD bounds, and rendered footprint height.
+- Validation: Added `test_panel_internal_widget_grid_uses_consistent_inset_spacing` to verify live placeholders and committed child widgets respect the same header/edge inset and that multiple contained widgets remain non-overlapping with the internal gutter. Targeted panel-contained drag/menu/delete tests passed.
+
+### BUG-116: Header-To-Panel Entry Felt Like A Teleport
+
+- Status: Verified
+- Area: Panel-contained widgets / drag transition / visual feedback
+- Severity: Low
+- Environment: Dashboard workspace, Chromium desktop, open panel header-entry drag
+- Observed: Slow, intentional dragging through an open panel's header correctly entered panel-local drag mode, but the panel placeholder appeared abruptly in the internal grid and the transition felt disconnected from the cursor-driven workspace drag.
+- Expected: Header-entry intent should retain the existing fast-pass-through guard while giving immediate, restrained receptive feedback and smoothly transitioning the drag preview into the panel-local grid.
+- Suspected cause: The header-entry path created the panel-local placeholder immediately after intent detection and only applied a simple panel scale pulse, with no transition from the workspace drag ghost position to the internal-grid preview.
+- Fix notes: Added a one-shot header-entry transition that measures the live widget ghost and panel-local placeholder rect, applies CSS-variable driven tunnel animation to the placeholder, gives the dragged ghost a small pointer-preserving tug, and refines the panel/header feedback into a short oscillating rim pulse.
+- Validation: Updated `test_slow_header_drag_can_enter_open_panel_when_no_outside_room` to assert the panel pulse, preview tunnel, and ghost transition are triggered. Targeted header-entry, fast-pass-through, panel-local drag, spacing, menu isolation, and delete-cleanup tests passed.
+
+### BUG-117: Open Panel Interiors Read As Flat Opaque White
+
+- Status: Verified
+- Area: Panels / material styling / visual language
+- Severity: Low
+- Environment: Dashboard workspace, Chromium desktop, default and deep backgrounds
+- Observed: Open panel content areas rendered like flat blank white canvases, which made empty panels feel disconnected from the surrounding glass widget and panel material language.
+- Expected: Open panel interiors should read as recessed, quiet glass workspaces with lower-opacity material than widgets, enough contrast for empty-state text, and clear separation for contained widgets.
+- Suspected cause: The panel body lacked its own material surface, so the open content area relied on a plain inherited/background fill while the header and shell carried the glass treatment.
+- Fix notes: Added shared panel-content material tokens on `.db-panel`, custom-color variants, and a `.db-panel-body` material layer using translucent gradients, a subtle rim, low inset depth, and restrained blur so contained widgets remain visually dominant.
+- Validation: Extended `test_background_presets_do_not_change_shared_glass_materials` to assert the panel body has a gradient glass surface, non-white background color, and inset shadow while remaining stable across default and deep backgrounds. Targeted material and panel-contained drag tests passed.
+
+### BUG-118: Dragging Widgets Out Of Panels Felt Abrupt
+
+- Status: Verified
+- Area: Panel-contained widgets / drag transition / visual feedback
+- Severity: Low
+- Environment: Dashboard workspace, Chromium desktop, open panel child-widget drag
+- Observed: Dragging a widget through an open panel boundary into the workspace exited the panel-local grid mechanically, without the same subtle resistance/release feedback used for header-to-panel entry.
+- Expected: Crossing between the panel-local grid and workspace grid should feel bidirectional and continuous, with a short restrained membrane-style release effect, pointer-coherent ghost movement, and a snapped preview in the destination domain.
+- Suspected cause: The drag lifecycle had a dedicated workspace-to-panel preview state, but panel-child drags only moved inside the panel-local grid and had no mirrored workspace exit preview or visual transition hook.
+- Fix notes: Added a workspace-side panel-exit preview state for panel-child drags, a semantic extraction commit path that moves the widget back to the global workspace on release, and shared tunnel-style ghost/placeholder animation plus a panel rim release pulse for the boundary exit.
+- Validation: Added `test_panel_child_drag_out_uses_boundary_release_transition` to verify the release pulse, workspace placeholder transition, pointer-coherent ghost, commit to workspace, undo restoration into the panel, redo extraction, and cleanup of transient placeholders. Targeted panel containment, header-entry, fast-pass-through, and delete/extract tests passed.
+
 ## Entry Template
  
 ```md

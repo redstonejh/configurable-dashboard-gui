@@ -8,7 +8,7 @@ Grouped items remain individually configurable, pinnable, resizable, recolorable
 
 ## Selection
 
-- The Group toolbar control enters multi-selection mode.
+- The Select toolbar control enters multi-selection mode.
 - Clicking widgets or panels toggles their selected state.
 - Selected items receive subtle glass-native selection feedback.
 - Selection can include mixed object types: widgets, panels, command surfaces, tables, graphs, and future context panels.

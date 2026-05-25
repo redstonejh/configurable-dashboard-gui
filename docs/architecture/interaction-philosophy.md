@@ -10,7 +10,7 @@ Users should manipulate objects directly when possible:
 
 - Drag to move.
 - Resize to change footprint.
-- Group to transform multiple objects.
+- Select multiple objects to transform them together.
 - Drop onto explicit context targets.
 - Use anchors to navigate spatially.
 
@@ -119,4 +119,3 @@ Pan and zoom, if introduced, must preserve:
 - Reduced motion behavior.
 
 Camera movement must not mutate layout.
-

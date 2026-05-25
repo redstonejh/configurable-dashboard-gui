@@ -273,7 +273,6 @@
         <div class="search-widget-content">
           <div class="range-search search-widget-control" role="search" aria-label="${escapeHtml(title)}">
             <input class="range-search-input search-widget-input" type="search" placeholder="${escapeHtml(instance.config.placeholder || " ")}" autocomplete="off" aria-label="${escapeHtml(title)}" value="${escapeHtml(instance.config.query || "")}">
-            <span class="range-search-label stat-lbl">${escapeHtml(title)}</span>
           </div>
         </div>`;
     },

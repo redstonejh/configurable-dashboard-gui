@@ -7,7 +7,7 @@ A local FastAPI app for creating and arranging dashboard panels and widgets from
 - Configurable dashboard shell with the existing top bar, background selector, menus, popovers, and placeholder content
 - Add panel and add widget controls
 - Move, resize, pin, rename, recolor, collapse, and delete controls
-- Group mode for selecting and moving multiple panels or widgets
+- Select mode for choosing and moving multiple panels or widgets
 - Smooth live ghosts, snapped footprints, grid snapping, collision handling, edge auto-scroll, and reflow animation
 - Layout save/load slots, reset to default, draft edits, and undo
 - Generic search/filter shell across visible dashboard content
