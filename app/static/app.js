@@ -3620,6 +3620,7 @@ document.addEventListener("DOMContentLoaded", () => {
     activeInteractionAutoScroll?.stop();
     const edgeZone = 104;
     const edgeDeadZone = 22;
+    const topBrakeDistance = edgeZone * 2.25;
     const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
     const maxVelocity = prefersReducedMotion ? 120 : 280;
     const minVelocity = prefersReducedMotion ? 8 : 18;
@@ -3656,6 +3657,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const activeRange = Math.max(1, edgeZone - edgeDeadZone);
       return Math.max(0, Math.min(1, (edgeZone - distance) / activeRange));
     };
+    const topDistancePressure = (scrollY) => {
+      if (scrollY <= 0) return 0;
+      return Math.max(0, Math.min(1, scrollY / topBrakeDistance));
+    };
     const bottomEdgePressure = () => edgePressure(window.innerHeight - lastClientY);
     const topEdgePressure = () => edgePressure(lastClientY);
     const hasEdgePressure = () => (lastClientY < edgeZone && window.scrollY > 0) || bottomEdgePressure() > 0;
@@ -3663,7 +3668,12 @@ document.addEventListener("DOMContentLoaded", () => {
       if (lastClientY < edgeZone && window.scrollY > 0) {
         const pressure = topEdgePressure();
         if (!pressure) return 0;
-        return -(minVelocity + ((maxVelocity - minVelocity) * pressure * pressure * pressure));
+        const scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+        const distancePressure = topDistancePressure(scrollY);
+        const easedDistancePressure = distancePressure * distancePressure * (3 - (2 * distancePressure));
+        const baseVelocity = minVelocity + ((maxVelocity - minVelocity) * pressure * pressure * pressure);
+        const brakedVelocity = minVelocity + ((baseVelocity - minVelocity) * easedDistancePressure);
+        return -Math.min(baseVelocity, brakedVelocity);
       }
       const bottomDistance = window.innerHeight - lastClientY;
       if (bottomDistance < edgeZone && window.scrollY < maxScrollY() - 1) {
@@ -3764,8 +3774,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const velocity = smoothVelocityForFrame(targetVelocity, deltaMs);
       const before = window.scrollY || document.documentElement.scrollTop || 0;
       const requestedDelta = (velocity * (deltaMs / 1000)) + scrollRemainderY;
+      const maxUpwardDelta = () => {
+        const distancePressure = topDistancePressure(before);
+        const allowedVelocity = minVelocity + ((maxVelocity - minVelocity) * distancePressure);
+        return Math.max(1, allowedVelocity * (deltaMs / 1000));
+      };
       const boundedDelta = requestedDelta < 0
-        ? Math.max(requestedDelta, -before)
+        ? Math.max(requestedDelta, -before, -maxUpwardDelta())
         : Math.min(requestedDelta, maxScrollY() - before);
       window.scrollBy(0, boundedDelta);
       const after = window.scrollY || document.documentElement.scrollTop || 0;
@@ -5183,7 +5198,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const raw = (docY - hostTop) / Math.max(1, rowStep);
       return Math.max(1, (mode === "ceil" ? Math.ceil(raw) : Math.floor(raw)) + 1);
     };
-    const buildRegion = ({ divider = null, nextDivider = null, startRow = 1, endRow = Infinity, top = hostTop, bottom = workspaceBottom }) => {
+    const buildRegion = ({ id = "", kind = "divider", order = 0, divider = null, nextDivider = null, startRow = 1, endRow = Infinity, top = hostTop, bottom = workspaceBottom }) => {
       const visibleTop = Math.max(top, viewportTop);
       const visibleBottom = Math.min(bottom, viewportBottom);
       const visibleHeight = Math.max(0, visibleBottom - visibleTop);
@@ -5192,8 +5207,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const visibleRows = visibleHeight > 0 && visibleEndRow >= visibleStartRow
         ? Math.max(0, visibleEndRow - visibleStartRow + 1)
         : 0;
-      const center = top + ((Math.max(1, bottom - top)) / 2);
+      const center = visibleHeight > 0
+        ? visibleTop + (visibleHeight / 2)
+        : top + ((Math.max(1, bottom - top)) / 2);
       return {
+        id: id || divider?.item?.dataset.panelKey || `${layoutKey}:${kind}:${order}`,
+        kind,
+        order,
         divider: divider?.item || null,
         nextDivider: nextDivider?.item || null,
         startRow: Math.max(1, Math.round(startRow)),
@@ -5210,10 +5230,13 @@ document.addEventListener("DOMContentLoaded", () => {
       };
     };
     if (!dividers.length) {
-      return [buildRegion({ startRow: 1, endRow: Infinity, top: hostTop, bottom: workspaceBottom })];
+      return [buildRegion({ id: `${layoutKey}:top`, kind: "top", order: 0, startRow: 1, endRow: Infinity, top: hostTop, bottom: workspaceBottom })];
     }
     const regions = [
       buildRegion({
+        id: `${layoutKey}:top`,
+        kind: "top",
+        order: 0,
         startRow: 1,
         endRow: Math.max(0, dividers[0].bounds.row - 1),
         top: hostTop,
@@ -5224,6 +5247,9 @@ document.addEventListener("DOMContentLoaded", () => {
     dividers.forEach((divider, index) => {
       const nextDivider = dividers[index + 1] || null;
       regions.push(buildRegion({
+        id: divider.item?.dataset.panelKey || `${layoutKey}:divider:${index + 1}`,
+        kind: nextDivider ? "divider" : "final",
+        order: index + 1,
         divider,
         nextDivider,
         startRow: divider.bounds.bottom + 1,
@@ -5256,28 +5282,38 @@ document.addEventListener("DOMContentLoaded", () => {
   const visibleRegionInsertionTarget = (layout, item) => {
     const metrics = createGridMetrics(layout);
     const occupied = globalGridItems(layout, { includePlaceholders: false, exclude: [item] })
-      .map((other) => ({ item: other, bounds: gridBoundsForItem(other, metrics) }));
+      .map((other) => {
+        const bounds = gridBoundsForItem(other, metrics);
+        const rect = other.getBoundingClientRect();
+        return {
+          item: other,
+          bounds,
+          top: rect.top + (window.scrollY || document.documentElement.scrollTop || 0),
+          bottom: rect.bottom + (window.scrollY || document.documentElement.scrollTop || 0),
+        };
+      });
     const regions = dividerInsertionRegionsForLayout(layout, metrics);
     const scoredRegions = regions.map((region) => {
-      const visibleCells = region.visibleRows * DASHBOARD_GRID_COLUMNS;
-      const occupiedCells = occupied.reduce((sum, entry) => {
-        const top = Math.max(entry.bounds.row, region.visibleStartRow);
-        const bottom = Math.min(entry.bounds.bottom, region.visibleEndRow);
-        if (!region.visibleRows || bottom < top) return sum;
-        return sum + ((bottom - top + 1) * entry.bounds.span);
+      const visibleArea = region.visibleHeight * DASHBOARD_GRID_COLUMNS;
+      const occupiedArea = occupied.reduce((sum, entry) => {
+        if (!region.visibleHeight) return sum;
+        const top = Math.max(entry.top, region.visibleTop);
+        const bottom = Math.min(entry.bottom, region.visibleBottom);
+        if (bottom <= top) return sum;
+        return sum + ((bottom - top) * entry.bounds.span);
       }, 0);
-      const availableCells = Math.max(0, visibleCells - occupiedCells);
+      const availableArea = Math.max(0, visibleArea - occupiedArea);
       return {
         ...region,
-        availableCells,
-        score: (availableCells * 1000) + region.visibleHeight - (region.viewportDistance * 0.001),
+        availableArea,
+        score: availableArea,
       };
     }).sort((a, b) => (
       b.score - a.score ||
-      b.availableCells - a.availableCells ||
-      b.visibleHeight - a.visibleHeight ||
       a.viewportDistance - b.viewportDistance ||
-      a.startRow - b.startRow
+      a.visibleTop - b.visibleTop ||
+      a.order - b.order ||
+      String(a.id).localeCompare(String(b.id))
     ));
     const region = scoredRegions[0] || regions[0];
     if (!region) return null;
@@ -6117,6 +6153,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const triggerPanelBoundaryExitFeedback = (panel) => {
       if (!panel) return;
+      panel.dataset.panelBoundaryExitFeedback = "true";
       panel.classList.remove("panel-boundary-exit-release");
       void panel.offsetWidth;
       panel.classList.add("panel-boundary-exit-release");
@@ -6212,6 +6249,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const state = panelExitDrag;
       panelExitDrag = null;
       state.panel.classList.remove("panel-container-drag-active", "panel-boundary-exit-release");
+      delete state.panel.dataset.panelBoundaryExitFeedback;
       item.classList.remove("panel-exit-ghost-transition");
       if (restore) restoreGridLayoutSnapshot(state.snapshot, { exclude: [state.placeholder] });
       state.placeholder.remove();
@@ -6397,12 +6435,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const dragRect = groupLive?.groupRect || rect;
       const minLeft = gridRect.left;
       const maxLeft = Math.max(minLeft, gridRect.right - dragRect.width);
-      const scrollingTowardTop = moveEvent.clientY < 104 && (window.scrollY || document.documentElement.scrollTop || 0) > 0;
-      const minTop = scrollingTowardTop ? Math.min(0, gridRect.top) : Math.max(0, gridRect.top);
-      const visibleBottom = Math.max(gridRect.bottom, window.innerHeight - 16);
-      const maxTop = Math.max(minTop, visibleBottom - Math.min(dragRect.height, window.innerHeight - 32));
       const rawLeft = moveEvent.clientX - offsetX;
       const rawTop = moveEvent.clientY - offsetY;
+      const scrollingTowardTop = moveEvent.clientY < 104 && (window.scrollY || document.documentElement.scrollTop || 0) > 0;
+      const minTop = scrollingTowardTop ? Math.min(rawTop, 0, gridRect.top) : Math.max(0, gridRect.top);
+      const visibleBottom = Math.max(gridRect.bottom, window.innerHeight - 16);
+      const maxTop = Math.max(minTop, visibleBottom - Math.min(dragRect.height, window.innerHeight - 32));
       const isPanelLocalDirectDrag = isPanelInternalWidgetLayout(layout) && !groupDrag;
       const nextLeft = isPanelLocalDirectDrag ? rawLeft : Math.max(minLeft, Math.min(maxLeft, rawLeft));
       const nextTop = isPanelLocalDirectDrag ? rawTop : Math.max(minTop, Math.min(maxTop, rawTop));
@@ -7455,10 +7493,20 @@ document.addEventListener("DOMContentLoaded", () => {
         event.stopPropagation();
       });
       widget.addEventListener("click", (event) => {
-        if (performance.now() >= suppressWidgetClickUntil) return;
         if (event.target?.closest?.(".widget-tools")) return;
+        const interactiveTarget = event.target?.closest?.("input, textarea, select, button, [contenteditable='true']");
+        if (interactiveTarget && widget.contains(interactiveTarget)) return;
         event.preventDefault();
         event.stopPropagation();
+        if (performance.now() < suppressWidgetClickUntil) return;
+        closeInactiveDashboardTools(widget);
+        suppressToolOpenUntil = 0;
+        openTools();
+        try {
+          widget.focus?.({ preventScroll: true });
+        } catch {
+          widget.focus?.();
+        }
       }, true);
       tools?.addEventListener("mouseenter", resumeToolHoverClose);
       tools?.addEventListener("mouseleave", scheduleClose);

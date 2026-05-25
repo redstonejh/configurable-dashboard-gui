@@ -326,6 +326,17 @@ def assert_smooth_upward_auto_scroll_motion(samples: list[dict]) -> None:
     assert_shared_edge_scroll_motion(samples, -1)
 
 
+def assert_top_edge_auto_scroll_brakes_smoothly(samples: list[dict]) -> None:
+    scroll_deltas = [
+        samples[index + 1]["scrollY"] - samples[index]["scrollY"]
+        for index in range(len(samples) - 1)
+    ]
+    upward = [-delta for delta in scroll_deltas if delta < -0.25]
+    assert len(upward) >= 4, samples
+    assert max(upward) <= 18, samples
+    assert upward[-1] <= upward[0] + 1.5, samples
+
+
 def prepare_edge_autoscroll_fixture(page: Page) -> None:
     page.evaluate(
         """
@@ -974,6 +985,198 @@ def test_add_widget_uses_default_top_region_when_no_dividers_exist(page: Page, a
     assert_clean_browser(page)
 
 
+def test_add_widget_scores_top_default_region_before_first_divider(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    expect(page.locator(".panel-layout[data-layout-key='builder'] > .workspace-divider")).to_have_count(1)
+
+    setup = page.evaluate(
+        """
+        () => {
+          const setGrid = (node, col, row, span, rowSpan = 1) => {
+            node.hidden = false;
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.defaultSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+          };
+          document.querySelectorAll(".widget-layout[data-widget-layout-key='builder'] > .widget-card").forEach((node) => {
+            node.hidden = true;
+          });
+          document.querySelectorAll(".panel-layout[data-layout-key='builder'] > .db-panel:not(.workspace-divider)").forEach((node) => {
+            node.hidden = true;
+          });
+          const divider = document.querySelector(".panel-layout[data-layout-key='builder'] > .workspace-divider");
+          setGrid(divider, 1, 8, 6, 1);
+          const host = document.querySelector(".dashboard-layout-grid");
+          host.style.minHeight = "1800px";
+          document.body.style.minHeight = "2200px";
+          document.documentElement.style.minHeight = "2200px";
+          window.scrollTo(0, 0);
+          return {
+            dividerKey: divider.dataset.panelKey,
+            dividerRow: Number(divider.dataset.gridRow),
+          };
+        }
+        """
+    )
+
+    added_positions = []
+    for index in range(3):
+        page.evaluate("window.scrollTo(0, 0)")
+        page.locator(".panel-add-button").click()
+        page.locator('.widget-add-action[data-widget-kind="stat"]').click()
+        expect(
+            page.locator(
+                '.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-custom-widget="true"][data-dashboard-object-kind="stat"]'
+            )
+        ).to_have_count(index + 1)
+        added = page.locator(
+            '.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-custom-widget="true"][data-dashboard-object-kind="stat"]'
+        ).last
+        added_positions.append(
+            added.evaluate(
+                """
+                node => ({
+                  key: node.dataset.widgetKey,
+                  col: Number(node.dataset.gridCol || 0),
+                  row: Number(node.dataset.gridRow || 0),
+                })
+                """
+            )
+        )
+
+    assert added_positions == [
+        {"key": added_positions[0]["key"], "col": 1, "row": 1},
+        {"key": added_positions[1]["key"], "col": 2, "row": 1},
+        {"key": added_positions[2]["key"], "col": 3, "row": 1},
+    ]
+    assert all(position["row"] < setup["dividerRow"] for position in added_positions)
+
+    page.evaluate(
+        """
+        key => {
+          const divider = document.querySelector(`.workspace-divider[data-panel-key="${key}"]`);
+          window.scrollTo(0, divider.getBoundingClientRect().top + window.scrollY - 80);
+        }
+        """,
+        setup["dividerKey"],
+    )
+    page.wait_for_function("window.scrollY > 100")
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="stat"]').click()
+    lower_added = page.locator(
+        '.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-custom-widget="true"][data-dashboard-object-kind="stat"]'
+    ).last
+    expect(lower_added).to_be_visible()
+    lower_position = lower_added.evaluate(
+        """
+        node => ({
+          key: node.dataset.widgetKey,
+          col: Number(node.dataset.gridCol || 0),
+          row: Number(node.dataset.gridRow || 0),
+        })
+        """
+    )
+    assert lower_position["row"] == setup["dividerRow"] + 1
+    assert lower_position["col"] == 1
+
+    press_dashboard_undo(page)
+    expect(page.locator(f'.widget-card[data-widget-key="{lower_position["key"]}"]')).to_have_count(0)
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    for position in added_positions:
+        reloaded = page.locator(f'.widget-card[data-widget-key="{position["key"]}"]')
+        expect(reloaded).to_be_visible()
+        assert reloaded.evaluate(
+            """
+            node => ({
+              col: Number(node.dataset.gridCol || 0),
+              row: Number(node.dataset.gridRow || 0),
+            })
+            """
+        ) == {"col": position["col"], "row": position["row"]}
+    assert_clean_browser(page)
+
+
+def test_clicking_newly_added_widgets_does_not_reload_or_hide_widgets(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    expect(page.locator(".panel-layout[data-layout-key='builder'] > .workspace-divider")).to_have_count(1)
+
+    before_count = page.locator(".widget-layout[data-widget-layout-key='builder'] > .widget-card:not([hidden])").count()
+    added_keys = []
+    for index in range(5):
+        page.locator(".panel-add-button").click()
+        page.locator('.widget-add-action[data-widget-kind="stat"]').click()
+        expect(
+            page.locator(
+                ".widget-layout[data-widget-layout-key='builder'] > .widget-card[data-custom-widget='true'][data-dashboard-object-kind='stat']"
+            )
+        ).to_have_count(index + 1)
+        added_keys.append(
+            page.locator(
+                ".widget-layout[data-widget-layout-key='builder'] > .widget-card[data-custom-widget='true'][data-dashboard-object-kind='stat']"
+            ).last.evaluate("node => node.dataset.widgetKey")
+        )
+    assert len(added_keys) == len(set(added_keys))
+
+    expected_count = before_count + len(added_keys)
+    for key in added_keys:
+        widget = page.locator(f'.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="{key}"]')
+        widget.scroll_into_view_if_needed()
+        before_url = page.url
+        widget.click(position={"x": 24, "y": 24})
+        expect(widget).to_have_class(re.compile("widget-tools-open"))
+        assert page.url == before_url
+        expect(page.locator(".widget-layout[data-widget-layout-key='builder'] > .widget-card:not([hidden])")).to_have_count(expected_count)
+        expect(page.locator(".panel-layout[data-layout-key='builder'] > .workspace-divider")).to_have_count(1)
+        visible_keys = page.evaluate(
+            """
+            () => [...document.querySelectorAll(".widget-layout[data-widget-layout-key='builder'] > .widget-card:not([hidden])")]
+              .map((node) => node.dataset.widgetKey)
+            """
+        )
+        for added_key in added_keys:
+            assert added_key in visible_keys
+        page.locator(".app-nav").click(position={"x": 12, "y": 12}, force=True)
+        expect(widget).not_to_have_class(re.compile("widget-tools-open"))
+
+    older_widget = page.locator('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="widget-1"]')
+    older_widget.click(position={"x": 24, "y": 24})
+    expect(older_widget).to_have_class(re.compile("widget-tools-open"))
+    expect(page.locator(".widget-layout[data-widget-layout-key='builder'] > .widget-card:not([hidden])")).to_have_count(expected_count)
+    page.locator(".app-nav").click(position={"x": 12, "y": 12}, force=True)
+
+    last_key = added_keys[-1]
+    press_dashboard_undo(page)
+    expect(page.locator(f'.widget-card[data-widget-key="{last_key}"]')).to_have_count(0)
+    expect(page.locator(".widget-layout[data-widget-layout-key='builder'] > .widget-card:not([hidden])")).to_have_count(expected_count - 1)
+    press_dashboard_redo(page)
+    expect(page.locator(f'.widget-card[data-widget-key="{last_key}"]')).to_be_visible()
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    for key in added_keys:
+        expect(page.locator(f'.widget-card[data-widget-key="{key}"]')).to_be_visible()
+    expect(page.locator(".widget-layout[data-widget-layout-key='builder'] > .widget-card:not([hidden])")).to_have_count(expected_count)
+    assert_clean_browser(page)
+
+
 def test_add_widget_targets_visible_divider_region_and_next_open_slot(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate("localStorage.clear()")
@@ -1270,7 +1473,7 @@ def test_widget_drags_directly_into_open_panel_and_round_trips(page: Page, app_s
 
     widget = page.locator('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="widget-1"]')
     panel = page.locator('[data-panel-key="builder-content"]')
-    open_tools(widget)
+    force_open_tools_for_interaction(page, widget)
     handle_box = widget.locator(".panel-move-handle").bounding_box()
     body_box = panel.locator(".db-panel-body").bounding_box()
     assert handle_box and body_box
@@ -1499,7 +1702,7 @@ def test_panel_internal_widget_drag_tracks_cursor_without_teleport(page: Page, a
 
     widget = page.locator('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="widget-1"]')
     panel = page.locator('[data-panel-key="builder-content"]')
-    open_tools(widget)
+    force_open_tools_for_interaction(page, widget)
     handle_box = widget.locator(".panel-move-handle").bounding_box()
     body_box = panel.locator(".db-panel-body").bounding_box()
     assert handle_box and body_box
@@ -1612,7 +1815,7 @@ def test_panel_child_drag_out_uses_boundary_release_transition(page: Page, app_s
 
     widget = page.locator('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="widget-1"]')
     panel = page.locator('[data-panel-key="builder-content"]')
-    open_tools(widget)
+    force_open_tools_for_interaction(page, widget)
     handle_box = widget.locator(".panel-move-handle").bounding_box()
     body_box = panel.locator(".db-panel-body").bounding_box()
     assert handle_box and body_box
@@ -1677,6 +1880,7 @@ def test_panel_child_drag_out_uses_boundary_release_transition(page: Page, app_s
           } : null;
           return {
             panelFeedback: panel.classList.contains("panel-boundary-exit-release") ||
+              panel.dataset.panelBoundaryExitFeedback === "true" ||
               animationNames(panel).includes("panel-boundary-exit-release") ||
               animationNames(panel).includes("panel-boundary-exit-rim-release"),
             placeholderTransition: placeholder.classList.contains("panel-exit-preview-transition") ||
@@ -7070,6 +7274,17 @@ def test_edge_auto_scroll_upward_is_smooth_and_keeps_navbar_stable(page: Page, a
 
     page.wait_for_function(
         """
+        () => window.scrollY < 140 &&
+          document.body.classList.contains("dashboard-auto-scroll-active") &&
+          document.querySelector(".widget-placeholder")
+        """,
+        timeout=12000,
+    )
+    top_boundary_motion = sample_auto_scroll_motion(page, frames=20)
+    assert_top_edge_auto_scroll_brakes_smoothly(top_boundary_motion)
+
+    page.wait_for_function(
+        """
         () => window.scrollY <= 12 &&
           Number(document.querySelector(".widget-placeholder")?.dataset.gridRow || 0) === 1
         """,
@@ -7539,7 +7754,7 @@ def test_edge_auto_scroll_supports_group_drag_and_resize(page: Page, app_server:
         "widget": grid_item_state(page, '[data-widget-key="widget-1"]'),
         "panel": grid_item_state(page, '[data-panel-key="builder-content"]'),
     }
-    open_tools(widget)
+    force_open_tools_for_interaction(page, widget)
     handle_box = widget.locator(".panel-move-handle").bounding_box()
     assert handle_box
     x, y = box_center(handle_box)

@@ -72,7 +72,7 @@ Command:
 .venv\Scripts\python.exe -m pytest -q
 ```
 
-Latest result: 99 passed, 1 skipped, 0 failed.
+Latest result: 126 passed, 1 skipped, 0 failed.
 
 Previous discovery result: 6 passed, 3 failed.
 
@@ -1627,6 +1627,42 @@ Passed coverage included app/dashboard/settings load, CSS imports, absence of mo
 - Suspected cause: The drag lifecycle had a dedicated workspace-to-panel preview state, but panel-child drags only moved inside the panel-local grid and had no mirrored workspace exit preview or visual transition hook.
 - Fix notes: Added a workspace-side panel-exit preview state for panel-child drags, a semantic extraction commit path that moves the widget back to the global workspace on release, and shared tunnel-style ghost/placeholder animation plus a panel rim release pulse for the boundary exit.
 - Validation: Added `test_panel_child_drag_out_uses_boundary_release_transition` to verify the release pulse, workspace placeholder transition, pointer-coherent ghost, commit to workspace, undo restoration into the panel, redo extraction, and cleanup of transient placeholders. Targeted panel containment, header-entry, fast-pass-through, and delete/extract tests passed.
+
+### BUG-119: Smart Add Could Prefer A Lower Divider Over The Visible Top Region
+
+- Status: Verified
+- Area: Smart insertion / divider regions / workspace placement
+- Severity: Medium
+- Environment: Dashboard workspace, Chromium desktop, workspace with visible top/default area before first divider
+- Observed: Adding objects could place them under the first divider even when the top/default workspace area occupied most of the visible screen.
+- Expected: The area before the first visible divider should be scored as a first-class top/default region, win when it has the most visible usable area, and produce deterministic placement before lower divider regions.
+- Suspected cause: Region scoring treated the pre-divider area as an anonymous band and used row-count scoring with unstable tie behavior, which made repeated adds sensitive to viewport/focus changes and lower-region fallthrough.
+- Fix notes: Added explicit region identity/order for the top/default, divider, and final regions; changed scoring to visible usable area using live viewport intersections; and made tie-breaking deterministic by viewport-center distance, topmost visible region, region order, then id.
+- Validation: Added `test_add_widget_scores_top_default_region_before_first_divider` to verify repeated adds land in the top/default region while it dominates, scrolling to the divider region moves the next add below the divider, undo removes the lower add, and save/load preserves top-region placements. Targeted smart-add and group-paste tests passed.
+
+### BUG-120: Clicking Newly Added Link-Backed Widgets Reloaded Away Unsaved Widgets
+
+- Status: Verified
+- Area: Widgets / add-widget flow / click handling
+- Severity: High
+- Environment: Dashboard workspace, Chromium desktop, newly added stat widgets
+- Observed: After adding multiple widgets, clicking a newly added widget could navigate back to `/dashboard`, causing unsaved newly inserted widgets to disappear from the rendered dashboard.
+- Expected: Clicking a newly added widget should behave like an in-app workspace interaction: focus/open that widget's controls without hiding existing widgets, newly added widgets, dividers, panels, or anchors.
+- Suspected cause: Stat widgets are rendered as link-backed cards. The widget click handler only suppressed clicks immediately after a drag, so a normal body click followed the card `href` and reloaded the page before unsaved custom widgets were persisted.
+- Fix notes: Widget body clicks now prevent link navigation, close other dashboard tools, open the clicked widget controls, and focus the widget without disturbing actual input/button/contenteditable controls inside widget content.
+- Validation: Added `test_clicking_newly_added_widgets_does_not_reload_or_hide_widgets` to add several widgets, verify unique ids, click each new widget, confirm the URL and visible widget collection remain stable, verify older widget clicks still work, and cover undo/redo plus save/load persistence. Targeted add-widget/runtime/menu tests passed.
+
+### BUG-121: Top-Edge Drag Auto-Scroll Jumped Near The Workspace Top
+
+- Status: Verified
+- Area: Dashboard grid / drag / edge auto-scroll / motion quality
+- Severity: Medium
+- Environment: Dashboard workspace, Chromium desktop, upward widget/group drag near the fixed navbar
+- Observed: Dragging an object toward the top edge could feel jagged and too fast as the document approached `scrollTop = 0`, with final upward scroll deltas clamping abruptly against the browser's top boundary.
+- Expected: Upward auto-scroll should use the same RAF interaction loop as bottom-edge scrolling, brake smoothly near the top boundary, keep the live drag ghost pointer-continuous, keep snapped previews predictable, and leave the bottom-edge runway behavior unchanged.
+- Suspected cause: The top-edge path no longer applied a distance-based brake before requesting scroll deltas near `scrollY = 0`. Current velocity could remain high from the prior upward ramp, so the final scroll requests were clamped by the browser in large visible steps.
+- Fix notes: Restored a top-distance pressure brake in the shared interaction auto-scroll helper, bounded per-frame upward deltas by remaining top distance, and relaxed the live drag surface's top clamp to preserve the pointer grab offset while actively auto-scrolling upward.
+- Validation: Strengthened `test_edge_auto_scroll_upward_is_smooth_and_keeps_navbar_stable` to sample the top-boundary braking stretch and reject large final jumps. Targeted upward, full edge auto-scroll, and related drag/top-grid Playwright slices passed. The final `.venv\Scripts\python.exe -m pytest -q` run passed with 126 tests and 1 responsive/mobile skip.
 
 ## Entry Template
  

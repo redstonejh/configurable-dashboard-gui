@@ -41,6 +41,9 @@ The upcoming work is intentionally staged around stabilization first, then large
 - Widget rendering now uses `app/static/widget-registry.js`, so stat, timeframe, search, table, chart, stat-filter, and calendar widgets declare runtime contracts outside core grid interaction code.
 - Context visualization is hidden in normal mode and is revealed through Engineer Mode, keeping the default workspace clean while preserving internal context inheritance.
 - Large-workspace performance now separates layout correctness from visual cost with viewport-aware reflow animation, pseudo-LOD material tiers, row-bucketed collision queries, cached logical geometry records, and reduced DOM reads on committed geometry.
+- Smart object insertion now treats the top/default workspace area as a first-class visible divider region, keeps repeated adds deterministic, and places new objects in the region the user is actually viewing.
+- Newly added widget cards remain in-app workspace objects when clicked, so link-backed placeholder content no longer reloads away unsaved additions.
+- Top-edge drag auto-scroll now brakes smoothly near the fixed navbar and workspace top while preserving the existing bottom-edge runway behavior.
 
 ### Near-Term Stabilization
 
