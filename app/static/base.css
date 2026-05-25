@@ -62,7 +62,9 @@ p {
 }
 
 .page {
-  width: min(1180px, calc(100vw - 40px));
+  --workspace-shell-width: 1224px;
+  --workspace-shell-gutter: clamp(40px, 6vw, 72px);
+  width: min(var(--workspace-shell-width), calc(100vw - var(--workspace-shell-gutter)));
   max-width: 100%;
   margin: 0 auto;
   padding: 44px 0 56px;

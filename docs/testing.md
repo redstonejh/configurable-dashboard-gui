@@ -31,6 +31,25 @@ During development, prefer targeted slices before the final full suite:
 .venv\Scripts\python.exe -m pytest tests\test_dashboard_builder_e2e.py -q -k "group or drag"
 ```
 
+## Desktop Interaction Iteration Phase
+
+Mobile/responsive Playwright coverage is temporarily opt-in while desktop spatial interaction work is active. The tests remain in the repo and are marked as responsive coverage, but default targeted desktop runs skip mobile-specific viewport checks to keep iteration focused on drag, collision, panel containment, anchors, workspace composition, animation quality, and desktop Chromium behavior.
+
+Run targeted desktop slices during iteration:
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests\test_dashboard_builder_e2e.py -q -k "anchor or drag or menu"
+```
+
+Responsive/mobile coverage can be restored for the responsive stabilization phase by enabling the opt-in flag:
+
+```powershell
+$env:DASHBOARD_ENABLE_RESPONSIVE_E2E = "1"
+.venv\Scripts\python.exe -m pytest tests\test_dashboard_builder_e2e.py -q -m responsive
+```
+
+Before major merges, run the full desktop suite. Restore the mobile matrix when responsive polish becomes the active development priority.
+
 ## Browser Test Expectations
 
 Playwright tests should cover:

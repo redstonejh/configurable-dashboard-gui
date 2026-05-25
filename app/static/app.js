@@ -408,7 +408,8 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   const isDashboardInteractionActive = () => (
     document.body.classList.contains("panel-interaction-active") ||
-    document.body.classList.contains("panel-resize-active")
+    document.body.classList.contains("panel-resize-active") ||
+    document.body.classList.contains("anchor-rail-drag-active")
   );
   const isInteractionSource = (item) => Boolean(item?.classList?.contains("widget-dragging") ||
     item?.classList?.contains("db-panel-dragging") ||
@@ -837,9 +838,9 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   const performWorkspaceObjectDelete = (entries) => {
     const hiddenByLayout = new Map();
+    removeAnchorsWithRailReflow(entries);
     entries.forEach((entry) => {
       if (entry.kind === "anchor") {
-        entry.item.remove();
         return;
       }
       const hiddenKey = entry.kind === "widget" ? "hiddenWidgetsDraft" : "hiddenPanelsDraft";
@@ -1911,10 +1912,10 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const anchorOrderValue = (anchor, fallback = 0) => {
-    const order = Number(anchor?.dataset?.anchorRailOrder);
-    if (Number.isFinite(order)) return order;
     const offset = Number(anchor?.dataset?.anchorOffset);
-    return Number.isFinite(offset) ? offset : fallback;
+    if (Number.isFinite(offset)) return offset;
+    const order = Number(anchor?.dataset?.anchorRailOrder);
+    return Number.isFinite(order) ? order : fallback;
   };
 
   const anchorRailAnchors = (layer) => [...layer.querySelectorAll(":scope > .workspace-anchor-object:not(.workspace-anchor-drag-ghost)")]
@@ -1928,6 +1929,16 @@ document.addEventListener("DOMContentLoaded", () => {
       nextOffset += Math.ceil(anchor.getBoundingClientRect().height || 81) + ANCHOR_RAIL_GAP;
     });
     return offsets;
+  };
+
+  const nextAnchorRailOffset = (layer) => {
+    const anchors = anchorRailAnchors(layer);
+    const lastBottom = anchors.reduce((bottom, anchor) => {
+      const offset = Number(anchor.dataset.anchorOffset) || ANCHOR_RAIL_START;
+      const height = Math.ceil(anchor.getBoundingClientRect().height || 81);
+      return Math.max(bottom, offset + height);
+    }, ANCHOR_RAIL_START - ANCHOR_RAIL_GAP);
+    return clampAnchorOffset(lastBottom + ANCHOR_RAIL_GAP);
   };
 
   const anchorDefinitionFromElement = (anchor) => ({
@@ -1975,8 +1986,84 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   };
 
+  const preserveAnchorRailPositions = (layer, orderedAnchors = anchorRailAnchors(layer)) => {
+    orderedAnchors.forEach((anchor, index) => {
+      anchor.dataset.anchorSide = "left";
+      anchor.dataset.anchorRailOrder = String(index);
+      anchor.dataset.anchorOffset = String(clampAnchorOffset(anchor.dataset.anchorOffset, anchor));
+      applyAnchorPosition(anchor);
+      layer.appendChild(anchor);
+    });
+  };
+
   const normalizeAnchorLayer = (layer) => {
-    commitAnchorRailOrder(layer);
+    preserveAnchorRailPositions(layer);
+  };
+
+  const animateAnchorRailOffsetShift = (anchor, previousTop) => {
+    const nextTop = anchor.getBoundingClientRect().top;
+    const deltaY = Math.round(previousTop - nextTop);
+    if (Math.abs(deltaY) < 1) return;
+    anchor.classList.add("anchor-rail-reflowing");
+    anchor.style.transition = "none";
+    anchor.style.transform = `translate3d(0, ${deltaY}px, 0)`;
+    anchor.getBoundingClientRect();
+    const clear = () => {
+      anchor.classList.remove("anchor-rail-reflowing");
+      anchor.style.removeProperty("transition");
+      anchor.style.removeProperty("transform");
+      anchor.removeEventListener("transitionend", clear);
+      anchor.removeEventListener("transitioncancel", clear);
+    };
+    anchor.addEventListener("transitionend", clear);
+    anchor.addEventListener("transitioncancel", clear);
+    requestAnimationFrame(() => {
+      anchor.style.removeProperty("transition");
+      anchor.style.removeProperty("transform");
+    });
+  };
+
+  const removeAnchorsWithRailReflow = (entries) => {
+    const byLayer = new Map();
+    entries
+      .filter((entry) => entry.kind === "anchor")
+      .forEach((entry) => {
+        const group = byLayer.get(entry.layout) || [];
+        group.push(entry);
+        byLayer.set(entry.layout, group);
+      });
+    byLayer.forEach((anchorEntries, layer) => {
+      const before = new Map();
+      anchorRailAnchors(layer).forEach((anchor) => {
+        before.set(anchor, {
+          offset: Number(anchor.dataset.anchorOffset) || anchor.getBoundingClientRect().top || ANCHOR_RAIL_START,
+          top: anchor.getBoundingClientRect().top,
+          height: Math.ceil(anchor.getBoundingClientRect().height || 81),
+        });
+      });
+      const deletedFootprints = anchorEntries
+        .map((entry) => before.get(entry.item))
+        .filter(Boolean)
+        .sort((a, b) => a.offset - b.offset);
+      anchorEntries.forEach((entry) => entry.item.remove());
+      const remaining = anchorRailAnchors(layer);
+      remaining.forEach((anchor) => {
+        const old = before.get(anchor);
+        if (!old) return;
+        const shift = deletedFootprints.reduce((total, deleted) => (
+          deleted.offset < old.offset ? total + deleted.height + ANCHOR_RAIL_GAP : total
+        ), 0);
+        if (shift <= 0) return;
+        anchor.dataset.anchorOffset = String(clampAnchorOffset(old.offset - shift, anchor));
+        applyAnchorPosition(anchor);
+      });
+      preserveAnchorRailPositions(layer, remaining);
+      remaining.forEach((anchor) => {
+        const old = before.get(anchor);
+        if (!old) return;
+        animateAnchorRailOffsetShift(anchor, old.top);
+      });
+    });
   };
 
   const anchorLinkedDividerTarget = (anchor) => {
@@ -1990,9 +2077,49 @@ document.addEventListener("DOMContentLoaded", () => {
     ].join(", "));
   };
 
+  const anchorTargetViewportTop = (target) => {
+    const currentScroll = window.scrollY || document.documentElement.scrollTop || 0;
+    const grid = target.closest(".dashboard-layout-grid") || document.querySelector(".dashboard-layout-grid");
+    const nav = document.querySelector(".app-nav.workspace-chrome, .app-nav");
+    const navBottom = nav ? Math.max(0, Math.round(nav.getBoundingClientRect().bottom)) : 0;
+    if (!grid) return navBottom + 8;
+    const gridTop = Math.round(grid.getBoundingClientRect().top + currentScroll);
+    return Math.max(navBottom + 8, gridTop);
+  };
+
+  const anchorNavigationRunway = () => {
+    let runway = document.querySelector(".workspace-anchor-scroll-runway");
+    if (!runway) {
+      runway = document.createElement("div");
+      runway.className = "workspace-anchor-scroll-runway";
+      runway.setAttribute("aria-hidden", "true");
+      document.body.appendChild(runway);
+    }
+    return runway;
+  };
+
+  const clearAnchorNavigationRunway = () => {
+    document.querySelector(".workspace-anchor-scroll-runway")?.remove();
+  };
+
+  const ensureAnchorNavigationRunway = (target, viewportTop) => {
+    const runway = anchorNavigationRunway();
+    const currentScroll = window.scrollY || document.documentElement.scrollTop || 0;
+    const targetTop = target.getBoundingClientRect().top + currentScroll;
+    const requiredScrollHeight = Math.ceil(targetTop + window.innerHeight - viewportTop + 32);
+    const currentRunwayHeight = Number.parseFloat(runway.style.height || "0") || 0;
+    const baseScrollHeight = document.documentElement.scrollHeight - currentRunwayHeight;
+    const missingHeight = Math.max(0, requiredScrollHeight - baseScrollHeight);
+    runway.style.height = `${missingHeight}px`;
+  };
+
   const anchorTargetScrollTop = (target) => {
     const currentScroll = window.scrollY || document.documentElement.scrollTop || 0;
-    return Math.max(0, Math.round(target.getBoundingClientRect().top + currentScroll - 96));
+    const targetTop = target.getBoundingClientRect().top + currentScroll;
+    const viewportTop = anchorTargetViewportTop(target);
+    ensureAnchorNavigationRunway(target, viewportTop);
+    const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    return Math.max(0, Math.min(maxScroll, Math.round(targetTop - viewportTop)));
   };
 
   const syncAnchorNavigationTarget = (anchor) => {
@@ -2171,6 +2298,7 @@ document.addEventListener("DOMContentLoaded", () => {
       syncAnchorNavigationTarget(anchor);
       saveFloatingAnchors(anchor.closest(".workspace-anchor-layer")?.dataset.anchorLayoutKey || "builder");
     }
+    if (!target) clearAnchorNavigationRunway();
     const top = target ? anchorTargetScrollTop(target) : 0;
     window.scrollTo({ top, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth" });
   };
@@ -2184,6 +2312,8 @@ document.addEventListener("DOMContentLoaded", () => {
     let startY = 0;
     let pointerOffsetY = 0;
     let dragState = null;
+    let activeMovePointerId = null;
+    let activeMovePointerTarget = null;
     const layoutKey = layer.dataset.anchorLayoutKey || "default";
     anchor.__saveWidgetLayout = () => saveFloatingAnchors(layoutKey, getActivePanelProfile(layoutKey));
     const tools = anchor.querySelector(".anchor-tools");
@@ -2205,7 +2335,8 @@ document.addEventListener("DOMContentLoaded", () => {
       settings?.setAttribute("aria-expanded", "true");
       syncLayoutToolsActive();
     };
-    const closeTools = () => {
+    const closeTools = (options = {}) => {
+      if (options.cancelMove !== false) cancelAnchorMoveFromMenuClose();
       anchor.classList.remove("widget-tools-open");
       settings?.setAttribute("aria-expanded", "false");
       linkToggle?.setAttribute("aria-expanded", "false");
@@ -2225,16 +2356,48 @@ document.addEventListener("DOMContentLoaded", () => {
       linkMenu.classList.toggle("anchor-link-menu-open", nextOpen);
       linkToggle.setAttribute("aria-expanded", String(nextOpen));
     };
+
+    function removeAnchorMoveListeners() {
+      document.removeEventListener("pointermove", handleAnchorMovePointerMove);
+      document.removeEventListener("pointerup", finishAnchorMove);
+      document.removeEventListener("pointercancel", finishAnchorMove);
+      document.removeEventListener("keydown", handleAnchorMoveKeydown);
+      window.removeEventListener("blur", handleAnchorMoveWindowBlur);
+      activeMovePointerTarget?.removeEventListener?.("lostpointercapture", handleAnchorLostPointerCapture);
+    }
+
+    function releaseAnchorMovePointer() {
+      if (activeMovePointerId == null || !activeMovePointerTarget?.hasPointerCapture?.(activeMovePointerId)) return;
+      try {
+        activeMovePointerTarget.releasePointerCapture(activeMovePointerId);
+      } catch {
+        // Pointer capture may already be released by cancel, blur, or browser focus changes.
+      }
+    }
+
     const startAnchorMove = (event) => {
       if (event.button !== 0) return;
       event.preventDefault();
       event.stopPropagation();
+      if (activeMovePointerId != null || dragState) finishAnchorMove({ type: "pointercancel" });
       startX = event.clientX;
       startY = event.clientY;
       pointerOffsetY = event.clientY - anchor.getBoundingClientRect().top;
       dragging = false;
       didDrag = false;
-      anchor.setPointerCapture?.(event.pointerId);
+      activeMovePointerId = event.pointerId;
+      activeMovePointerTarget = anchor;
+      try {
+        activeMovePointerTarget?.setPointerCapture?.(event.pointerId);
+      } catch {
+        // Document-level listeners still cover browsers that decline capture.
+      }
+      document.addEventListener("pointermove", handleAnchorMovePointerMove);
+      document.addEventListener("pointerup", finishAnchorMove);
+      document.addEventListener("pointercancel", finishAnchorMove);
+      document.addEventListener("keydown", handleAnchorMoveKeydown);
+      window.addEventListener("blur", handleAnchorMoveWindowBlur);
+      activeMovePointerTarget?.addEventListener?.("lostpointercapture", handleAnchorLostPointerCapture);
     };
 
     const previewIndexForPointer = (pointerY, peers) => {
@@ -2267,7 +2430,7 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     const beginAnchorRailDrag = (event) => {
-      closeTools();
+      closeTools({ cancelMove: false });
       const rect = anchor.getBoundingClientRect();
       const ghost = anchor.cloneNode(true);
       ghost.classList.remove("widget-tools-open");
@@ -2327,6 +2490,51 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     };
 
+    function handleAnchorMovePointerMove(event) {
+      if (activeMovePointerId == null) return;
+      if (event.pointerId !== undefined && event.pointerId !== activeMovePointerId) return;
+      if (event.buttons !== 1) {
+        finishAnchorMove({ type: "pointercancel", pointerId: activeMovePointerId });
+        return;
+      }
+      const distance = Math.hypot(event.clientX - startX, event.clientY - startY);
+      if (!dragging && distance < 4) return;
+      if (!dragState) beginAnchorRailDrag(event);
+      updateAnchorRailDrag(event);
+    }
+
+    function finishAnchorMove(event = {}) {
+      if (activeMovePointerId == null && !dragState) return;
+      if (event.pointerId !== undefined && activeMovePointerId != null && event.pointerId !== activeMovePointerId) return;
+      const commit = event.type !== "pointercancel" && event.type !== "keydown" && event.type !== "blur" && event.type !== "lostpointercapture";
+      removeAnchorMoveListeners();
+      releaseAnchorMovePointer();
+      if (dragState) cleanupAnchorRailDrag(commit);
+      activeMovePointerId = null;
+      activeMovePointerTarget = null;
+      dragging = false;
+    }
+
+    function handleAnchorMoveKeydown(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      finishAnchorMove({ type: "keydown" });
+    }
+
+    function handleAnchorMoveWindowBlur() {
+      finishAnchorMove({ type: "blur" });
+    }
+
+    function handleAnchorLostPointerCapture(event) {
+      if (activeMovePointerId != null && event.pointerId !== activeMovePointerId) return;
+      finishAnchorMove({ type: "lostpointercapture", pointerId: event.pointerId });
+    }
+
+    function cancelAnchorMoveFromMenuClose() {
+      if (activeMovePointerId == null && !dragState) return;
+      finishAnchorMove({ type: "pointercancel", pointerId: activeMovePointerId });
+    }
+
     tools?.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -2376,27 +2584,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     moveHandle?.addEventListener("pointerdown", startAnchorMove);
 
-    anchor.addEventListener("pointerdown", (event) => {
-      if (event.target?.closest?.(".anchor-tools, .panel-color-menu, .anchor-link-menu")) return;
-      startAnchorMove(event);
-    });
-
-    anchor.addEventListener("pointermove", (event) => {
-      if (event.buttons !== 1) return;
-      const distance = Math.hypot(event.clientX - startX, event.clientY - startY);
-      if (!dragging && distance < 4) return;
-      if (!dragState) beginAnchorRailDrag(event);
-      updateAnchorRailDrag(event);
-    });
-
-    const finishDrag = (event) => {
-      if (event.pointerId !== undefined) anchor.releasePointerCapture?.(event.pointerId);
-      if (dragState) cleanupAnchorRailDrag(event.type !== "pointercancel");
-      dragging = false;
-    };
-
-    anchor.addEventListener("pointerup", finishDrag);
-    anchor.addEventListener("pointercancel", finishDrag);
     anchor.addEventListener("click", (event) => {
       if (event.target?.closest?.(".anchor-tools, .panel-color-menu, .anchor-link-menu")) return;
       if (dragging || didDrag) {
@@ -3239,8 +3426,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!widgetLayout || !panelLayout || !widgetLayout.closest(".dashboard-layout-grid")) return;
     const force = Boolean(options.force);
 
-    let col = 1;
-    let row = 1;
     const widgets = [...widgetLayout.querySelectorAll(":scope > .widget-card:not([hidden])")];
     const panels = [...panelLayout.querySelectorAll(":scope > .db-panel:not([hidden])")];
     if (!force) {
@@ -3285,28 +3470,48 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    widgets.forEach((widget) => {
-      const span = gridItemSpan(widget);
-      if (col + span - 1 > DASHBOARD_GRID_COLUMNS) {
-        row += 1;
-        col = 1;
-      }
-      applyWidgetGridPosition(widget, col, row);
-      col += span;
-    });
+    const occupied = [];
+    const placeForcedItems = (items, applyPosition, startRow = 1) => {
+      let cursorCol = 1;
+      let cursorRow = startRow;
+      const findSequentialBounds = (item) => {
+        const span = gridItemSpan(item);
+        for (let candidateRow = Math.max(1, cursorRow); candidateRow < Math.max(1, cursorRow) + 160; candidateRow += 1) {
+          const firstCol = candidateRow === cursorRow ? Math.max(1, cursorCol) : 1;
+          for (let candidateCol = firstCol; candidateCol <= DASHBOARD_GRID_COLUMNS - span + 1; candidateCol += 1) {
+            const bounds = boundsAtGridSlot(item, candidateCol, candidateRow);
+            if (canPlaceBounds(bounds, occupied)) return bounds;
+          }
+        }
+        return nearestSparseSlot(item, { col: Math.max(1, cursorCol), row: Math.max(1, cursorRow) }, occupied);
+      };
 
-    const panelStartRow = Math.max(3, row + 1);
-    let panelCol = 1;
-    let panelRow = panelStartRow;
-    panels.forEach((panel) => {
-      const span = gridItemSpan(panel);
-      if (panelCol + span - 1 > DASHBOARD_GRID_COLUMNS) {
-        panelRow += 1;
-        panelCol = 1;
-      }
-      applyPanelGridPosition(panel, panelCol, panelRow);
-      panelCol += span;
-    });
+      items.forEach((item) => {
+        const defaultCol = Number(item.dataset.defaultGridCol);
+        const defaultRow = Number(item.dataset.defaultGridRow);
+        let bounds = null;
+        if (defaultCol && defaultRow && defaultRow >= startRow) {
+          const defaultBounds = boundsAtGridSlot(item, defaultCol, defaultRow);
+          if (canPlaceBounds(defaultBounds, occupied)) bounds = defaultBounds;
+        }
+        bounds = bounds || findSequentialBounds(item);
+        applyPosition(item, bounds.col, bounds.row);
+        occupied.push({ item, bounds: gridBoundsForItem(item) });
+        cursorRow = bounds.row;
+        cursorCol = bounds.col + bounds.span;
+        if (cursorCol > DASHBOARD_GRID_COLUMNS) {
+          cursorRow += 1;
+          cursorCol = 1;
+        }
+      });
+    };
+
+    placeForcedItems(widgets, applyWidgetGridPosition, 1);
+    const widgetBottom = widgets.reduce((bottom, item) => {
+      const bounds = gridBoundsForItem(item);
+      return Math.max(bottom, bounds.bottom);
+    }, 0);
+    placeForcedItems(panels, applyPanelGridPosition, Math.max(3, widgetBottom + 1));
   };
 
   const normalizeGridLayout = (layout, priorityItem = null) => {
@@ -4098,6 +4303,9 @@ document.addEventListener("DOMContentLoaded", () => {
     window.getSelection?.()?.removeAllRanges();
     const startX = event.clientX;
     const startY = event.clientY;
+    const pointerId = event.pointerId;
+    const pointerTarget = event.currentTarget || item;
+    let ended = false;
     let rect = null;
     let offsetX = 0;
     let offsetY = 0;
@@ -4244,12 +4452,34 @@ document.addEventListener("DOMContentLoaded", () => {
       movePreview(previewRect.left + (previewRect.width / 2), previewRect.top + (previewRect.height / 2), currentMetrics);
     };
 
+    const removeListeners = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+      document.removeEventListener("keydown", onKeydown);
+      window.removeEventListener("blur", onWindowBlur);
+      pointerTarget?.removeEventListener?.("lostpointercapture", onLostPointerCapture);
+    };
+
+    const releasePointer = () => {
+      if (pointerId == null || !pointerTarget?.hasPointerCapture?.(pointerId)) return;
+      try {
+        pointerTarget.releasePointerCapture(pointerId);
+      } catch {
+        // Pointer capture may already be released by the browser during cancel.
+      }
+    };
+
     const onUp = (upEvent) => {
+      if (ended) return;
+      ended = true;
       const canceled = upEvent?.type === "pointercancel";
       const releaseScrollY = window.scrollY || document.documentElement.scrollTop || 0;
       const releaseUsedExtendedWorkspace = dragging && placeholder && !canceled && document.body.classList.contains("dashboard-interaction-scroll-extended");
       let committedExtendedWorkspaceScrollY = null;
       autoScroll.stop({ preserveExtension: dragging && placeholder && !canceled });
+      removeListeners();
+      releasePointer();
       document.body.classList.remove("panel-interaction-active");
       document.body.classList.remove("panel-resize-active");
       try {
@@ -4337,11 +4567,6 @@ document.addEventListener("DOMContentLoaded", () => {
         document.body.classList.remove("group-transform-active");
       }
       onEnd?.(dragging);
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onUp);
-      document.removeEventListener("pointercancel", onUp);
-      document.removeEventListener("keydown", onKeydown);
-      window.removeEventListener("blur", onWindowBlur);
     };
 
     const onKeydown = (keyEvent) => {
@@ -4354,11 +4579,22 @@ document.addEventListener("DOMContentLoaded", () => {
       onUp({ type: "pointercancel" });
     };
 
+    const onLostPointerCapture = (captureEvent) => {
+      if (captureEvent.pointerId !== pointerId) return;
+      onUp({ type: "pointercancel" });
+    };
+
+    try {
+      if (pointerId != null) pointerTarget?.setPointerCapture?.(pointerId);
+    } catch {
+      // Document-level listeners still cover browsers that decline capture.
+    }
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
     document.addEventListener("pointercancel", onUp);
     document.addEventListener("keydown", onKeydown);
     window.addEventListener("blur", onWindowBlur);
+    pointerTarget?.addEventListener?.("lostpointercapture", onLostPointerCapture);
   };
 
   const widgetSpacerSiblingsBefore = (widget) => {
@@ -6256,8 +6492,17 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  const closeObjectAddMenu = (button) => {
+    const picker = button?.closest?.(".panel-add-picker");
+    const trigger = picker?.querySelector?.(".panel-add-button");
+    const menu = picker?.querySelector?.(".panel-add-menu");
+    menu?.classList.remove("open");
+    trigger?.setAttribute("aria-expanded", "false");
+  };
+
   document.querySelectorAll(".panel-add-action").forEach((button) => {
     button.addEventListener("click", () => {
+      closeObjectAddMenu(button);
       const layoutKey = button.dataset.layoutTarget || "default";
       const layout = document.querySelector(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"]`);
       if (!layout) return;
@@ -6309,6 +6554,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.querySelectorAll(".divider-add-action").forEach((button) => {
     button.addEventListener("click", () => {
+      closeObjectAddMenu(button);
       const layoutKey = button.dataset.layoutTarget || "default";
       const layout = document.querySelector(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"]`);
       if (!layout) return;
@@ -6354,6 +6600,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.querySelectorAll(".widget-add-action").forEach((button) => {
     button.addEventListener("click", () => {
+      closeObjectAddMenu(button);
       const layoutKey = button.dataset.widgetTarget || "default";
       const layout = document.querySelector(`.widget-layout[data-widget-layout-key="${CSS.escape(layoutKey)}"]`);
       const kind = button.dataset.widgetKind || "widget";
@@ -6371,7 +6618,7 @@ document.addEventListener("DOMContentLoaded", () => {
           color: nextColor,
           side: "left",
           railOrder: customCount,
-          offset: ANCHOR_RAIL_START,
+          offset: nextAnchorRailOffset(layer),
           navigationTargetType: "workspace-top",
           navigationTargetId: "",
         });
@@ -6400,7 +6647,7 @@ document.addEventListener("DOMContentLoaded", () => {
         timeframe: {
           objectName: "Timeframe",
           value: "A",
-          span: 5,
+          span: 4,
           minW: 2,
           type: "controls",
           dashboardObjectKind: "timeframe",

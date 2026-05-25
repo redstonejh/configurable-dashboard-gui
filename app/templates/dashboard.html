@@ -150,7 +150,7 @@
 
 <div class="dashboard-layout-grid" data-dashboard-layout-key="builder">
   <div class="stat-band widget-layout" data-widget-layout-key="builder">
-    <nav class="range-bar widget-card timeframe-widget" data-widget-key="builder-search" data-widget-type="controls" data-default-span="5" data-min-w="2" aria-label="Dashboard timeframe controls">
+    <nav class="range-bar widget-card timeframe-widget" data-widget-key="builder-search" data-widget-type="controls" data-default-span="4" data-min-w="2" aria-label="Dashboard timeframe controls">
       <div class="timeframe-command-surface">
         <div class="range-controls timeframe-controls">
           <div class="range-presets timeframe-presets" role="group" aria-label="Timeframe presets">
@@ -169,7 +169,9 @@
       </div>
     </nav>
     {% for widget in widgets if widget.widget_type != "controls" %}
-    <a class="stat-card widget-card" data-widget-key="{{ widget.key }}" data-widget-type="{{ widget.widget_type }}" data-default-span="{{ widget.span }}" data-default-title="{{ widget.title }}" href="/dashboard">
+    {% set stat_col = 5 + (loop.index0 % 2) %}
+    {% set stat_row = 1 + (loop.index0 // 2) %}
+    <a class="stat-card widget-card" data-widget-key="{{ widget.key }}" data-widget-type="{{ widget.widget_type }}" data-default-span="{{ widget.span }}" data-default-grid-col="{{ stat_col }}" data-default-grid-row="{{ stat_row }}" data-grid-col="{{ stat_col }}" data-grid-row="{{ stat_row }}" data-default-title="{{ widget.title }}" href="/dashboard">
       <span class="stat-val">{{ widget.value }}</span>
       <span class="stat-lbl">{{ widget.title }}</span>
     </a>
@@ -177,7 +179,7 @@
   </div>
 
   <div class="panel-layout" data-layout-key="builder">
-    <section class="db-panel" data-panel-key="builder-content" data-default-span="3" data-default-title="Content">
+    <section class="db-panel" data-panel-key="builder-content" data-default-span="4" data-default-grid-col="1" data-default-grid-row="3" data-grid-col="1" data-grid-row="3" data-default-title="Content">
       <div class="db-panel-hd db-panel-hd-items">
         <span class="db-panel-title">Content</span>
         <span class="db-panel-count">0</span>
@@ -192,7 +194,7 @@
       </div>
     </section>
 
-    <section class="db-panel db-panel-collapsed" data-collapse-default="closed" data-panel-key="builder-menu" data-default-span="2" data-default-title="Menu">
+    <section class="db-panel db-panel-collapsed" data-collapse-default="closed" data-panel-key="builder-menu" data-default-span="2" data-default-grid-col="5" data-default-grid-row="3" data-grid-col="5" data-grid-row="3" data-default-title="Menu">
       <div class="db-panel-hd db-panel-hd-items">
         <span class="db-panel-title">Menu</span>
         <span class="db-panel-count">0</span>
@@ -207,7 +209,7 @@
       </div>
     </section>
 
-    <section class="db-panel" data-panel-key="builder-notes" data-default-span="1" data-default-title="Notes">
+    <section class="db-panel" data-panel-key="builder-notes" data-default-span="2" data-default-grid-col="5" data-default-grid-row="4" data-grid-col="5" data-grid-row="4" data-default-title="Notes">
       <div class="db-panel-hd db-panel-hd-items">
         <span class="db-panel-title">Notes</span>
         <span class="db-panel-count">0</span>

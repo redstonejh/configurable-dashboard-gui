@@ -1,6 +1,6 @@
 ﻿/* Cohesive polish layer */
 .page {
-  max-width: 1280px;
+  max-width: var(--workspace-shell-width, 1224px);
 }
 
 .app-nav {

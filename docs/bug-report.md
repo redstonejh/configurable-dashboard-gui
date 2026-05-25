@@ -72,11 +72,71 @@ Command:
 .venv\Scripts\python.exe -m pytest -q
 ```
 
-Latest result: 90 passed, 0 failed.
+Latest result: 93 passed, 1 skipped, 0 failed.
 
 Previous discovery result: 6 passed, 3 failed.
 
 Passed coverage included app/dashboard/settings load, CSS imports, absence of mode toggle state, expanded background palette persistence, shared material invariance across deep background selection, workspace toolbar command-island screenshots, toolbar mode toggles, generic Add Widget menu options, search widget creation, shared timeframe controls, timeframe createability, timeframe resize, timeframe minimum resize clamping, exact layout save/load round trips, small-panel menu overlays, panel placeholder/body sizing, adaptive panel content density, drag ghost creation, ordered drag reflow, anchor rail ghost/placeholder reordering, local top insertion, reversible collision previews, capability-gated panel previews for dividers/anchors/panels, suppression of underlying hover menus during drag, global widget/panel occupancy, pinned item protection, pin menu close behavior, sparse empty-space placement, grid-bound drag clamping, grid snapping alignment, collision/overlap checks, resize snapping, left-edge anchored resize, menu icon alignment, panel header chevron centering, panel/widget/timeframe hover-focus material coverage, restrained neutral widget hover shadows, group multi-selection, grouped drag, grouped proportional resize, pinned items inside groups, mixed widget/panel group transforms, group mode, layout save/load/reset, settings save, mobile overflow checks, console errors, and network errors.
+
+### BUG-106: Anchor Divider Navigation Landed Below The Top Grid Row
+
+- Status: Verified
+- Area: Spatial anchors / divider navigation / sticky chrome alignment
+- Severity: Medium
+- Environment: Dashboard workspace, linked Anchor objects, sticky workspace navbar, lower-row dividers
+- Observed: Linked anchors resolved the current divider element, but final scrolling used a fixed 96px offset. Deep dividers could land below the first visible grid row, especially when the divider was the lowest object and the browser clamped scroll at the page bottom.
+- Expected: Anchor links store only the divider id, resolve the divider's live rendered position at click time, and smooth-scroll so the divider top aligns with the top-most visible workspace grid row beneath the sticky navbar. Missing dividers fall back gracefully to the workspace top.
+- Suspected cause: The semantic id lookup was correct, but the destination alignment was based on a stale fixed chrome offset and did not ensure enough scrollable runway below low dividers to make top-row alignment possible.
+- Fix notes: Replaced the fixed offset with live workspace-grid alignment math that uses the current divider DOM position, the current dashboard grid top-row position, and the sticky navbar as a guard. Added a non-persistent anchor navigation runway only when needed so bottom-most linked dividers can still align to the top grid row, and clear it on Top/missing-divider navigation.
+- Validation: Updated anchor navigation and anchor layout-history Playwright coverage to assert both scroll target and visual divider-to-grid-row alignment after initial link, after moving/pushing the divider lower, and after save/reload. Targeted `anchor_links_to_divider_or_workspace_top_and_persists`, `anchors_join_layout_history_and_saved_layout_state`, and the broader `anchor` slice passed. Manual browser inspection verified the linked divider landing at the top visible grid row after movement and after save/reload, and `.venv\Scripts\python.exe -m pytest -q` passed with 93 tests and 1 responsive/mobile test skipped by the desktop-iteration gate.
+
+### BUG-105: Anchor Delete Reflow Teleported Lower Rail Anchors
+
+- Status: Verified
+- Area: Spatial anchors / rail delete reflow / persistence
+- Severity: Medium
+- Environment: Dashboard workspace, left-rail Anchor objects with uneven vertical offsets
+- Observed: Deleting an anchor caused lower anchors to jump to their updated rail positions. The rail normalization path also risked repacking offsets into fixed sequential slots when saving or restoring anchors.
+- Expected: Anchors may keep arbitrary vertical rail offsets. Deleting an anchor should shift only anchors below the removed anchor upward by the removed footprint, preserve relative spacing, animate the movement smoothly, and keep updated offsets in undo/save/load state.
+- Suspected cause: Anchor normalization reused the drag reorder packing path, and anchor deletion removed the source before lower anchors received any FLIP/reflow animation from their previous viewport position to their updated offset.
+- Fix notes: Split position preservation from drag reorder packing. Routine normalize/save/restore now preserves existing `anchorOffset` values, while menu drag reorder still uses the existing packed preview/commit behavior. Anchor deletion now groups deleted anchors by rail, captures pre-delete positions, removes deleted anchors, shifts only lower anchors by the removed footprint plus rail gap, applies final offsets, and animates affected anchors with a transform-based FLIP transition.
+- Validation: Added `test_anchor_delete_reflows_lower_anchors_without_repacking_arbitrary_offsets` for uneven offsets, middle/top/bottom delete behavior, animated lower-anchor reflow, no movement for bottom delete, undo restoration of arbitrary positions, and save/reload persistence after deletion. Targeted `anchor_delete_reflows`, `anchor`, and `delete or undo` slices passed, and `.venv\Scripts\python.exe -m pytest -q` passed with 93 tests and 1 responsive/mobile test skipped by the desktop-iteration gate.
+
+### BUG-104: Anchor Body Drag Could Enter Rail Preview Mode
+
+- Status: Verified
+- Area: Spatial anchors / rail drag lifecycle / navigation body behavior
+- Severity: Medium
+- Environment: Dashboard workspace, left-rail Anchor objects, desktop Chromium
+- Observed: Dragging directly from the anchor body could start anchor rail movement and create a ghost/placeholder preview. This made the body navigation surface double as a drag handle and could leave anchors feeling stuck in preview/hover state after interrupted interactions.
+- Expected: Anchor body interaction should only navigate to the linked divider or workspace top. Anchor reorder should start only from the explicit move control in the anchor settings menu. Body dragging should never create rail ghosts or placeholders, and menu-started movement should clear temporary state on pointerup, pointercancel, Escape, blur, lost pointer capture, and menu close.
+- Suspected cause: The anchor initializer wired `pointerdown` on the anchor body into the same `startAnchorMove` path used by the menu move button, and the rail drag lifecycle had fewer cancellation hooks than widget/panel movement.
+- Fix notes: Removed the body drag entry point, kept the existing move button in the anchor menu as the only rail reorder source, moved pointer capture to the anchor shell for menu-started drags, added document-scoped move lifecycle listeners, and added guarded cleanup for Escape, blur, lost pointer capture, pointercancel, pointerup, and menu close.
+- Validation: Added `test_anchor_reorder_starts_from_menu_move_control_and_cleans_preview_state` for body-drag no-op behavior, body click navigation, menu-started preview, Escape cleanup, lost-pointer-capture cleanup, and committed menu reorder. Targeted anchor coverage passed, and `.venv\Scripts\python.exe -m pytest -q` passed with 92 tests and 1 responsive/mobile test skipped by the desktop-iteration gate.
+
+### BUG-103: Widget Move Preview Could Remain Stuck After Interrupted Move Control Interaction
+
+- Status: Verified
+- Area: Widget/panel drag lifecycle / ghost preview cleanup
+- Severity: Medium
+- Environment: Dashboard workspace, widget move control, desktop Chromium
+- Observed: Clicking or interrupting the widget move control could occasionally leave the workspace in a move hover/ghost preview state even though the underlying move and collision behavior still worked.
+- Expected: Move preview artifacts should exist only during an active move interaction. Pointerup, pointercancel, Escape, window blur, lost pointer capture, and no-drag clicks should all clear drag classes, placeholders, expanded footprint ghosts, interaction body flags, and temporary pointer state. A valid drag should commit once and then clear the same temporary state.
+- Suspected cause: The shared ordered drag path relied on document-level pointer events and did not own pointer capture or lost-pointer-capture cleanup. The cleanup path also lacked the resize lifecycle's idempotent finish guard, so interrupted sessions could miss final artifact removal.
+- Fix notes: Added pointer capture, lost-pointer-capture cancellation, guarded finish cleanup, listener removal, and safe pointer release to `runOrderedDrag` without changing collision, reflow, snapping, or commit math.
+- Validation: Added `test_widget_move_preview_cleanup_handles_click_escape_and_lost_capture` for click-without-drag cleanup, Escape cleanup after preview creation, and lost pointer capture cleanup after preview creation. Targeted `widget_move_preview_cleanup` passed, related drag cleanup coverage for collision preview, underlying menu suppression, menu restore, large dashboard cleanup, and ordered drag reflow passed, and `.venv\Scripts\python.exe -m pytest -q` passed with 91 tests and 1 responsive/mobile test skipped by the desktop-iteration gate.
+
+### BUG-102: Default Workspace Composition Felt Mathematically Centered But Visually Off-Balance
+
+- Status: Verified
+- Area: Workspace composition / dashboard grid / navbar rhythm
+- Severity: Low
+- Environment: Dashboard workspace, normal desktop viewport, default and deep background tones
+- Observed: The workspace container was centered, but the default object spans made the visual center of mass feel uneven. The timeframe object occupied five of six columns, the right-side stat/widget lane had only one narrow column on the first row, the panel row ended with a one-column Notes panel, and the divider exposed the mismatch between the full composition width and the heavier left-side objects.
+- Expected: Navbar, workspace grid, dividers, and default object columns should share one calm width rhythm. The right utility/widget side should not feel squeezed, large horizontal widgets should not overpower the composition, and dividers should align to the same intentional workspace block.
+- Suspected cause: The shared page shell still used an older 1180px width while the navbar polish layer used full-width chrome inside it, and the default spans were tuned around a five-column timeframe plus `3/2/1` panels rather than a clearer two-column utility rhythm.
+- Fix notes: Introduced a shared 1224px workspace shell rhythm for the page/nav/grid, widened grid gutters slightly, reduced the default timeframe footprint from five to four columns, and arranged default stats plus Menu/Notes into a coherent two-column right utility lane. Content keeps the left four-column workspace lane, dividers continue to span the full composition block, and mobile viewports use a clean stacked/nested flow so one-column desktop objects do not become cramped on narrow screens. Add-object menus now close after creation so new objects can be interacted with immediately.
+- Validation: Added `test_workspace_composition_uses_balanced_shell_and_column_rhythm` to verify nav/grid edge alignment, shared shell width, grid gutter rhythm, four-column timeframe placement, two right-side stat widgets on the first row, a `4 + 2` panel composition with Menu and Notes in the right utility lane, and divider alignment to the workspace block. Strengthened mobile viewport coverage to assert no visible widget/panel overlaps. Targeted composition/mobile/toolbar/reset/drag/resize coverage passed, and `.venv\Scripts\python.exe -m pytest -q` passed with 91 tests.
 
 ### BUG-101: Delete Confirmation Did Not Distinguish Blank Objects From Configured Objects
 

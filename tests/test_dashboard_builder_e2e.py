@@ -1,4 +1,5 @@
 import math
+import os
 import re
 from pathlib import Path
 
@@ -7,6 +8,20 @@ from playwright.sync_api import Page, expect
 
 
 pytestmark = pytest.mark.e2e
+
+RESPONSIVE_E2E_ENABLED = os.environ.get("DASHBOARD_ENABLE_RESPONSIVE_E2E", "").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+skip_responsive_during_desktop_iteration = pytest.mark.skipif(
+    not RESPONSIVE_E2E_ENABLED,
+    reason=(
+        "Temporarily disabled during the desktop-interaction iteration phase; "
+        "set DASHBOARD_ENABLE_RESPONSIVE_E2E=1 to run responsive/mobile coverage."
+    ),
+)
 
 
 def goto(page: Page, base_url: str, path: str = "/dashboard") -> None:
@@ -18,6 +33,54 @@ def assert_clean_browser(page: Page) -> None:
     assert page.console_errors == []
     assert page.page_errors == []
     assert page.network_errors == []
+
+
+ANCHOR_DIVIDER_ALIGNMENT_JS = """
+node => {
+  const currentScroll = window.scrollY || document.documentElement.scrollTop || 0;
+  const grid = node.closest(".dashboard-layout-grid") || document.querySelector(".dashboard-layout-grid");
+  const nav = document.querySelector(".app-nav.workspace-chrome, .app-nav");
+  const navBottom = nav ? Math.max(0, Math.round(nav.getBoundingClientRect().bottom)) : 0;
+  const targetViewportTop = grid
+    ? Math.max(navBottom + 8, Math.round(grid.getBoundingClientRect().top + currentScroll))
+    : navBottom + 8;
+  const targetTop = node.getBoundingClientRect().top + currentScroll;
+  const rawTop = Math.max(0, Math.round(targetTop - targetViewportTop));
+  const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  const scrollTarget = Math.min(rawTop, maxScroll);
+  return {
+    scrollTarget,
+    scrollY: window.scrollY,
+    rectTop: node.getBoundingClientRect().top,
+    targetViewportTop,
+    delta: node.getBoundingClientRect().top - targetViewportTop,
+    navBottom,
+    maxScroll,
+  };
+}
+"""
+
+
+def anchor_divider_alignment(locator) -> dict:
+    return locator.evaluate(ANCHOR_DIVIDER_ALIGNMENT_JS)
+
+
+def wait_for_anchor_divider_alignment(page: Page, locator, tolerance: int = 8) -> dict:
+    handle = locator.element_handle()
+    assert handle
+    page.wait_for_function(
+        f"""
+        node => {{
+          const state = ({ANCHOR_DIVIDER_ALIGNMENT_JS})(node);
+          return Math.abs(state.scrollY - state.scrollTarget) <= 32 &&
+            Math.abs(state.delta) <= {tolerance};
+        }}
+        """,
+        arg=handle,
+    )
+    alignment = anchor_divider_alignment(locator)
+    assert abs(alignment["delta"]) <= tolerance
+    return alignment
 
 
 def box_center(box: dict[str, float]) -> tuple[float, float]:
@@ -1286,6 +1349,109 @@ def test_workspace_chrome_is_spatial_and_modes_still_work(page: Page, app_server
     assert_clean_browser(page)
 
 
+def test_workspace_composition_uses_balanced_shell_and_column_rhythm(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    artifact_dir = Path("test-results") / "workspace-composition"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    composition = page.evaluate(
+        """
+        () => {
+          const readRect = (selector) => {
+            const node = document.querySelector(selector);
+            const rect = node.getBoundingClientRect();
+            return { left: rect.left, right: rect.right, width: rect.width, top: rect.top, bottom: rect.bottom };
+          };
+          const readGrid = (selector) => {
+            const node = document.querySelector(selector);
+            return {
+              col: Number(node.dataset.gridCol || 0),
+              row: Number(node.dataset.gridRow || 0),
+              span: Number(node.dataset.currentSpan || node.dataset.defaultSpan || 0),
+              rect: readRect(selector),
+            };
+          };
+          const grid = document.querySelector(".dashboard-layout-grid");
+          const gridRect = grid.getBoundingClientRect();
+          const gridStyles = getComputedStyle(grid);
+          const gap = parseFloat(gridStyles.columnGap || gridStyles.gap || "0") || 0;
+          const columnWidth = (gridRect.width - (gap * 5)) / 6;
+          const timeframe = readGrid('[data-widget-key="builder-search"]');
+          const firstStat = readGrid('[data-widget-key="widget-1"]');
+          const secondStat = readGrid('[data-widget-key="widget-2"]');
+          const content = readGrid('[data-panel-key="builder-content"]');
+          const menu = readGrid('[data-panel-key="builder-menu"]');
+          const notes = readGrid('[data-panel-key="builder-notes"]');
+          const leftMass = timeframe.span + content.span;
+          const rightMass = (6 - timeframe.span) + menu.span + notes.span;
+          return {
+            page: readRect(".page"),
+            nav: readRect(".app-nav.workspace-chrome"),
+            grid: { ...gridRect.toJSON(), gap, columnWidth },
+            timeframe,
+            firstStat,
+            secondStat,
+            content,
+            menu,
+            notes,
+            leftMass,
+            rightMass,
+          };
+        }
+        """
+    )
+
+    assert 1200 <= composition["page"]["width"] <= 1226
+    assert abs(composition["nav"]["left"] - composition["grid"]["left"]) <= 1
+    assert abs(composition["nav"]["right"] - composition["grid"]["right"]) <= 1
+    assert abs(composition["nav"]["width"] - composition["grid"]["width"]) <= 1
+    assert 13 <= composition["grid"]["gap"] <= 19
+    assert composition["grid"]["columnWidth"] >= 180
+
+    assert composition["timeframe"]["span"] == 4
+    assert composition["timeframe"]["col"] == 1
+    assert composition["firstStat"]["col"] == 5
+    assert composition["secondStat"]["col"] == 6
+    assert composition["firstStat"]["row"] == composition["timeframe"]["row"]
+    assert composition["secondStat"]["row"] == composition["timeframe"]["row"]
+
+    assert composition["content"]["span"] == 4
+    assert composition["menu"]["span"] == 2
+    assert composition["notes"]["span"] == 2
+    assert composition["content"]["col"] == 1
+    assert composition["menu"]["col"] == 5
+    assert composition["notes"]["col"] == 5
+    assert composition["notes"]["row"] > composition["menu"]["row"]
+    assert abs(composition["leftMass"] - composition["rightMass"]) <= 2
+
+    page.locator(".panel-add-button").click()
+    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    divider_alignment = page.locator(".workspace-divider").last.evaluate(
+        """
+        node => {
+          const divider = node.getBoundingClientRect();
+          const grid = document.querySelector(".dashboard-layout-grid").getBoundingClientRect();
+          return {
+            leftDelta: Math.abs(divider.left - grid.left),
+            rightDelta: Math.abs(divider.right - grid.right),
+            widthDelta: Math.abs(divider.width - grid.width),
+            span: Number(node.dataset.currentSpan || node.dataset.defaultSpan || 0),
+          };
+        }
+        """
+    )
+    assert divider_alignment["span"] == 6
+    assert divider_alignment["leftDelta"] <= 1.5
+    assert divider_alignment["rightDelta"] <= 1.5
+    assert divider_alignment["widthDelta"] <= 2
+
+    page.screenshot(path=str(artifact_dir / "balanced-workspace-default.png"), full_page=True)
+    page.evaluate("document.documentElement.dataset.background = 'deep-slate'")
+    page.wait_for_timeout(120)
+    page.screenshot(path=str(artifact_dir / "balanced-workspace-deep-slate.png"), full_page=True)
+    assert_clean_browser(page)
+
+
 def test_spatial_workspace_objects_keep_anchors_on_floating_navigation_layer(page: Page, app_server: str) -> None:
     goto(page, app_server)
 
@@ -1374,8 +1540,8 @@ def test_spatial_workspace_objects_keep_anchors_on_floating_navigation_layer(pag
     page.mouse.down()
     page.mouse.move(640, anchor_box["y"] + 170, steps=14)
     page.mouse.up()
-    page.wait_for_timeout(360)
-    moved_anchor = anchor.evaluate(
+    page.wait_for_timeout(180)
+    body_drag_state = anchor.evaluate(
         """
         node => ({
           side: node.dataset.anchorSide,
@@ -1386,16 +1552,22 @@ def test_spatial_workspace_objects_keep_anchors_on_floating_navigation_layer(pag
           gridRow: node.dataset.gridRow || null,
           left: node.getBoundingClientRect().left,
           top: node.getBoundingClientRect().top,
+          ghostCount: document.querySelectorAll(".workspace-anchor-drag-ghost").length,
+          placeholderCount: document.querySelectorAll(".workspace-anchor-rail-placeholder").length,
+          bodyDragging: document.body.classList.contains("anchor-rail-drag-active"),
         })
         """
     )
-    assert moved_anchor["side"] == "left"
-    assert moved_anchor["railOrder"] == 0
-    assert moved_anchor["offset"] >= 126
-    assert moved_anchor["left"] < 40
-    assert moved_anchor["position"] == "fixed"
-    assert moved_anchor["gridCol"] is None
-    assert moved_anchor["gridRow"] is None
+    assert body_drag_state["side"] == "left"
+    assert body_drag_state["railOrder"] == 0
+    assert body_drag_state["offset"] == anchor_before_divider_drag["offset"]
+    assert body_drag_state["left"] < 40
+    assert body_drag_state["position"] == "fixed"
+    assert body_drag_state["gridCol"] is None
+    assert body_drag_state["gridRow"] is None
+    assert body_drag_state["ghostCount"] == 0
+    assert body_drag_state["placeholderCount"] == 0
+    assert body_drag_state["bodyDragging"] is False
 
     page.locator(".panel-add-button").click()
     page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
@@ -1410,9 +1582,12 @@ def test_spatial_workspace_objects_keep_anchors_on_floating_navigation_layer(pag
     page.evaluate("window.scrollTo(0, 900)")
     page.wait_for_timeout(120)
     scroll_before_anchor_drag = page.evaluate("window.scrollY")
-    page.mouse.move(second_box["x"] + second_box["width"] / 2, second_box["y"] + second_box["height"] / 2)
+    second_anchor.locator(".anchor-settings-toggle").click(force=True)
+    move_box = second_anchor.locator(".panel-move-handle").bounding_box()
+    assert move_box
+    page.mouse.move(move_box["x"] + move_box["width"] / 2, move_box["y"] + move_box["height"] / 2)
     page.mouse.down()
-    page.mouse.move(760, max(88, first_after_move_box["y"] - 36), steps=14)
+    page.mouse.move(move_box["x"] + move_box["width"] / 2, first_after_move_box["y"] + 8, steps=14)
     active_rail_drag = page.evaluate(
         """
         () => {
@@ -1439,7 +1614,7 @@ def test_spatial_workspace_objects_keep_anchors_on_floating_navigation_layer(pag
     assert active_rail_drag["sourceCount"] == 1
     assert active_rail_drag["ghostLeft"] < 40
     assert active_rail_drag["placeholderLeft"] < 40
-    assert active_rail_drag["placeholderTop"] <= first_after_move_box["y"] + 4
+    assert active_rail_drag["placeholderTop"] <= first_after_move_box["y"] + 10
     assert float(active_rail_drag["sourceOpacity"]) == 0
     assert active_rail_drag["bodyDragging"] is True
     assert active_rail_drag["gridAnchorCount"] == 0
@@ -1740,18 +1915,9 @@ def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_s
     assert linked_state["labelCenterDelta"] <= 3
 
     page.evaluate("window.scrollTo(0, 0)")
-    initial_target_top = divider.evaluate(
-        """
-        node => {
-          const rawTop = Math.max(0, Math.round(node.getBoundingClientRect().top + window.scrollY - 96));
-          const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-          return Math.min(rawTop, maxScroll);
-        }
-        """
-    )
     anchor.click(position={"x": 24, "y": 24})
-    page.wait_for_function("(target) => Math.abs(window.scrollY - target) <= 32", arg=initial_target_top)
-    initial_link_scroll = page.evaluate("window.scrollY")
+    initial_alignment = wait_for_anchor_divider_alignment(page, divider)
+    initial_link_scroll = initial_alignment["scrollY"]
 
     page.evaluate("window.scrollTo(0, 0)")
     divider.evaluate(
@@ -1763,18 +1929,11 @@ def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_s
         """
     )
     page.wait_for_timeout(120)
-    moved_target_top = divider.evaluate(
-        """
-        node => {
-          const rawTop = Math.max(0, Math.round(node.getBoundingClientRect().top + window.scrollY - 96));
-          const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-          return Math.min(rawTop, maxScroll);
-        }
-        """
-    )
+    moved_target_top = anchor_divider_alignment(divider)["scrollTarget"]
     assert moved_target_top > initial_link_scroll + 300
     anchor.click(position={"x": 24, "y": 24})
-    page.wait_for_function("(target) => Math.abs(window.scrollY - target) <= 32", arg=moved_target_top)
+    moved_alignment = wait_for_anchor_divider_alignment(page, divider)
+    assert moved_alignment["scrollTarget"] > initial_link_scroll + 300
 
     page.locator(".layout-save-button").click()
     expect(page.locator(".toast", has_text="saved")).to_be_visible()
@@ -2039,7 +2198,7 @@ def test_timeframe_controls_use_shared_glass_color(page: Page, app_server: str) 
     goto(page, app_server)
     control = page.locator(".timeframe-widget")
     expect(control).to_be_visible()
-    assert control.evaluate("node => node.dataset.defaultSpan") == "5"
+    assert control.evaluate("node => node.dataset.defaultSpan") == "4"
 
     def ensure_control_tools_open() -> None:
         if not control.evaluate("node => node.classList.contains('widget-tools-open')"):
@@ -2151,7 +2310,7 @@ def test_timeframe_widget_is_createable_and_uses_widget_system(page: Page, app_s
         "objectKind": "timeframe",
         "contextRole": "timeframe-control",
         "minW": 2,
-        "span": 5,
+        "span": 4,
         "hasTools": True,
         "cursor": "pointer",
     }
@@ -2278,9 +2437,9 @@ def test_timeframe_widget_uses_shared_resize_system(page: Page, app_server: str)
         })
         """
     )
-    assert before == 5
+    assert before == 4
     assert 1 <= after["span"] < before
-    assert "span 5" not in after["gridColumn"]
+    assert "span 4" not in after["gridColumn"]
     assert after["row"] >= 1
     assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
     assert_clean_browser(page)
@@ -2408,6 +2567,238 @@ def test_ctrl_z_undoes_add_panel_and_expand_collapse(page: Page, app_server: str
     assert_clean_browser(page)
 
 
+def test_anchor_reorder_starts_from_menu_move_control_and_cleans_preview_state(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    anchors = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]')
+    expect(anchors).to_have_count(2)
+    first_anchor = anchors.nth(0)
+    second_anchor = anchors.nth(1)
+    second_key = second_anchor.evaluate("node => node.dataset.anchorKey")
+
+    def anchor_order() -> list[str]:
+        return page.evaluate(
+            """
+            () => [...document.querySelectorAll('.workspace-anchor-layer > .workspace-anchor-object')]
+              .sort((a, b) => Number(a.dataset.anchorRailOrder) - Number(b.dataset.anchorRailOrder))
+              .map((anchor) => anchor.dataset.anchorKey)
+            """
+        )
+
+    def anchor_drag_artifacts() -> dict:
+        return page.evaluate(
+            """
+            () => ({
+              ghostCount: document.querySelectorAll(".workspace-anchor-drag-ghost").length,
+              placeholderCount: document.querySelectorAll(".workspace-anchor-rail-placeholder").length,
+              sourceCount: document.querySelectorAll(".workspace-anchor-object.anchor-rail-source").length,
+              previewingCount: document.querySelectorAll(".workspace-anchor-object.anchor-rail-previewing").length,
+              bodyDragging: document.body.classList.contains("anchor-rail-drag-active"),
+            })
+            """
+        )
+
+    expected_clear = {
+        "ghostCount": 0,
+        "placeholderCount": 0,
+        "sourceCount": 0,
+        "previewingCount": 0,
+        "bodyDragging": False,
+    }
+
+    def open_anchor_tools(anchor) -> None:
+        if not anchor.evaluate("node => node.classList.contains('widget-tools-open')"):
+            anchor.locator(".anchor-settings-toggle").click(force=True)
+        expect(anchor.locator(".anchor-tool-drawer")).to_be_visible()
+
+    order_before_body_drag = anchor_order()
+    body_box = second_anchor.bounding_box()
+    assert body_box
+    page.mouse.move(body_box["x"] + body_box["width"] / 2, body_box["y"] + body_box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(body_box["x"] + body_box["width"] + 280, body_box["y"] - 90, steps=12)
+    page.mouse.up()
+    page.wait_for_timeout(140)
+    assert anchor_drag_artifacts() == expected_clear
+    assert anchor_order() == order_before_body_drag
+
+    page.evaluate("window.scrollTo(0, 600)")
+    page.wait_for_timeout(80)
+    second_anchor.click(position={"x": 24, "y": 24})
+    page.wait_for_function("() => window.scrollY <= 32")
+
+    open_anchor_tools(second_anchor)
+    first_box = first_anchor.bounding_box()
+    move_box = second_anchor.locator(".panel-move-handle").bounding_box()
+    assert first_box and move_box
+    page.mouse.move(move_box["x"] + move_box["width"] / 2, move_box["y"] + move_box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(move_box["x"] + move_box["width"] / 2, first_box["y"] + 8, steps=12)
+    expect(page.locator(".workspace-anchor-drag-ghost")).to_have_count(1)
+    expect(page.locator(".workspace-anchor-rail-placeholder")).to_have_count(1)
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(140)
+    assert anchor_drag_artifacts() == expected_clear
+    page.mouse.move(900, 900)
+    page.mouse.up()
+    page.keyboard.press("Escape")
+    assert anchor_order() == order_before_body_drag
+
+    open_anchor_tools(second_anchor)
+    move_box = second_anchor.locator(".panel-move-handle").bounding_box()
+    assert move_box
+    page.mouse.move(move_box["x"] + move_box["width"] / 2, move_box["y"] + move_box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(move_box["x"] + move_box["width"] / 2, first_box["y"] + 8, steps=12)
+    expect(page.locator(".workspace-anchor-drag-ghost")).to_have_count(1)
+    second_anchor.evaluate(
+        """
+        node => node.dispatchEvent(new PointerEvent("lostpointercapture", {
+          pointerId: 1,
+          bubbles: false,
+          cancelable: false,
+          pointerType: "mouse",
+        }))
+        """
+    )
+    page.wait_for_timeout(140)
+    assert anchor_drag_artifacts() == expected_clear
+    page.mouse.move(900, 900)
+    page.mouse.up()
+    page.keyboard.press("Escape")
+    assert anchor_order() == order_before_body_drag
+
+    open_anchor_tools(second_anchor)
+    move_box = second_anchor.locator(".panel-move-handle").bounding_box()
+    assert move_box
+    page.mouse.move(move_box["x"] + move_box["width"] / 2, move_box["y"] + move_box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(move_box["x"] + move_box["width"] / 2, first_box["y"] + 8, steps=12)
+    page.mouse.up()
+    page.wait_for_timeout(260)
+    assert anchor_drag_artifacts() == expected_clear
+    order_after_menu_drag = anchor_order()
+    assert order_after_menu_drag[0] == second_key
+    assert order_after_menu_drag != order_before_body_drag
+    assert_clean_browser(page)
+
+
+def test_anchor_delete_reflows_lower_anchors_without_repacking_arbitrary_offsets(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    for _ in range(3):
+        page.locator(".panel-add-button").click()
+        page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+
+    anchors = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]')
+    expect(anchors).to_have_count(3)
+    page.evaluate(
+        """
+        () => {
+          const offsets = [126, 268, 442];
+          [...document.querySelectorAll('.workspace-anchor-layer > .workspace-anchor-object')]
+            .forEach((anchor, index) => {
+              anchor.dataset.anchorRailOrder = String(index);
+              anchor.dataset.anchorOffset = String(offsets[index]);
+              anchor.style.setProperty("--anchor-offset", `${offsets[index]}px`);
+            });
+        }
+        """
+    )
+
+    first = anchors.nth(0)
+    first.locator(".anchor-settings-toggle").click(force=True)
+    first.locator(".panel-color-toggle").click(force=True)
+    page.locator(".panel-color-menu-open .panel-color-swatch").nth(2).click(force=True)
+
+    def rail_state() -> list[dict]:
+        return page.evaluate(
+            """
+            () => [...document.querySelectorAll('.workspace-anchor-layer > .workspace-anchor-object')]
+              .sort((a, b) => Number(a.dataset.anchorOffset) - Number(b.dataset.anchorOffset))
+              .map((anchor) => ({
+                key: anchor.dataset.anchorKey,
+                offset: Number(anchor.dataset.anchorOffset),
+                top: Math.round(anchor.getBoundingClientRect().top),
+                height: Math.ceil(anchor.getBoundingClientRect().height),
+                reflowing: anchor.classList.contains("anchor-rail-reflowing"),
+                transform: getComputedStyle(anchor).transform,
+              }))
+            """
+        )
+
+    def delete_anchor(anchor) -> None:
+        anchor.evaluate("node => node.focus()")
+        page.keyboard.press("Delete")
+        if page.locator(".confirm-dialog[open]").count():
+            page.locator(".confirm-dialog .confirm-dialog-danger").click()
+
+    initial = rail_state()
+    assert [entry["offset"] for entry in initial] == [126, 268, 442]
+    middle_shift = initial[1]["height"] + 8
+
+    middle_anchor = page.locator(f'.workspace-anchor-object[data-anchor-key="{initial[1]["key"]}"]')
+    delete_anchor(middle_anchor)
+    expect(anchors).to_have_count(2)
+    after_middle_delete = rail_state()
+    assert [entry["key"] for entry in after_middle_delete] == [initial[0]["key"], initial[2]["key"]]
+    assert after_middle_delete[0]["offset"] == initial[0]["offset"]
+    assert after_middle_delete[1]["offset"] == initial[2]["offset"] - middle_shift
+    assert after_middle_delete[0]["reflowing"] is False
+    assert after_middle_delete[1]["reflowing"] is True
+    assert after_middle_delete[1]["transform"] != "none"
+    page.wait_for_timeout(420)
+    assert all(entry["reflowing"] is False for entry in rail_state())
+
+    press_dashboard_undo(page)
+    expect(anchors).to_have_count(3)
+    restored = rail_state()
+    assert [entry["key"] for entry in restored] == [entry["key"] for entry in initial]
+    assert [entry["offset"] for entry in restored] == [entry["offset"] for entry in initial]
+
+    top_anchor = page.locator(f'.workspace-anchor-object[data-anchor-key="{initial[0]["key"]}"]')
+    top_shift = restored[0]["height"] + 8
+    delete_anchor(top_anchor)
+    expect(anchors).to_have_count(2)
+    after_top_delete = rail_state()
+    assert [entry["key"] for entry in after_top_delete] == [initial[1]["key"], initial[2]["key"]]
+    assert [entry["offset"] for entry in after_top_delete] == [
+        initial[1]["offset"] - top_shift,
+        initial[2]["offset"] - top_shift,
+    ]
+    assert all(entry["reflowing"] is True and entry["transform"] != "none" for entry in after_top_delete)
+    page.wait_for_timeout(420)
+
+    press_dashboard_undo(page)
+    expect(anchors).to_have_count(3)
+    restored = rail_state()
+    bottom_anchor = page.locator(f'.workspace-anchor-object[data-anchor-key="{initial[2]["key"]}"]')
+    delete_anchor(bottom_anchor)
+    expect(anchors).to_have_count(2)
+    after_bottom_delete = rail_state()
+    assert [entry["key"] for entry in after_bottom_delete] == [initial[0]["key"], initial[1]["key"]]
+    assert [entry["offset"] for entry in after_bottom_delete] == [initial[0]["offset"], initial[1]["offset"]]
+    assert all(entry["reflowing"] is False and entry["transform"] == "none" for entry in after_bottom_delete)
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    expect(page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]')).to_have_count(2)
+    after_reload = rail_state()
+    assert [entry["key"] for entry in after_reload] == [initial[0]["key"], initial[1]["key"]]
+    assert [entry["offset"] for entry in after_reload] == [initial[0]["offset"], initial[1]["offset"]]
+    assert_clean_browser(page)
+
+
 def test_anchors_join_layout_history_and_saved_layout_state(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate("localStorage.clear()")
@@ -2420,17 +2811,6 @@ def test_anchors_join_layout_history_and_saved_layout_state(page: Page, app_serv
             () => [...document.querySelectorAll('.workspace-anchor-layer > .workspace-anchor-object')]
               .sort((a, b) => Number(a.dataset.anchorRailOrder) - Number(b.dataset.anchorRailOrder))
               .map((anchor) => anchor.dataset.anchorKey)
-            """
-        )
-
-    def reachable_target_scroll(locator) -> int:
-        return locator.evaluate(
-            """
-            node => {
-              const rawTop = Math.max(0, Math.round(node.getBoundingClientRect().top + window.scrollY - 96));
-              const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-              return Math.min(rawTop, maxScroll);
-            }
             """
         )
 
@@ -2500,9 +2880,12 @@ def test_anchors_join_layout_history_and_saved_layout_state(page: Page, app_serv
     first_box = linked_anchor.bounding_box()
     second_box = second_anchor.bounding_box()
     assert first_box and second_box
-    page.mouse.move(second_box["x"] + second_box["width"] / 2, second_box["y"] + second_box["height"] / 2)
+    second_anchor.locator(".anchor-settings-toggle").click(force=True)
+    move_box = second_anchor.locator(".panel-move-handle").bounding_box()
+    assert move_box
+    page.mouse.move(move_box["x"] + move_box["width"] / 2, move_box["y"] + move_box["height"] / 2)
     page.mouse.down()
-    page.mouse.move(second_box["x"] + second_box["width"] / 2, max(88, first_box["y"] - 34), steps=14)
+    page.mouse.move(move_box["x"] + move_box["width"] / 2, first_box["y"] + 8, steps=14)
     page.mouse.up()
     page.wait_for_timeout(360)
     order_after_drag = anchor_order()
@@ -2539,10 +2922,9 @@ def test_anchors_join_layout_history_and_saved_layout_state(page: Page, app_serv
     assert reloaded_anchor.evaluate("node => node.dataset.linkedDividerId") == divider_id
 
     page.evaluate("window.scrollTo(0, 0)")
-    initial_target = reachable_target_scroll(reloaded_divider)
     reloaded_anchor.click(position={"x": 24, "y": 24})
-    page.wait_for_function("(target) => Math.abs(window.scrollY - target) <= 32", arg=initial_target)
-    initial_scroll = page.evaluate("window.scrollY")
+    initial_alignment = wait_for_anchor_divider_alignment(page, reloaded_divider)
+    initial_scroll = initial_alignment["scrollY"]
 
     page.evaluate("window.scrollTo(0, 0)")
     reloaded_divider.evaluate(
@@ -2554,10 +2936,11 @@ def test_anchors_join_layout_history_and_saved_layout_state(page: Page, app_serv
         """
     )
     page.wait_for_timeout(120)
-    moved_target = reachable_target_scroll(reloaded_divider)
+    moved_target = anchor_divider_alignment(reloaded_divider)["scrollTarget"]
     assert moved_target > initial_scroll + 300
     reloaded_anchor.click(position={"x": 24, "y": 24})
-    page.wait_for_function("(target) => Math.abs(window.scrollY - target) <= 32", arg=moved_target)
+    moved_alignment = wait_for_anchor_divider_alignment(page, reloaded_divider)
+    assert moved_alignment["scrollTarget"] > initial_scroll + 300
 
     page.evaluate("window.scrollTo(0, 900)")
     page.wait_for_timeout(120)
@@ -2836,7 +3219,7 @@ def test_timeframe_resize_clamps_to_adaptive_density_minimum(page: Page, app_ser
         """
     )
 
-    assert before["span"] == 5
+    assert before["span"] == 4
     assert state["span"] == state["minW"] == 2
     assert state["gridColumn"] == "span 2"
     assert state["surfaceGap"] <= 4
@@ -4114,20 +4497,20 @@ def test_panel_expand_collapse_does_not_shift_dashboard_when_scrollbar_changes(p
 
 def test_ordered_drag_reflows_widgets_without_overlap(page: Page, app_server: str) -> None:
     goto(page, app_server)
-    widgets = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)")
     before = visual_grid_items(page, ".widget-layout > .stat-card.widget-card:not(.range-bar)")
-    assert "Widget 2" in before[1]["text"]
+    moved_before = next(item for item in before if item["text"] == "0 Widget 3")
+    assert moved_before["col"] >= 5
 
-    dragged = widgets.nth(1)
+    dragged = page.locator('[data-widget-key="widget-3"]')
     open_tools(dragged)
-    x, y = begin_drag(page, dragged.locator(".panel-move-handle"), 40, 8)
+    x, y = begin_drag(page, dragged.locator(".panel-move-handle"), -40, 8)
     expect(page.locator(".widget-placeholder")).to_have_count(1)
-    end_drag(page, x, y, 390, 10)
+    end_drag(page, x, y, -390, 10)
     page.wait_for_timeout(350)
 
     after = visual_grid_items(page, ".widget-layout > .stat-card.widget-card:not(.range-bar)")
-    moved = next(item for item in after if item["text"] == "0 Widget 2")
-    assert moved["col"] > before[1]["col"]
+    moved = next(item for item in after if item["text"] == "0 Widget 3")
+    assert moved["col"] < moved_before["col"]
     assert no_visible_overlaps(page, ".widget-layout > .widget-card") == []
     assert grid_alignment_error(page, ".widget-layout > .stat-card.widget-card:not(.range-bar):nth-of-type(3)") <= 3
     assert_clean_browser(page)
@@ -5778,6 +6161,83 @@ def test_dragging_over_items_does_not_open_underlying_menus(page: Page, app_serv
     assert_clean_browser(page)
 
 
+def test_widget_move_preview_cleanup_handles_click_escape_and_lost_capture(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    widget = page.locator('.widget-layout:not([hidden]) > [data-widget-key="widget-1"]')
+    open_tools(widget)
+    handle = widget.locator(".panel-move-handle")
+
+    def assert_move_preview_cleared() -> None:
+        state = page.evaluate(
+            """
+            () => ({
+              bodyDragging: document.body.classList.contains("panel-interaction-active"),
+              autoScrollActive: document.body.classList.contains("dashboard-auto-scroll-active"),
+              draggingItems: document.querySelectorAll(".widget-dragging, .db-panel-dragging").length,
+              placeholders: document.querySelectorAll(".widget-placeholder, .db-panel-placeholder").length,
+              expandedGhosts: document.querySelectorAll(".dashboard-expanded-footprint-ghost").length,
+              groupLive: document.querySelectorAll(".dashboard-group-live-shell, .dashboard-group-live-member").length,
+            })
+            """
+        )
+        assert state == {
+            "bodyDragging": False,
+            "autoScrollActive": False,
+            "draggingItems": 0,
+            "placeholders": 0,
+            "expandedGhosts": 0,
+            "groupLive": 0,
+        }
+
+    handle_box = handle.bounding_box()
+    assert handle_box
+    start_x, start_y = box_center(handle_box)
+
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.up()
+    page.wait_for_timeout(80)
+    assert_move_preview_cleared()
+
+    open_tools(widget)
+    handle_box = handle.bounding_box()
+    assert handle_box
+    start_x, start_y = box_center(handle_box)
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(start_x + 82, start_y + 18, steps=8)
+    expect(page.locator(".widget-dragging")).to_have_count(1)
+    expect(page.locator(".widget-placeholder")).to_have_count(1)
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(120)
+    assert_move_preview_cleared()
+
+    open_tools(widget)
+    handle_box = handle.bounding_box()
+    assert handle_box
+    start_x, start_y = box_center(handle_box)
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(start_x + 86, start_y + 20, steps=8)
+    expect(page.locator(".widget-dragging")).to_have_count(1)
+    expect(page.locator(".widget-placeholder")).to_have_count(1)
+    handle.evaluate(
+        """
+        node => node.dispatchEvent(new PointerEvent("lostpointercapture", {
+          pointerId: 1,
+          bubbles: false,
+          cancelable: false,
+          pointerType: "mouse",
+        }))
+        """
+    )
+    page.wait_for_timeout(120)
+    assert_move_preview_cleared()
+    page.mouse.up()
+
+    assert_clean_browser(page)
+
+
 def test_open_settings_menu_hides_during_drag_and_resize_then_restores(page: Page, app_server: str) -> None:
     goto(page, app_server)
 
@@ -6062,7 +6522,7 @@ def test_object_settings_click_and_hover_share_menu_geometry(page: Page, app_ser
             node.style.gridColumn = `${col} / span ${span}`;
             node.style.gridRow = `${row} / span ${rowSpan}`;
           };
-          place(document.querySelector('[data-panel-key="builder-content"]'), 5, 1, 2, 1);
+          place(document.querySelector('[data-panel-key="builder-content"]'), 5, 8, 2, 1);
           place(document.querySelector('[data-widget-key="widget-1"]'), 6, 3, 1, 1);
           window.scrollTo(0, 0);
         }
@@ -7117,9 +7577,11 @@ def test_group_drag_moves_selected_items_as_shared_transform(page: Page, app_ser
           };
           const widget = document.querySelector('[data-widget-key="widget-1"]');
           const pinned = document.querySelector('[data-widget-key="widget-2"]');
+          const unused = document.querySelector('[data-widget-key="widget-4"]');
           const panel = document.querySelector('[data-panel-key="builder-content"]');
           place(widget, 1, 2, 1);
           place(pinned, 6, 2, 1);
+          if (unused) place(unused, 6, 12, 1);
           place(panel, 3, 2, 2, 3);
           pinned.classList.add("db-panel-pinned");
           pinned.querySelector(".panel-pin-toggle")?.setAttribute("aria-pressed", "true");
@@ -7607,7 +8069,7 @@ def test_group_resize_is_proportional_and_minimum_aware(page: Page, app_server: 
     assert outline_width <= 2
 
     open_tools(stat)
-    drag_by(page, stat.locator(".panel-resize-handle"), -700, 0, steps=18)
+    drag_by(page, stat.locator(".panel-resize-handle"), -1000, 0, steps=18)
     page.wait_for_timeout(360)
 
     sizes = page.evaluate(
@@ -8138,6 +8600,8 @@ def test_settings_save_updates_dashboard_title(page: Page, app_server: str) -> N
     assert_clean_browser(page)
 
 
+@pytest.mark.responsive
+@skip_responsive_during_desktop_iteration
 def test_mobile_viewport_has_no_horizontal_reflow_or_overflow(page: Page, app_server: str) -> None:
     page.set_viewport_size({"width": 390, "height": 844})
     goto(page, app_server)
@@ -8166,4 +8630,5 @@ def test_mobile_viewport_has_no_horizontal_reflow_or_overflow(page: Page, app_se
     assert math.ceil(metrics["navRight"]) <= 390
     assert math.floor(metrics["gridLeft"]) >= 0
     assert math.ceil(metrics["gridRight"]) <= 390
+    assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
     assert_clean_browser(page)

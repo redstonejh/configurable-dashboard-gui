@@ -1,7 +1,7 @@
 /* Static dashboard grid layout */
 .dashboard-layout-grid {
-  --widget-gap: 12px;
-  --panel-gap: 16px;
+  --widget-gap: 14px;
+  --panel-gap: 18px;
   --dashboard-grid-row-height: 81px;
   --dashboard-control-inset: 18px;
   display: grid;
@@ -10,6 +10,8 @@
   grid-auto-flow: row;
   align-items: start;
   gap: var(--panel-gap);
+  width: 100%;
+  margin-inline: auto;
   margin-top: 16px;
   overflow-x: visible;
   padding-bottom: 2px;
@@ -18,12 +20,12 @@
 .stat-band {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--widget-gap, 14px);
   margin-top: 16px;
 }
 
 .widget-layout {
-  --widget-gap: 12px;
+  --widget-gap: 14px;
   --dashboard-grid-row-height: 81px;
   width: 100%;
   display: grid;
@@ -94,6 +96,11 @@
   pointer-events: none;
 }
 
+.workspace-anchor-scroll-runway {
+  width: 1px;
+  pointer-events: none;
+}
+
 .workspace-anchor-object {
   --anchor-accent: var(--panel-accent, var(--blue));
   position: fixed;
@@ -139,6 +146,15 @@
 .anchor-rail-source {
   opacity: 0;
   pointer-events: none;
+}
+
+.workspace-anchor-object.anchor-rail-reflowing {
+  transition:
+    transform var(--motion-grid),
+    background var(--motion-fast),
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast),
+    color var(--motion-fast);
 }
 
 .workspace-anchor-drag-ghost {
@@ -508,6 +524,49 @@ body.layout-tools-active .widget-card:not(.widget-tools-open):not(:has(> .widget
   min-height: 1px;
   pointer-events: none;
   transition: grid-column var(--motion-grid), width var(--motion-grid);
+}
+
+@media (max-width: 680px) {
+  .dashboard-layout-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: auto;
+    gap: 16px;
+  }
+
+  .dashboard-layout-grid > .widget-layout,
+  .dashboard-layout-grid > .panel-layout {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-auto-rows: auto;
+    width: 100%;
+  }
+
+  .dashboard-layout-grid > .widget-layout {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .dashboard-layout-grid > .panel-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .dashboard-layout-grid > .widget-layout > .widget-card,
+  .dashboard-layout-grid > .panel-layout > .db-panel {
+    grid-row: auto !important;
+  }
+
+  .dashboard-layout-grid > .widget-layout > .timeframe-widget {
+    grid-column: 1 / -1 !important;
+  }
+
+  .dashboard-layout-grid > .widget-layout > .stat-card:not(.timeframe-widget) {
+    grid-column: span 1 !important;
+  }
+
+  .dashboard-layout-grid > .panel-layout > .db-panel {
+    grid-column: 1 / -1 !important;
+  }
 }
 
 .widget-dragging {
