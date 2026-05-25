@@ -59,6 +59,15 @@
         <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="stat">Stat</button>
         <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="timeframe">Timeframe</button>
         <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="search">Search Bar</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="filter">Filter Control</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="text">Text / Notes</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="region-summary">Region Summary</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="image">Image</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="video">Video</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="document">PDF / Document</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="activity-feed">Activity Feed</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="ai-assistant">AI Assistant</button>
+        <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="context-inspector">Context Inspector</button>
         <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="stat-filter">Stat + Filter</button>
         <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="graph">Graph</button>
         <button class="widget-add-action" type="button" data-widget-target="builder" data-widget-kind="table">Table</button>
@@ -146,6 +155,16 @@
 </header>
 
 <div class="workspace-anchor-layer" data-anchor-layout-key="builder" aria-label="Spatial anchors"></div>
+<div class="workspace-minimap-layer" data-minimap-layout-key="builder" aria-label="Workspace mini-map">
+  <button class="workspace-minimap-toggle" type="button" aria-label="Show workspace mini-map" aria-pressed="true" title="Show workspace mini-map">Map</button>
+  <div class="workspace-minimap-surface" role="navigation" aria-label="Workspace mini-map overview">
+    <div class="workspace-minimap-head">
+      <span>Map</span>
+      <button class="workspace-minimap-collapse" type="button" aria-label="Hide workspace mini-map" title="Hide workspace mini-map">Hide</button>
+    </div>
+    <svg class="workspace-minimap-svg" viewBox="0 0 160 240" preserveAspectRatio="none" aria-hidden="true"></svg>
+  </div>
+</div>
 
 <div class="dashboard-layout-grid" data-dashboard-layout-key="builder">
   <div class="stat-band widget-layout" data-widget-layout-key="builder">

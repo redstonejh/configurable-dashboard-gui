@@ -39,11 +39,732 @@
     ].filter(Boolean);
   };
 
+  const unique = (values) => [...new Set(values.filter(Boolean))];
+
+  const numberValue = (value) => {
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value.replace(/[$,%\s,]/g, ""));
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  };
+
+  const formatMetricValue = (value, format = "number") => {
+    const numeric = numberValue(value);
+    if (numeric == null) return String(value ?? "");
+    if (format === "currency") {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: Math.abs(numeric) >= 100 ? 0 : 2,
+      }).format(numeric);
+    }
+    if (format === "percent") {
+      return new Intl.NumberFormat(undefined, {
+        style: "percent",
+        maximumFractionDigits: 1,
+      }).format(numeric);
+    }
+    return new Intl.NumberFormat(undefined, {
+      maximumFractionDigits: Number.isInteger(numeric) ? 0 : 2,
+    }).format(numeric);
+  };
+
+  const statLabelFor = (config) => config?.label || config?.title || "Stat";
+
+  const tableSemanticFields = (resolvedContext) => unique(defaultQueryFields(resolvedContext));
+  const tableConfiguredColumns = (config) => Array.isArray(config?.columns)
+    ? config.columns.map((field) => String(field || "").trim()).filter(Boolean)
+    : [];
+  const tableVisibleColumnCount = (cols) => {
+    const safeCols = Number(cols) || 2;
+    if (safeCols <= 2) return 2;
+    if (safeCols <= 3) return 4;
+    return 6;
+  };
+  const tableVisibleRowCount = (rows, limit) => {
+    const safeRows = Math.max(1, Number(rows) || 1);
+    const rowCapacity = Math.max(1, (safeRows * 2) - 1);
+    const configuredLimit = Number.isFinite(Number(limit)) ? Math.max(1, Number(limit)) : 50;
+    return Math.min(configuredLimit, rowCapacity);
+  };
+  const filterFieldForType = (filter, resolvedContext) => {
+    const mapping = resolvedContext?.semanticMapping || {};
+    const explicit = String(filter?.field || "").trim();
+    if (explicit) return explicit;
+    if (filter?.type === "number-range") return mapping.valueField || "";
+    if (filter?.type === "date-range") return mapping.dateField || "";
+    if (filter?.type === "boolean") return mapping.statusField || mapping.categoryField || "";
+    if (filter?.type === "dropdown" || filter?.type === "multi-select") return mapping.categoryField || mapping.statusField || mapping.ownerField || mapping.labelField || "";
+    return mapping.labelField || mapping.categoryField || mapping.statusField || "";
+  };
+  const filterControlsFromConfig = (config, resolvedContext, data) => {
+    const configured = Array.isArray(config?.filters) && config.filters.length
+      ? config.filters
+      : [{ id: "search", type: "text", label: "Search", operator: "contains", value: "" }];
+    const rows = Array.isArray(data?.rows) ? data.rows : [];
+    return configured.map((filter, index) => {
+      const type = filter.type || "text";
+      const field = filterFieldForType(filter, resolvedContext);
+      const options = Array.isArray(filter.options) && filter.options.length
+        ? filter.options
+        : field
+          ? unique(rows.map((row) => row?.[field]).filter((value) => value != null).map((value) => String(value))).slice(0, 8)
+          : [];
+      return {
+        id: filter.id || `filter-${index + 1}`,
+        type,
+        label: filter.label || (field ? field.replace(/[_-]+/g, " ") : "Filter"),
+        field,
+        operator: filter.operator || (type === "text" ? "contains" : "eq"),
+        value: filter.value ?? "",
+        values: Array.isArray(filter.values) ? filter.values.map(String) : [],
+        min: filter.min ?? "",
+        max: filter.max ?? "",
+        start: filter.start ?? "",
+        end: filter.end ?? "",
+        enabled: Boolean(filter.enabled),
+        options,
+      };
+    });
+  };
+  const renderFilterControl = (filter) => {
+    const base = `data-filter-id="${escapeHtml(filter.id)}" data-filter-type="${escapeHtml(filter.type)}"`;
+    const label = `<span class="filter-widget-label">${escapeHtml(filter.label)}</span>`;
+    if (filter.type === "dropdown" || filter.type === "category") {
+      return `<label class="filter-widget-control filter-widget-control-select" ${base}>${label}<select class="filter-widget-input filter-widget-select" data-filter-part="value" aria-label="${escapeHtml(filter.label)}">
+        <option value="">All</option>
+        ${filter.options.map((option) => `<option value="${escapeHtml(option)}"${String(filter.value) === String(option) ? " selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+      </select></label>`;
+    }
+    if (filter.type === "multi-select") {
+      const options = filter.options.length ? filter.options : filter.values;
+      return `<fieldset class="filter-widget-control filter-widget-control-options" ${base}><legend>${escapeHtml(filter.label)}</legend>
+        <div class="filter-widget-option-grid">${options.slice(0, 6).map((option) => `<label class="filter-widget-option">
+          <input class="filter-widget-input" type="checkbox" data-filter-part="option" value="${escapeHtml(option)}"${filter.values.includes(String(option)) ? " checked" : ""}>
+          <span>${escapeHtml(option)}</span>
+        </label>`).join("")}</div>
+      </fieldset>`;
+    }
+    if (filter.type === "number-range") {
+      return `<div class="filter-widget-control filter-widget-control-range" ${base}>${label}
+        <div class="filter-widget-range-pair">
+          <input class="filter-widget-input filter-widget-field" type="number" data-filter-part="min" value="${escapeHtml(filter.min)}" aria-label="${escapeHtml(`${filter.label} minimum`)}" placeholder="Min">
+          <input class="filter-widget-input filter-widget-field" type="number" data-filter-part="max" value="${escapeHtml(filter.max)}" aria-label="${escapeHtml(`${filter.label} maximum`)}" placeholder="Max">
+        </div>
+      </div>`;
+    }
+    if (filter.type === "date-range") {
+      return `<div class="filter-widget-control filter-widget-control-range" ${base}>${label}
+        <div class="filter-widget-range-pair">
+          <input class="filter-widget-input filter-widget-field" type="date" data-filter-part="start" value="${escapeHtml(filter.start)}" aria-label="${escapeHtml(`${filter.label} start`)}">
+          <input class="filter-widget-input filter-widget-field" type="date" data-filter-part="end" value="${escapeHtml(filter.end)}" aria-label="${escapeHtml(`${filter.label} end`)}">
+        </div>
+      </div>`;
+    }
+    if (filter.type === "boolean") {
+      return `<label class="filter-widget-control filter-widget-control-toggle" ${base}>
+        <input class="filter-widget-input" type="checkbox" data-filter-part="enabled"${filter.enabled ? " checked" : ""}>
+        <span>${escapeHtml(filter.label)}</span>
+      </label>`;
+    }
+    return `<label class="filter-widget-control filter-widget-control-text" ${base}>${label}
+      <input class="filter-widget-input filter-widget-field" type="search" data-filter-part="value" value="${escapeHtml(filter.value)}" aria-label="${escapeHtml(filter.label)}" placeholder="Search">
+    </label>`;
+  };
+
+  const TIMEFRAME_PRESETS = [
+    { id: "today", label: "Today" },
+    { id: "yesterday", label: "Yesterday" },
+    { id: "last_7_days", label: "Last 7 days" },
+    { id: "last_30_days", label: "Last 30 days" },
+    { id: "month_to_date", label: "Month to date" },
+    { id: "year_to_date", label: "Year to date" },
+    { id: "custom", label: "Custom range" },
+  ];
+  const datePad = (value) => String(value).padStart(2, "0");
+  const dateOnly = (date) => `${date.getFullYear()}-${datePad(date.getMonth() + 1)}-${datePad(date.getDate())}`;
+  const localToday = () => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  };
+  const shiftedDate = (date, days) => {
+    const next = new Date(date);
+    next.setDate(next.getDate() + days);
+    return next;
+  };
+  const timeframePresetById = (id) => TIMEFRAME_PRESETS.find((preset) => preset.id === id) || null;
+  const timeframeLabel = (timeRange, fallback = "Any time") => {
+    if (!timeRange?.start && !timeRange?.end) return fallback;
+    if (timeRange.label) return timeRange.label;
+    if (timeRange.start && timeRange.end) return `${timeRange.start} - ${timeRange.end}`;
+    if (timeRange.start) return `Since ${timeRange.start}`;
+    return `Until ${timeRange.end}`;
+  };
+  const resolveTimeRangeConfig = (config = {}, resolvedContext = {}) => {
+    const preset = String(config.selectedPreset || config.preset || "").trim();
+    const explicit = config.timeRange && typeof config.timeRange === "object" ? config.timeRange : null;
+    const field = String(config.field || explicit?.field || resolvedContext?.semanticMapping?.dateField || "").trim();
+    const today = localToday();
+    let start = "";
+    let end = "";
+    let label = "";
+    if (preset === "custom" || explicit?.preset === "custom") {
+      start = config.customStart || explicit?.start || "";
+      end = config.customEnd || explicit?.end || "";
+      label = start || end ? timeframeLabel({ start, end }, "Custom range") : "Custom range";
+    } else if (preset === "today") {
+      start = dateOnly(today);
+      end = dateOnly(today);
+      label = "Today";
+    } else if (preset === "yesterday") {
+      const day = shiftedDate(today, -1);
+      start = dateOnly(day);
+      end = dateOnly(day);
+      label = "Yesterday";
+    } else if (preset === "last_7_days") {
+      start = dateOnly(shiftedDate(today, -6));
+      end = dateOnly(today);
+      label = "Last 7 days";
+    } else if (preset === "last_30_days") {
+      start = dateOnly(shiftedDate(today, -29));
+      end = dateOnly(today);
+      label = "Last 30 days";
+    } else if (preset === "month_to_date") {
+      start = dateOnly(new Date(today.getFullYear(), today.getMonth(), 1));
+      end = dateOnly(today);
+      label = "Month to date";
+    } else if (preset === "year_to_date") {
+      start = dateOnly(new Date(today.getFullYear(), 0, 1));
+      end = dateOnly(today);
+      label = "Year to date";
+    } else if (explicit?.start || explicit?.end) {
+      start = explicit.start || "";
+      end = explicit.end || "";
+      label = timeframeLabel(explicit, config.activeLabel || "Custom range");
+    }
+    if (!start && !end) return null;
+    return {
+      field: field || undefined,
+      start: start || undefined,
+      end: end || undefined,
+      preset: preset || explicit?.preset || "custom",
+      label,
+    };
+  };
+
+  const chartDefinitions = new Map();
+  const CHART_AGGREGATIONS = ["count", "sum", "avg", "min", "max"];
+  const CHART_PALETTE = ["one", "two", "three", "four", "five", "six"];
+  const chartTypeAliases = {
+    horizontalBar: "horizontal-bar",
+    groupedBar: "grouped-bar",
+    stackedBar: "stacked-bar",
+    stackedArea: "stacked-area",
+    multiLine: "multi-line",
+    radialProgress: "radial-progress",
+    kpiTrend: "kpi-trend",
+  };
+
+  const chartDensityFor = (instance) => {
+    const cols = Number(instance?.cols) || 2;
+    const rows = Number(instance?.rows) || 2;
+    if (cols <= 2 && rows <= 1) return "tiny";
+    if (cols <= 2 || rows <= 2) return "small";
+    if (cols >= 4 && rows >= 4) return "large";
+    return "medium";
+  };
+
+  const chartSemantic = (resolvedContext) => resolvedContext?.semanticMapping || {};
+  const chartField = (config, resolvedContext, key, fallbacks = []) => {
+    const explicit = String(config?.[key] || "").trim();
+    if (explicit) return explicit;
+    const mapping = chartSemantic(resolvedContext);
+    return fallbacks.map((field) => mapping[field]).find(Boolean) || "";
+  };
+  const chartValueField = (config, resolvedContext) => chartField(config, resolvedContext, "yField", ["valueField"]);
+  const chartXField = (config, resolvedContext) => chartField(config, resolvedContext, "xField", ["dateField", "categoryField", "labelField"]);
+  const chartSeriesField = (config, resolvedContext) => chartField(config, resolvedContext, "seriesField", ["categoryField", "statusField", "ownerField"]);
+  const chartConfiguredAggregation = (config) => CHART_AGGREGATIONS.includes(config?.aggregation) ? config.aggregation : "count";
+  const chartDisplayConfig = (config) => ({
+    showLegend: config?.display?.showLegend !== false,
+    showAxes: config?.display?.showAxes !== false,
+    showGrid: Boolean(config?.display?.showGrid),
+    showLabels: config?.display?.showLabels !== false,
+  });
+  const chartLimit = (config, fallback = 60) => {
+    const value = Number(config?.limit);
+    return Number.isFinite(value) ? Math.max(1, value) : fallback;
+  };
+  const chartEscapeLabel = (value) => String(value ?? "").trim() || "Unlabeled";
+  const chartSort = (points, config, defaultSort = "x") => {
+    const direction = config?.sortDirection === "desc" ? -1 : 1;
+    const sortBy = config?.sortBy || defaultSort;
+    return [...points].sort((a, b) => {
+      const av = sortBy === "value" || sortBy === "y" ? a.value ?? a.y : a.x;
+      const bv = sortBy === "value" || sortBy === "y" ? b.value ?? b.y : b.x;
+      if (av === bv) return 0;
+      return av > bv ? direction : -direction;
+    });
+  };
+  const chartRequiredFieldMessage = (definition, config, resolvedContext) => {
+    const supportedAggregations = Array.isArray(definition.supportedAggregations) && definition.supportedAggregations.length
+      ? definition.supportedAggregations
+      : CHART_AGGREGATIONS;
+    if (config?.aggregation && !supportedAggregations.includes(config.aggregation)) return "Missing aggregation";
+    const aggregation = chartConfiguredAggregation(config);
+    const needsX = definition.requiredFields.includes("xField");
+    const needsY = definition.requiredFields.includes("yField") || (definition.valueRequiredForAggregation !== false && aggregation !== "count");
+    const needsSeries = definition.requiredFields.includes("seriesField");
+    if (needsX && !chartXField(config, resolvedContext)) return "Missing x field";
+    if (needsY && !chartValueField(config, resolvedContext)) return "Missing y field";
+    if (needsSeries && !chartSeriesField(config, resolvedContext)) return "Missing series field";
+    return "";
+  };
+  const chartQueryFieldsFor = (definition, config, resolvedContext) => {
+    const fields = unique([
+      chartXField(config, resolvedContext),
+      chartValueField(config, resolvedContext),
+      chartSeriesField(config, resolvedContext),
+      chartField(config, resolvedContext, "sizeField", ["valueField"]),
+      chartField(config, resolvedContext, "colorField", ["categoryField"]),
+      ...defaultQueryFields(resolvedContext),
+    ]);
+    return definition.queryUsesAllFields ? fields : fields.filter(Boolean);
+  };
+  const aggregateValues = (values, aggregation) => {
+    const numeric = values.map(numberValue).filter((value) => value != null);
+    if (aggregation === "count") return values.length;
+    if (!numeric.length) return null;
+    if (aggregation === "sum") return numeric.reduce((sum, value) => sum + value, 0);
+    if (aggregation === "avg") return numeric.reduce((sum, value) => sum + value, 0) / numeric.length;
+    if (aggregation === "min") return Math.min(...numeric);
+    if (aggregation === "max") return Math.max(...numeric);
+    return values.length;
+  };
+  const groupedChartData = (rows, config, resolvedContext, options = {}) => {
+    const xField = chartXField(config, resolvedContext);
+    const yField = chartValueField(config, resolvedContext);
+    const seriesField = options.series ? chartSeriesField(config, resolvedContext) : "";
+    const aggregation = chartConfiguredAggregation(config);
+    const groups = new Map();
+    rows.forEach((row, index) => {
+      const x = chartEscapeLabel(xField ? row?.[xField] : index + 1);
+      const series = seriesField ? chartEscapeLabel(row?.[seriesField]) : "Value";
+      const key = `${x}\u0000${series}`;
+      if (!groups.has(key)) groups.set(key, { x, series, raw: [] });
+      groups.get(key).raw.push(aggregation === "count" ? 1 : row?.[yField]);
+    });
+    return chartSort([...groups.values()].map((entry) => ({
+      ...entry,
+      value: aggregateValues(entry.raw, aggregation),
+    })).filter((entry) => entry.value != null), config, "x").slice(0, chartLimit(config, 24));
+  };
+  const numericRowsFor = (rows, field) => rows.map((row) => ({
+    row,
+    value: numberValue(row?.[field]),
+  })).filter((entry) => entry.value != null);
+  const chartFrame = ({ instance, definition, density, body, meta = "", legend = "" }) => {
+    const title = instance.config?.title || definition.displayName || "Chart";
+    return `
+      <div class="runtime-chart-widget runtime-chart-density-${density}" data-chart-type="${escapeHtml(definition.chartType)}" data-chart-category="${escapeHtml(definition.category || "general")}">
+        <div class="runtime-chart-header">
+          <span class="stat-lbl">${escapeHtml(title)}</span>
+          ${meta ? `<span class="runtime-chart-meta">${escapeHtml(meta)}</span>` : ""}
+        </div>
+        <div class="runtime-chart-stage">${body}</div>
+        ${legend}
+      </div>`;
+  };
+  const chartSvg = (content, options = {}) => `
+    <svg class="runtime-chart-svg" viewBox="0 0 ${options.width || 100} ${options.height || 64}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(options.label || "Chart")}">
+      ${content}
+    </svg>`;
+  const axisLayer = () => `
+    <line class="runtime-chart-axis" x1="8" y1="56" x2="96" y2="56"></line>
+    <line class="runtime-chart-axis" x1="8" y1="8" x2="8" y2="56"></line>`;
+  const chartLegend = (items, density) => {
+    if (!items.length || density === "tiny") return "";
+    return `<div class="runtime-chart-legend">${items.slice(0, density === "small" ? 3 : 6).map((item, index) => `
+      <span class="runtime-chart-legend-item"><i class="runtime-chart-swatch runtime-chart-fill-${CHART_PALETTE[index % CHART_PALETTE.length]}"></i>${escapeHtml(item)}</span>
+    `).join("")}</div>`;
+  };
+  const renderBarLikeChart = ({ instance, definition, rows, resolvedContext }) => {
+    const config = instance.config || {};
+    const density = chartDensityFor(instance);
+    const points = groupedChartData(rows, config, resolvedContext, { series: ["grouped-bar", "stacked-bar"].includes(definition.chartType) });
+    if (!points.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    const max = Math.max(...points.map((point) => Math.abs(point.value)), 1);
+    const horizontal = definition.chartType === "horizontal-bar";
+    const lollipop = definition.chartType === "lollipop";
+    const count = Math.max(1, points.length);
+    const content = points.map((point, index) => {
+      const slot = 84 / count;
+      const x = 10 + (index * slot);
+      const barWidth = Math.max(2.4, slot * 0.54);
+      const h = Math.max(2, (Math.abs(point.value) / max) * 43);
+      const y = 56 - h;
+      const cls = `runtime-chart-fill-${CHART_PALETTE[index % CHART_PALETTE.length]}`;
+      if (horizontal) {
+        const yPos = 10 + (index * (46 / count));
+        const w = Math.max(3, (Math.abs(point.value) / max) * 78);
+        return `<rect class="runtime-chart-bar ${cls}" x="12" y="${yPos.toFixed(2)}" width="${w.toFixed(2)}" height="${Math.max(2.5, 32 / count).toFixed(2)}" rx="1.4"></rect>`;
+      }
+      if (lollipop) {
+        const cx = x + (barWidth / 2);
+        return `<line class="runtime-chart-stem ${cls}" x1="${cx.toFixed(2)}" y1="56" x2="${cx.toFixed(2)}" y2="${y.toFixed(2)}"></line><circle class="runtime-chart-point ${cls}" cx="${cx.toFixed(2)}" cy="${y.toFixed(2)}" r="2.6"></circle>`;
+      }
+      return `<rect class="runtime-chart-bar ${cls}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${h.toFixed(2)}" rx="1.6"></rect>`;
+    }).join("");
+    return chartFrame({
+      instance,
+      definition,
+      density,
+      meta: `${points.length} groups`,
+      body: chartSvg(`${config.display?.showAxes === false || density === "tiny" ? "" : axisLayer()}${content}`, { label: definition.displayName }),
+      legend: chartLegend([...new Set(points.map((point) => point.series))], density),
+    });
+  };
+  const linePathFor = (points) => points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
+  const renderLineLikeChart = ({ instance, definition, rows, resolvedContext }) => {
+    const config = instance.config || {};
+    const density = chartDensityFor(instance);
+    const xField = chartXField(config, resolvedContext);
+    const yField = chartValueField(config, resolvedContext);
+    const numeric = rows.map((row, index) => ({ row, index, yValue: numberValue(row?.[yField]), xValue: row?.[xField] }))
+      .filter((entry) => entry.yValue != null)
+      .slice(0, chartLimit(config, 80));
+    if (!numeric.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    const min = Math.min(...numeric.map((entry) => entry.yValue));
+    const max = Math.max(...numeric.map((entry) => entry.yValue), min + 1);
+    const points = numeric.map((entry, index) => ({
+      x: 9 + (index * (86 / Math.max(1, numeric.length - 1))),
+      y: 55 - (((entry.yValue - min) / Math.max(1, max - min)) * 44),
+    }));
+    const path = linePathFor(points);
+    const area = ["area", "stacked-area"].includes(definition.chartType);
+    const marks = density === "large" ? points.map((point) => `<circle class="runtime-chart-point runtime-chart-fill-one" cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="1.8"></circle>`).join("") : "";
+    const body = chartSvg(`
+      ${config.display?.showAxes === false || definition.chartType === "sparkline" || density === "tiny" ? "" : axisLayer()}
+      ${area ? `<path class="runtime-chart-area runtime-chart-fill-one" d="${path} L ${points.at(-1).x.toFixed(2)} 56 L ${points[0].x.toFixed(2)} 56 Z"></path>` : ""}
+      <path class="runtime-chart-line runtime-chart-stroke-one" d="${path}"></path>
+      ${marks}
+    `, { label: definition.displayName });
+    return chartFrame({ instance, definition, density, meta: `${numeric.length} points`, body });
+  };
+  const renderScatterChart = ({ instance, definition, rows, resolvedContext }) => {
+    const config = instance.config || {};
+    const density = chartDensityFor(instance);
+    const xField = chartXField(config, resolvedContext);
+    const yField = chartValueField(config, resolvedContext);
+    const sizeField = chartField(config, resolvedContext, "sizeField", ["valueField"]);
+    const points = rows.map((row) => ({
+      x: numberValue(row?.[xField]),
+      y: numberValue(row?.[yField]),
+      size: numberValue(row?.[sizeField]),
+    })).filter((point) => point.x != null && point.y != null).slice(0, chartLimit(config, 80));
+    if (!points.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    const minX = Math.min(...points.map((point) => point.x));
+    const maxX = Math.max(...points.map((point) => point.x), minX + 1);
+    const minY = Math.min(...points.map((point) => point.y));
+    const maxY = Math.max(...points.map((point) => point.y), minY + 1);
+    const maxSize = Math.max(...points.map((point) => point.size || 1), 1);
+    const marks = points.map((point, index) => {
+      const x = 10 + (((point.x - minX) / Math.max(1, maxX - minX)) * 84);
+      const y = 55 - (((point.y - minY) / Math.max(1, maxY - minY)) * 44);
+      const r = definition.chartType === "bubble" ? 1.8 + (((point.size || 1) / maxSize) * 3) : 2.2;
+      return `<circle class="runtime-chart-point runtime-chart-fill-${CHART_PALETTE[index % CHART_PALETTE.length]}" cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${r.toFixed(2)}"></circle>`;
+    }).join("");
+    return chartFrame({ instance, definition, density, meta: `${points.length} points`, body: chartSvg(`${axisLayer()}${marks}`, { label: definition.displayName }) });
+  };
+  const renderHistogramChart = ({ instance, definition, rows, resolvedContext }) => {
+    const config = instance.config || {};
+    const density = chartDensityFor(instance);
+    const yField = chartValueField(config, resolvedContext);
+    const values = numericRowsFor(rows, yField).map((entry) => entry.value);
+    if (!values.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    const min = Math.min(...values);
+    const max = Math.max(...values, min + 1);
+    const binCount = density === "large" ? 8 : density === "tiny" ? 4 : 6;
+    const bins = Array.from({ length: binCount }, (_, index) => ({ index, count: 0 }));
+    values.forEach((value) => {
+      const index = Math.min(binCount - 1, Math.floor(((value - min) / Math.max(1, max - min)) * binCount));
+      bins[index].count += 1;
+    });
+    const maxCount = Math.max(...bins.map((bin) => bin.count), 1);
+    const content = bins.map((bin) => {
+      const slot = 84 / binCount;
+      const h = Math.max(1, (bin.count / maxCount) * 42);
+      return `<rect class="runtime-chart-bar runtime-chart-fill-one" x="${(10 + bin.index * slot).toFixed(2)}" y="${(56 - h).toFixed(2)}" width="${Math.max(3, slot * 0.72).toFixed(2)}" height="${h.toFixed(2)}" rx="1.4"></rect>`;
+    }).join("");
+    return chartFrame({ instance, definition, density, meta: `${values.length} values`, body: chartSvg(`${axisLayer()}${content}`, { label: definition.displayName }) });
+  };
+  const pieArcPath = (cx, cy, r, start, end, inner = 0) => {
+    const large = end - start > Math.PI ? 1 : 0;
+    const p = (angle, radius) => [cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius];
+    const [x1, y1] = p(start, r);
+    const [x2, y2] = p(end, r);
+    if (!inner) return `M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z`;
+    const [x3, y3] = p(end, inner);
+    const [x4, y4] = p(start, inner);
+    return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} L ${x3.toFixed(2)} ${y3.toFixed(2)} A ${inner} ${inner} 0 ${large} 0 ${x4.toFixed(2)} ${y4.toFixed(2)} Z`;
+  };
+  const renderPieChart = ({ instance, definition, rows, resolvedContext }) => {
+    const config = instance.config || {};
+    const density = chartDensityFor(instance);
+    const points = groupedChartData(rows, config, resolvedContext).filter((point) => point.value > 0).slice(0, chartLimit(config, 8));
+    if (!points.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    const total = points.reduce((sum, point) => sum + point.value, 0) || 1;
+    let cursor = -Math.PI / 2;
+    const inner = definition.chartType === "donut" ? 14 : 0;
+    const content = points.map((point, index) => {
+      const next = cursor + ((point.value / total) * Math.PI * 2);
+      const path = pieArcPath(50, 32, 24, cursor, next, inner);
+      cursor = next;
+      return `<path class="runtime-chart-slice runtime-chart-fill-${CHART_PALETTE[index % CHART_PALETTE.length]}" d="${path}"></path>`;
+    }).join("");
+    return chartFrame({ instance, definition, density, meta: `${points.length} slices`, body: chartSvg(content, { label: definition.displayName }), legend: chartLegend(points.map((point) => point.x), density) });
+  };
+  const renderGaugeChart = ({ instance, definition, rows, resolvedContext }) => {
+    const config = instance.config || {};
+    const density = chartDensityFor(instance);
+    const yField = chartValueField(config, resolvedContext);
+    const values = numericRowsFor(rows, yField).map((entry) => entry.value);
+    if (!values.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    const value = aggregateValues(values, chartConfiguredAggregation(config)) || 0;
+    const max = Number(config.max) || Math.max(value, ...values, 100);
+    const ratio = Math.max(0, Math.min(1, value / Math.max(1, max)));
+    const end = -180 + (180 * ratio);
+    const arc = (radius, start, stop) => {
+      const toPoint = (degree) => {
+        const angle = (degree * Math.PI) / 180;
+        return [50 + Math.cos(angle) * radius, 52 + Math.sin(angle) * radius];
+      };
+      const [x1, y1] = toPoint(start);
+      const [x2, y2] = toPoint(stop);
+      return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${radius} ${radius} 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+    };
+    const label = definition.chartType === "radial-progress" ? `${Math.round(ratio * 100)}%` : formatMetricValue(value, config.format);
+    const body = chartSvg(`
+      <path class="runtime-chart-gauge-track" d="${arc(30, -180, 0)}"></path>
+      <path class="runtime-chart-gauge-value runtime-chart-stroke-one" d="${arc(30, -180, end)}"></path>
+      <text class="runtime-chart-value-label" x="50" y="48">${escapeHtml(label)}</text>
+    `, { label: definition.displayName });
+    return chartFrame({ instance, definition, density, meta: "current", body });
+  };
+  const renderHeatmapChart = ({ instance, definition, rows, resolvedContext }) => {
+    const config = instance.config || {};
+    const density = chartDensityFor(instance);
+    const xField = chartXField(config, resolvedContext);
+    const yField = chartField(config, resolvedContext, "seriesField", ["ownerField", "statusField", "categoryField"]);
+    const valueField = chartValueField(config, resolvedContext);
+    const xValues = unique(rows.map((row) => chartEscapeLabel(row?.[xField]))).slice(0, density === "large" ? 8 : 5);
+    const yValues = unique(rows.map((row) => chartEscapeLabel(row?.[yField]))).slice(0, density === "large" ? 6 : 4);
+    const cells = [];
+    xValues.forEach((x) => yValues.forEach((y) => {
+      const matching = rows.filter((row) => chartEscapeLabel(row?.[xField]) === x && chartEscapeLabel(row?.[yField]) === y);
+      const value = aggregateValues(matching.map((row) => chartConfiguredAggregation(config) === "count" ? 1 : row?.[valueField]), chartConfiguredAggregation(config)) || 0;
+      cells.push({ x, y, value });
+    }));
+    const max = Math.max(...cells.map((cell) => cell.value), 1);
+    const cellW = 82 / Math.max(1, xValues.length);
+    const cellH = 44 / Math.max(1, yValues.length);
+    const content = cells.map((cell) => {
+      const x = 10 + (xValues.indexOf(cell.x) * cellW);
+      const y = 10 + (yValues.indexOf(cell.y) * cellH);
+      const opacity = 0.22 + ((cell.value / max) * 0.68);
+      return `<rect class="runtime-chart-heat-cell runtime-chart-fill-one" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${Math.max(2, cellW - 1).toFixed(2)}" height="${Math.max(2, cellH - 1).toFixed(2)}" rx="1.2" style="opacity:${opacity.toFixed(2)}"></rect>`;
+    }).join("");
+    return chartFrame({ instance, definition, density, meta: `${xValues.length} x ${yValues.length}`, body: chartSvg(content, { label: definition.displayName }) });
+  };
+  const renderKpiTrendChart = ({ instance, definition, rows, resolvedContext }) => {
+    const config = instance.config || {};
+    const yField = chartValueField(config, resolvedContext);
+    const values = numericRowsFor(rows, yField).map((entry) => entry.value);
+    if (!values.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    const current = values.at(-1);
+    const previous = values.length > 1 ? values.at(-2) : current;
+    const delta = current - previous;
+    return `
+      <div class="runtime-chart-kpi" data-chart-type="${escapeHtml(definition.chartType)}">
+        <span class="stat-val">${escapeHtml(formatMetricValue(current, config.format))}</span>
+        <span class="stat-lbl">${escapeHtml(config.title || definition.displayName)}</span>
+        <span class="runtime-chart-meta">${escapeHtml(delta >= 0 ? `+${formatMetricValue(delta)}` : formatMetricValue(delta))}</span>
+      </div>`;
+  };
+  const registerChartDefinition = (definition) => {
+    const chartType = String(definition?.chartType || "").trim();
+    if (!chartType) return false;
+    chartDefinitions.set(chartType, {
+      category: "general",
+      requiredFields: [],
+      supportedAggregations: CHART_AGGREGATIONS,
+      defaultConfig: {},
+      valueRequiredForAggregation: true,
+      render: renderBarLikeChart,
+      ...definition,
+      chartType,
+      displayName: definition.displayName || chartType,
+    });
+    return true;
+  };
+  const getChartDefinition = (chartType) => chartDefinitions.get(chartTypeAliases[chartType] || chartType) || null;
+  const listChartDefinitions = () => [...chartDefinitions.values()].map((definition) => ({
+    chartType: definition.chartType,
+    displayName: definition.displayName,
+    category: definition.category,
+    requiredFields: definition.requiredFields,
+    supportedAggregations: definition.supportedAggregations,
+    defaultConfig: definition.defaultConfig,
+  }));
+  [
+    ["bar", "Bar", "basic-comparison", ["xField"], renderBarLikeChart],
+    ["horizontal-bar", "Horizontal Bar", "basic-comparison", ["xField"], renderBarLikeChart],
+    ["grouped-bar", "Grouped Bar", "basic-comparison", ["xField", "seriesField"], renderBarLikeChart],
+    ["stacked-bar", "Stacked Bar", "basic-comparison", ["xField", "seriesField"], renderBarLikeChart],
+    ["lollipop", "Lollipop", "basic-comparison", ["xField"], renderBarLikeChart],
+    ["line", "Line", "time-series", ["xField", "yField"], renderLineLikeChart],
+    ["multi-line", "Multi-line", "time-series", ["xField", "yField"], renderLineLikeChart],
+    ["area", "Area", "time-series", ["xField", "yField"], renderLineLikeChart],
+    ["stacked-area", "Stacked Area", "time-series", ["xField", "yField"], renderLineLikeChart],
+    ["sparkline", "Sparkline", "time-series", ["xField", "yField"], renderLineLikeChart],
+    ["histogram", "Histogram", "distribution", ["yField"], renderHistogramChart],
+    ["box-plot", "Box Plot", "distribution", ["yField"], renderHistogramChart],
+    ["scatter", "Scatter", "relationship", ["xField", "yField"], renderScatterChart],
+    ["bubble", "Bubble", "relationship", ["xField", "yField"], renderScatterChart],
+    ["heatmap", "Heatmap", "relationship", ["xField", "seriesField"], renderHeatmapChart],
+    ["pie", "Pie", "composition", ["xField"], renderPieChart],
+    ["donut", "Donut", "composition", ["xField"], renderPieChart],
+    ["gauge", "Gauge", "ranking-progress", ["yField"], renderGaugeChart],
+    ["radial-progress", "Radial Progress", "ranking-progress", ["yField"], renderGaugeChart],
+    ["progress-bar", "Progress Bar", "ranking-progress", ["yField"], renderGaugeChart],
+    ["kpi-trend", "KPI Trend Card", "ranking-progress", ["xField", "yField"], renderKpiTrendChart],
+  ].forEach(([chartType, displayName, category, requiredFields, render]) => registerChartDefinition({
+    chartType,
+    displayName,
+    category,
+    requiredFields,
+    render,
+    defaultConfig: { chartType },
+    valueRequiredForAggregation: !["bar", "horizontal-bar", "grouped-bar", "stacked-bar", "lollipop", "pie", "donut", "heatmap"].includes(chartType),
+  }));
+
   const runtimeState = (label, helper = "") => `
       <div class="widget-runtime-state">
         <span class="stat-val">${escapeHtml(label)}</span>
         ${helper ? `<span class="stat-lbl">${escapeHtml(helper)}</span>` : ""}
       </div>`;
+
+  const safeMediaUrl = (value, kind = "generic") => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const lower = raw.toLowerCase();
+    const dataPrefixes = {
+      image: ["data:image/"],
+      video: ["data:video/"],
+      document: ["data:application/pdf", "data:text/"],
+    };
+    if (lower.startsWith("data:")) {
+      return (dataPrefixes[kind] || []).some((prefix) => lower.startsWith(prefix)) ? raw : null;
+    }
+    if (raw.includes("\\")) return null;
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw.startsWith("//") ? null : raw;
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? raw : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const safeMediaFit = (value) => ["contain", "cover", "fill", "center"].includes(value) ? value : "contain";
+  const mediaState = (label, helper, state = "empty") => `
+      <div class="media-widget-state media-widget-state-${escapeHtml(state)}" role="status">
+        <span class="stat-val">${escapeHtml(label)}</span>
+        ${helper ? `<span class="stat-lbl">${escapeHtml(helper)}</span>` : ""}
+      </div>`;
+
+  const mediaTitle = (config, fallback) => String(config?.title || fallback || "").trim();
+  const mediaCaptionMarkup = (caption) => caption
+    ? `<div class="media-widget-caption">${escapeHtml(caption)}</div>`
+    : "";
+
+  const youtubeEmbedUrl = (src) => {
+    const safe = safeMediaUrl(src, "video");
+    if (!safe) return safe;
+    try {
+      const url = new URL(safe, window.location.origin);
+      const host = url.hostname.replace(/^www\./, "");
+      let id = "";
+      if (host === "youtu.be") {
+        id = url.pathname.split("/").filter(Boolean)[0] || "";
+      } else if (host === "youtube.com" || host === "youtube-nocookie.com") {
+        if (url.pathname.startsWith("/embed/")) id = url.pathname.split("/").filter(Boolean)[1] || "";
+        else if (url.pathname.startsWith("/shorts/")) id = url.pathname.split("/").filter(Boolean)[1] || "";
+        else id = url.searchParams.get("v") || "";
+      }
+      if (!id || !/^[a-zA-Z0-9_-]+$/.test(id)) return null;
+      return `https://www.youtube-nocookie.com/embed/${id}`;
+    } catch {
+      return null;
+    }
+  };
+
+  const vimeoEmbedUrl = (src) => {
+    const safe = safeMediaUrl(src, "video");
+    if (!safe) return safe;
+    try {
+      const url = new URL(safe, window.location.origin);
+      const host = url.hostname.replace(/^www\./, "");
+      if (host !== "vimeo.com" && host !== "player.vimeo.com") return null;
+      const id = url.pathname.split("/").filter(Boolean).pop() || "";
+      if (!/^\d+$/.test(id)) return null;
+      return `https://player.vimeo.com/video/${id}`;
+    } catch {
+      return null;
+    }
+  };
+
+  const documentPreviewKind = (config = {}) => {
+    const explicit = String(config.documentType || "unknown").toLowerCase();
+    if (["pdf", "markdown", "text", "html"].includes(explicit)) return explicit;
+    const src = String(config.src || "").toLowerCase();
+    if (src.includes(".pdf") || src.startsWith("data:application/pdf")) return "pdf";
+    if (src.startsWith("data:text/")) return "text";
+    return "unknown";
+  };
+
+  const metaDensity = (instance) => {
+    const cols = Number(instance?.cols) || 2;
+    const rows = Number(instance?.rows) || 2;
+    if (rows <= 1 || cols <= 2) return "compact";
+    if (rows >= 3 || cols >= 3) return "expanded";
+    return "standard";
+  };
+  const activityTypeLabel = (type) => String(type || "workspace-update")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+  const shortEventTime = (iso) => {
+    const timestamp = Date.parse(iso);
+    if (!Number.isFinite(timestamp)) return "Now";
+    const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+    if (seconds < 45) return "Now";
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `${hours}h`;
+    return `${Math.round(hours / 24)}d`;
+  };
+  const contextScopeLabel = (context = {}) => context.dataSourceName || context.dataSourceId || context.name || "Workspace context";
+  const timeRangeDisplay = (timeRange) => {
+    if (!timeRange) return "";
+    if (timeRange.label) return timeRange.label;
+    if (timeRange.start && timeRange.end) return `${timeRange.start} - ${timeRange.end}`;
+    if (timeRange.start) return `Since ${timeRange.start}`;
+    if (timeRange.end) return `Until ${timeRange.end}`;
+    return "";
+  };
 
   const unsupportedDefinition = (type = "unknown") => ({
     type: "unsupported",
@@ -178,20 +899,52 @@
       supportsResize: true,
     },
     supportedSettings: ["title", "value", "color", "pin", "duplicate", "delete"],
-    queryRequirements: { fields: ["valueField", "labelField"], limit: 1 },
-    getDefaultConfig: () => ({ title: "Widget", value: "0", aggregation: "count" }),
+    queryRequirements: { fields: ["semantic"], metric: ["count", "sum", "avg", "min", "max"] },
+    getDefaultConfig: () => ({ label: "Widget", title: "Widget", metric: "count", format: "number" }),
     resolveQuery: (config, resolvedContext) => {
-      if (!resolvedContext?.canQuery) return null;
-      const fields = defaultQueryFields(resolvedContext).slice(0, 3);
-      return { fields, limit: Number(config.limit) || 1 };
+      if (!resolvedContext?.dataSourceId || !resolvedContext?.canQuery) return null;
+      const mapping = resolvedContext.semanticMapping || {};
+      const metric = ["count", "sum", "avg", "min", "max"].includes(config.metric) ? config.metric : "count";
+      const valueField = config.valueField || mapping.valueField;
+      if (metric !== "count" && !valueField) return null;
+      const configuredFields = Array.isArray(config.fields) ? config.fields : [];
+      const fields = metric === "count"
+        ? unique([...configuredFields, ...defaultQueryFields(resolvedContext)])
+        : unique([valueField, ...configuredFields, ...defaultQueryFields(resolvedContext)]);
+      return {
+        fields,
+        filters: Array.isArray(config.filters) ? config.filters : [],
+        timeRange: config.timeRange || null,
+        sort: Array.isArray(config.sort) ? config.sort : [],
+      };
     },
-    render: ({ instance, data, status }) => {
-      const first = data?.rows?.[0] || null;
-      const mapping = data?.semanticMapping || {};
-      const value = first && mapping.valueField ? first[mapping.valueField] : instance.config.value;
+    render: ({ instance, resolvedContext, data, status }) => {
+      const config = instance.config || {};
+      const label = statLabelFor(config);
+      const metric = ["count", "sum", "avg", "min", "max"].includes(config.metric) ? config.metric : "count";
+      const mapping = resolvedContext?.semanticMapping || data?.semanticMapping || {};
+      const valueField = config.valueField || mapping.valueField;
+      if (!resolvedContext?.dataSourceId) return runtimeState(label, "Needs data source");
+      if (metric !== "count" && !valueField) return runtimeState(label, "Map a value field");
+      if (status === "loading") return runtimeState(label, "Loading");
+      if (status === "error") return runtimeState(label, data?.error || "Unable to load metric");
+      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      const total = Number.isFinite(Number(data?.total)) ? Number(data.total) : rows.length;
+      if (!rows.length && total <= 0) return runtimeState(label, "No data");
+      const numericValues = valueField
+        ? rows.map((row) => numberValue(row?.[valueField])).filter((value) => value != null)
+        : [];
+      let value = total;
+      if (metric !== "count") {
+        if (!numericValues.length) return runtimeState(label, "No numeric data");
+        if (metric === "sum") value = numericValues.reduce((sum, current) => sum + current, 0);
+        if (metric === "avg") value = numericValues.reduce((sum, current) => sum + current, 0) / numericValues.length;
+        if (metric === "min") value = Math.min(...numericValues);
+        if (metric === "max") value = Math.max(...numericValues);
+      }
       return `
-        <span class="stat-val">${escapeHtml(value ?? "0")}</span>
-        <span class="stat-lbl">${escapeHtml(instance.config.title || "Widget")}</span>`;
+        <span class="stat-val">${escapeHtml(formatMetricValue(value, config.format))}</span>
+        <span class="stat-lbl">${escapeHtml(label)}</span>`;
     },
   });
 
@@ -218,24 +971,52 @@
     queryRequirements: { timeRange: true },
     getDefaultConfig: () => ({
       title: "Timeframe",
-      activeLabel: "This week",
-      presets: ["Today", "7 days", "30 days"],
+      activeLabel: "Any time",
+      selectedPreset: "",
+      customStart: "",
+      customEnd: "",
+      presets: TIMEFRAME_PRESETS.map((preset) => preset.id),
     }),
     resolveQuery: () => null,
-    render: ({ instance }) => {
-      const presets = Array.isArray(instance.config.presets) && instance.config.presets.length
-        ? instance.config.presets
-        : ["Today", "7 days", "30 days"];
+    render: ({ instance, resolvedContext }) => {
+      const config = instance.config || {};
+      const configuredPresets = Array.isArray(config.presets) && config.presets.length
+        ? config.presets
+        : TIMEFRAME_PRESETS.map((preset) => preset.id);
+      const presets = configuredPresets
+        .map((preset) => typeof preset === "string"
+          ? timeframePresetById(preset) || { id: preset, label: preset }
+          : { id: preset.id, label: preset.label || preset.id })
+        .filter((preset) => preset.id && preset.label);
+      const selectedPreset = String(config.selectedPreset || config.preset || "").trim();
+      const timeRange = resolveTimeRangeConfig(config, resolvedContext);
+      const label = timeframeLabel(timeRange, config.activeLabel || "Any time");
+      const cols = Number(instance.cols) || 4;
+      const rows = Number(instance.rows) || 1;
+      const density = cols <= 2
+        ? "small"
+        : rows >= 2 || cols >= 5
+          ? "large"
+          : "medium";
+      const visiblePresets = density === "large"
+        ? presets
+        : presets.filter((preset) => ["today", "last_7_days", "last_30_days"].includes(preset.id));
+      const customStart = config.customStart || timeRange?.start || "";
+      const customEnd = config.customEnd || timeRange?.end || "";
       return `
-        <div class="timeframe-command-surface">
-          <div class="range-controls timeframe-controls">
-            <div class="range-presets timeframe-presets" role="group" aria-label="Timeframe presets">
-              ${presets.map((preset, index) => `<a class="preset-btn${index === 0 ? " active" : ""}" href="/dashboard">${escapeHtml(preset)}</a>`).join("")}
+        <div class="timeframe-command-surface timeframe-density-${density}" data-timeframe-current-label="${escapeHtml(label)}">
+          ${density === "small" ? "" : `<div class="range-controls timeframe-controls">
+            <div class="range-presets timeframe-presets" role="group" aria-label="Time range presets">
+              ${visiblePresets.map((preset) => `<button class="preset-btn${preset.id === selectedPreset ? " active" : ""}" type="button" data-timeframe-preset="${escapeHtml(preset.id)}" aria-pressed="${preset.id === selectedPreset ? "true" : "false"}">${escapeHtml(preset.label)}</button>`).join("")}
             </div>
-          </div>
+          </div>`}
           <div class="timeframe-active-cluster">
-            <button class="range-custom-trigger timeframe-selector" type="button" aria-label="Selected timeframe" title="Selected timeframe">${escapeHtml(instance.config.activeLabel || "This week")}</button>
+            <button class="range-custom-trigger timeframe-selector${selectedPreset === "custom" ? " active" : ""}" type="button" data-timeframe-preset="custom" aria-label="Selected time range" title="Selected time range">${escapeHtml(label)}</button>
           </div>
+          ${density === "large" ? `<div class="timeframe-custom-range" role="group" aria-label="Custom time range">
+            <input class="timeframe-custom-date" type="date" data-timeframe-part="customStart" value="${escapeHtml(customStart)}" aria-label="Custom start date">
+            <input class="timeframe-custom-date" type="date" data-timeframe-part="customEnd" value="${escapeHtml(customEnd)}" aria-label="Custom end date">
+          </div>` : ""}
           <div class="range-search timeframe-range timeframe-utility-cluster" role="group" aria-label="Timeframe utilities">
             <button class="range-icon-button timeframe-refresh" type="button" aria-label="Refresh timeframe" title="Refresh timeframe"><span class="timeframe-refresh-icon" aria-hidden="true"></span></button>
             <button class="range-icon-button timeframe-calendar" type="button" aria-label="Open date range" title="Open date range"><span class="timeframe-calendar-icon" aria-hidden="true"></span></button>
@@ -279,6 +1060,489 @@
   });
 
   registerWidgetDefinition({
+    type: "filter",
+    displayName: "Filter Control",
+    aliases: ["filter-control"],
+    defaultSize: { cols: 3, rows: 2 },
+    minSize: { cols: 2, rows: 1 },
+    widgetType: "filter",
+    dashboardObjectKind: "filter",
+    contextRole: "filter-control",
+    htmlTag: "div",
+    className: "stat-card widget-card widget-card-custom filter-widget-card",
+    capabilities: {
+      readsContext: true,
+      writesContext: true,
+      requiresDataSource: false,
+      supportsFilters: true,
+      supportsTimeRange: true,
+      supportsResize: true,
+    },
+    supportedSettings: ["filters", "scope", "color", "pin", "delete"],
+    queryRequirements: { fields: "filter-controls", limit: 200 },
+    getDefaultConfig: () => ({
+      title: "Filters",
+      filters: [{ id: "search", type: "text", label: "Search", operator: "contains", value: "" }],
+    }),
+    resolveQuery: (config, resolvedContext) => {
+      if (!resolvedContext?.canQuery) return null;
+      const fields = unique(filterControlsFromConfig(config, resolvedContext, null).map((filter) => filter.field));
+      return fields.length ? { fields, limit: Number(config.limit) || 200 } : null;
+    },
+    render: ({ instance, resolvedContext, data }) => {
+      const config = instance.config || {};
+      const controls = filterControlsFromConfig(config, resolvedContext, data);
+      const density = Number(instance.rows) <= 1 || Number(instance.cols) <= 2
+        ? "small"
+        : Number(instance.rows) >= 4 || Number(instance.cols) >= 4
+          ? "large"
+          : "medium";
+      const visibleControls = controls.slice(0, density === "small" ? 1 : density === "medium" ? 3 : controls.length);
+      return `
+        <div class="filter-widget-content filter-widget-density-${density}" data-filter-control-count="${controls.length}">
+          <div class="filter-widget-header">
+            <span class="stat-lbl">${escapeHtml(config.title || "Filters")}</span>
+            ${resolvedContext?.dataSourceId ? `<span class="filter-widget-meta">${escapeHtml(`${visibleControls.length} active controls`)}</span>` : ""}
+          </div>
+          <div class="filter-widget-controls">
+            ${visibleControls.map(renderFilterControl).join("")}
+          </div>
+        </div>`;
+    },
+  });
+
+  registerWidgetDefinition({
+    type: "text",
+    displayName: "Text / Notes",
+    aliases: ["note", "notes"],
+    defaultSize: { cols: 2, rows: 2 },
+    minSize: { cols: 2, rows: 1 },
+    widgetType: "text",
+    dashboardObjectKind: "text",
+    contextRole: "annotation",
+    htmlTag: "div",
+    className: "stat-card widget-card widget-card-custom text-widget-card",
+    capabilities: {
+      readsContext: false,
+      writesContext: false,
+      requiresDataSource: false,
+      supportsResize: true,
+    },
+    supportedSettings: ["text", "color", "pin", "duplicate", "delete"],
+    queryRequirements: { fields: [] },
+    getDefaultConfig: () => ({ title: "Note", body: "", placeholder: "Write a note" }),
+    resolveQuery: () => null,
+    render: ({ instance }) => {
+      const config = instance.config || {};
+      const body = String(config.body || "");
+      const cols = Number(instance.cols) || 2;
+      const rows = Number(instance.rows) || 2;
+      const density = rows <= 1
+        ? "small"
+        : rows >= 3 || cols >= 3
+          ? "large"
+          : "medium";
+      return `
+        <div class="text-widget-content text-widget-density-${density}">
+          ${density === "small"
+            ? `<div class="text-widget-preview" aria-label="${escapeHtml(config.title || "Note")}">${escapeHtml(body || config.placeholder || "Write a note")}</div>`
+            : `<div class="text-widget-header"><span class="stat-lbl">${escapeHtml(config.title || "Note")}</span></div>
+              <textarea class="text-widget-editor" aria-label="${escapeHtml(config.title || "Note")}" spellcheck="true" placeholder="${escapeHtml(config.placeholder || "Write a note")}">${escapeHtml(body)}</textarea>`}
+        </div>`;
+    },
+  });
+
+  registerWidgetDefinition({
+    type: "region-summary",
+    displayName: "Region Summary",
+    aliases: ["region", "spatial-summary", "summary"],
+    defaultSize: { cols: 2, rows: 2 },
+    minSize: { cols: 2, rows: 1 },
+    widgetType: "region-summary",
+    dashboardObjectKind: "region-summary",
+    contextRole: "region-inspector",
+    htmlTag: "div",
+    className: "stat-card widget-card widget-card-custom region-summary-widget-card",
+    capabilities: {
+      readsContext: true,
+      writesContext: false,
+      requiresDataSource: false,
+      supportsFilters: false,
+      supportsTimeRange: false,
+      supportsResize: true,
+    },
+    supportedSettings: ["title", "color", "pin", "duplicate", "delete"],
+    queryRequirements: { region: true },
+    getDefaultConfig: () => ({ title: "Region Summary" }),
+    resolveQuery: () => null,
+    render: ({ instance, resolvedContext }) => {
+      const summary = window.dashboardSpatialRuntime?.regionSummaryForWidget?.(instance.id) || {};
+      const cols = Number(instance.cols) || 2;
+      const rows = Number(instance.rows) || 2;
+      const density = rows <= 1 ? "compact" : rows >= 3 || cols >= 3 ? "rich" : "standard";
+      const regionLabel = summary.label || resolvedContext?.name || "Current region";
+      const source = summary.dataSourceName || resolvedContext?.dataSourceName || resolvedContext?.dataSourceId || "";
+      const rowRange = summary.endRow
+        ? `Rows ${summary.startRow || 1}-${summary.endRow}`
+        : `Rows ${summary.startRow || 1}+`;
+      return `
+        <div class="region-summary-widget region-summary-density-${density}" data-region-id="${escapeHtml(summary.id || resolvedContext?.regionId || "")}">
+          <div class="region-summary-header">
+            <span class="stat-lbl">${escapeHtml(instance.config.title || "Region Summary")}</span>
+            <span class="region-summary-range">${escapeHtml(rowRange)}</span>
+          </div>
+          <strong class="region-summary-title">${escapeHtml(regionLabel)}</strong>
+          <div class="region-summary-metrics" aria-label="Region object counts">
+            <span><b>${Number(summary.widgets) || 0}</b> Widgets</span>
+            <span><b>${Number(summary.panels) || 0}</b> Panels</span>
+            <span><b>${Number(summary.anchors) || 0}</b> Anchors</span>
+          </div>
+          ${density === "compact" || !source ? "" : `<div class="region-summary-context">${escapeHtml(source)}</div>`}
+        </div>`;
+    },
+  });
+
+  registerWidgetDefinition({
+    type: "activity-feed",
+    displayName: "Activity Feed",
+    aliases: ["activity", "feed", "events"],
+    defaultSize: { cols: 3, rows: 2 },
+    minSize: { cols: 2, rows: 1 },
+    widgetType: "activity-feed",
+    dashboardObjectKind: "activity-feed",
+    contextRole: "workspace-meta",
+    htmlTag: "div",
+    className: "stat-card widget-card widget-card-custom meta-widget-card activity-feed-widget-card",
+    capabilities: {
+      readsContext: true,
+      writesContext: false,
+      requiresDataSource: false,
+      supportsFilters: false,
+      supportsTimeRange: false,
+      supportsResize: true,
+    },
+    supportedSettings: ["eventTypes", "scope", "limit", "color", "pin", "duplicate", "delete"],
+    queryRequirements: { activity: true },
+    getDefaultConfig: () => ({ title: "Activity Feed", eventTypes: [], maxItems: 6, scope: "workspace" }),
+    resolveQuery: () => null,
+    render: ({ instance, resolvedContext }) => {
+      const config = instance.config || {};
+      const density = metaDensity(instance);
+      const maxItems = density === "compact" ? Math.min(3, Number(config.maxItems) || 3) : Number(config.maxItems) || 6;
+      const events = window.dashboardMetaRuntime?.recentActivity?.({
+        maxItems,
+        eventTypes: Array.isArray(config.eventTypes) ? config.eventTypes : [],
+        scope: config.scope || "workspace",
+        resolvedContext,
+      }) || [];
+      return `
+        <div class="meta-widget activity-feed-widget meta-density-${density}" data-meta-widget="activity-feed" data-event-count="${events.length}">
+          <div class="meta-widget-header">
+            <span class="stat-lbl">${escapeHtml(config.title || "Activity Feed")}</span>
+            <span class="meta-widget-kicker">${escapeHtml(config.scope || "workspace")}</span>
+          </div>
+          <div class="activity-feed-list" role="log" aria-label="${escapeHtml(config.title || "Activity Feed")}">
+            ${events.map((event) => `<article class="activity-feed-item" data-event-type="${escapeHtml(event.type || "")}">
+              <span class="activity-feed-dot" aria-hidden="true"></span>
+              <span class="activity-feed-copy">
+                <strong>${escapeHtml(event.label || activityTypeLabel(event.type))}</strong>
+                <small>${escapeHtml(activityTypeLabel(event.type))}${event.detail ? ` · ${escapeHtml(event.detail)}` : ""}</small>
+              </span>
+              <time>${escapeHtml(shortEventTime(event.time))}</time>
+            </article>`).join("")}
+          </div>
+        </div>`;
+    },
+  });
+
+  registerWidgetDefinition({
+    type: "ai-assistant",
+    displayName: "AI Assistant",
+    aliases: ["assistant", "ai"],
+    defaultSize: { cols: 3, rows: 2 },
+    minSize: { cols: 2, rows: 1 },
+    widgetType: "ai-assistant",
+    dashboardObjectKind: "ai-assistant",
+    contextRole: "assistant",
+    htmlTag: "div",
+    className: "stat-card widget-card widget-card-custom meta-widget-card ai-assistant-widget-card",
+    capabilities: {
+      readsContext: true,
+      writesContext: false,
+      requiresDataSource: false,
+      supportsFilters: true,
+      supportsTimeRange: true,
+      supportsResize: true,
+    },
+    supportedSettings: ["scope", "promptTemplate", "color", "pin", "duplicate", "delete"],
+    queryRequirements: { assistantScope: true },
+    getDefaultConfig: () => ({ title: "AI Assistant", scope: "region", promptTemplate: "" }),
+    resolveQuery: () => null,
+    render: ({ instance, resolvedContext }) => {
+      const config = instance.config || {};
+      const density = metaDensity(instance);
+      const scope = window.dashboardMetaRuntime?.assistantScope?.({
+        scope: config.scope || "region",
+        instanceId: instance.id,
+        resolvedContext,
+      }) || {};
+      const range = timeRangeDisplay(scope.timeRange);
+      const filterCount = Array.isArray(scope.filters) ? scope.filters.length : 0;
+      return `
+        <div class="meta-widget ai-assistant-widget meta-density-${density}" data-meta-widget="ai-assistant" data-assistant-scope="${escapeHtml(scope.scope || config.scope || "region")}">
+          <div class="meta-widget-header">
+            <span class="stat-lbl">${escapeHtml(config.title || "AI Assistant")}</span>
+            <span class="meta-widget-kicker">Placeholder</span>
+          </div>
+          <div class="ai-assistant-panel">
+            <strong>${escapeHtml(scope.regionLabel || contextScopeLabel(resolvedContext))}</strong>
+            <p>No external AI service is connected. This widget is reserved for a future context-aware assistant.</p>
+            <div class="meta-widget-facts">
+              <span>Scope <b>${escapeHtml(scope.scope || config.scope || "region")}</b></span>
+              <span>Source <b>${escapeHtml(scope.dataSourceName || scope.dataSourceId || "None")}</b></span>
+              <span>Filters <b>${filterCount}</b></span>
+              ${range ? `<span>Time <b>${escapeHtml(range)}</b></span>` : ""}
+            </div>
+          </div>
+        </div>`;
+    },
+  });
+
+  registerWidgetDefinition({
+    type: "context-inspector",
+    displayName: "Context Inspector",
+    aliases: ["context-debug", "inspector"],
+    defaultSize: { cols: 3, rows: 3 },
+    minSize: { cols: 2, rows: 1 },
+    widgetType: "context-inspector",
+    dashboardObjectKind: "context-inspector",
+    contextRole: "engineer-debug",
+    htmlTag: "div",
+    className: "stat-card widget-card widget-card-custom meta-widget-card context-inspector-widget-card",
+    capabilities: {
+      readsContext: true,
+      writesContext: false,
+      requiresDataSource: false,
+      supportsFilters: true,
+      supportsTimeRange: true,
+      supportsResize: true,
+    },
+    supportedSettings: ["target", "inheritance", "filters", "dataSource", "color", "pin", "duplicate", "delete"],
+    queryRequirements: { engineerMode: true, context: true },
+    getDefaultConfig: () => ({
+      title: "Context Inspector",
+      target: "currentRegion",
+      showInheritanceTree: true,
+      showFilters: true,
+      showDataSource: true,
+    }),
+    resolveQuery: () => null,
+    render: ({ instance, resolvedContext }) => {
+      const config = instance.config || {};
+      const engineerMode = Boolean(window.dashboardMetaRuntime?.isEngineerMode?.());
+      if (!engineerMode) {
+        return `<div class="context-inspector-widget context-inspector-locked" aria-hidden="true"></div>`;
+      }
+      const snapshot = window.dashboardMetaRuntime?.contextSnapshot?.({
+        instanceId: instance.id,
+        target: config.target || "currentRegion",
+        resolvedContext,
+      }) || {};
+      const context = snapshot.context || resolvedContext || {};
+      const mapping = context.semanticMapping || {};
+      const filters = Array.isArray(context.filters) ? context.filters : [];
+      const regions = Array.isArray(snapshot.regions) ? snapshot.regions : [];
+      const density = metaDensity(instance);
+      return `
+        <div class="meta-widget context-inspector-widget meta-density-${density}" data-meta-widget="context-inspector" data-inspector-target="${escapeHtml(config.target || "currentRegion")}">
+          <div class="meta-widget-header">
+            <span class="stat-lbl">${escapeHtml(config.title || "Context Inspector")}</span>
+            <span class="meta-widget-kicker">Engineer</span>
+          </div>
+          <div class="context-inspector-grid">
+            ${config.showDataSource !== false ? `<section>
+              <span>Data source</span>
+              <strong>${escapeHtml(context.dataSourceName || context.dataSourceId || "None")}</strong>
+            </section>` : ""}
+            <section>
+              <span>Region</span>
+              <strong>${escapeHtml(snapshot.region?.label || context.name || context.regionId || "Workspace")}</strong>
+            </section>
+            ${config.showFilters !== false ? `<section>
+              <span>Filters</span>
+              <strong>${filters.length}</strong>
+            </section>` : ""}
+            <section>
+              <span>Time range</span>
+              <strong>${escapeHtml(timeRangeDisplay(context.timeRange) || "None")}</strong>
+            </section>
+          </div>
+          <pre class="context-inspector-code">${escapeHtml(JSON.stringify({
+            contextId: context.id || "",
+            regionId: context.regionId || snapshot.region?.id || "",
+            semanticMapping: mapping,
+            filters,
+            timeRange: context.timeRange || null,
+            selectedObject: snapshot.selectedObject || null,
+            regions: config.showInheritanceTree === false ? undefined : regions.slice(0, 6),
+          }, null, 2))}</pre>
+        </div>`;
+    },
+  });
+
+  registerWidgetDefinition({
+    type: "image",
+    displayName: "Image",
+    aliases: ["picture", "media-image"],
+    defaultSize: { cols: 3, rows: 2 },
+    minSize: { cols: 2, rows: 1 },
+    widgetType: "image",
+    dashboardObjectKind: "image",
+    contextRole: "reference",
+    htmlTag: "div",
+    className: "stat-card widget-card widget-card-custom media-widget-card image-widget-card",
+    capabilities: {
+      readsContext: false,
+      writesContext: false,
+      requiresDataSource: false,
+      supportsResize: true,
+    },
+    supportedSettings: ["source", "fit", "caption", "color", "pin", "duplicate", "delete"],
+    queryRequirements: { fields: [] },
+    getDefaultConfig: () => ({ title: "Image", src: "", alt: "", fit: "contain", caption: "" }),
+    resolveQuery: () => null,
+    render: ({ instance }) => {
+      const config = instance.config || {};
+      const title = mediaTitle(config, "Image");
+      const src = safeMediaUrl(config.src, "image");
+      const caption = String(config.caption || "").trim();
+      if (!String(config.src || "").trim()) return mediaState(title, "Configure image URL", "empty");
+      if (src == null) return mediaState(title, "Unsupported image URL", "error");
+      const fit = safeMediaFit(config.fit);
+      const alt = String(config.alt || caption || title || "Image").trim();
+      return `
+        <div class="media-widget media-widget-image-wrap media-fit-${escapeHtml(fit)}" data-media-kind="image" data-media-status="ready">
+          <div class="media-widget-header">
+            <span class="stat-lbl">${escapeHtml(title)}</span>
+          </div>
+          <figure class="media-widget-stage image-widget-stage">
+            <img class="media-widget-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="lazy" draggable="false">
+          </figure>
+          ${mediaCaptionMarkup(caption)}
+        </div>`;
+    },
+  });
+
+  registerWidgetDefinition({
+    type: "video",
+    displayName: "Video",
+    aliases: ["media-video"],
+    defaultSize: { cols: 3, rows: 2 },
+    minSize: { cols: 2, rows: 1 },
+    widgetType: "video",
+    dashboardObjectKind: "video",
+    contextRole: "reference",
+    htmlTag: "div",
+    className: "stat-card widget-card widget-card-custom media-widget-card video-widget-card",
+    capabilities: {
+      readsContext: false,
+      writesContext: false,
+      requiresDataSource: false,
+      supportsResize: true,
+    },
+    supportedSettings: ["source", "caption", "color", "pin", "duplicate", "delete"],
+    queryRequirements: { fields: [] },
+    getDefaultConfig: () => ({ title: "Video", src: "", embedType: "url", autoplay: false, muted: true, caption: "" }),
+    resolveQuery: () => null,
+    render: ({ instance }) => {
+      const config = instance.config || {};
+      const title = mediaTitle(config, "Video");
+      const caption = String(config.caption || "").trim();
+      const embedType = String(config.embedType || "url").toLowerCase();
+      if (!String(config.src || "").trim()) return mediaState(title, "Configure video URL", "empty");
+      let stage = "";
+      if (embedType === "youtube") {
+        const embed = youtubeEmbedUrl(config.src);
+        if (!embed) return mediaState(title, "Unsupported embed URL", "error");
+        stage = `<iframe class="media-widget-frame media-widget-video-frame" src="${escapeHtml(embed)}" title="${escapeHtml(title)}" loading="lazy" sandbox="allow-scripts allow-same-origin allow-presentation" allow="encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+      } else if (embedType === "vimeo") {
+        const embed = vimeoEmbedUrl(config.src);
+        if (!embed) return mediaState(title, "Unsupported embed URL", "error");
+        stage = `<iframe class="media-widget-frame media-widget-video-frame" src="${escapeHtml(embed)}" title="${escapeHtml(title)}" loading="lazy" sandbox="allow-scripts allow-same-origin allow-presentation" allow="encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+      } else {
+        const src = safeMediaUrl(config.src, "video");
+        if (src == null) return mediaState(title, "Unsupported video URL", "error");
+        stage = `<video class="media-widget-video" src="${escapeHtml(src)}" controls preload="metadata"${config.autoplay ? " autoplay" : ""}${config.muted !== false ? " muted" : ""} playsinline></video>`;
+      }
+      return `
+        <div class="media-widget media-widget-video-wrap" data-media-kind="video" data-media-status="ready">
+          <div class="media-widget-header">
+            <span class="stat-lbl">${escapeHtml(title)}</span>
+          </div>
+          <div class="media-widget-stage video-widget-stage">${stage}</div>
+          ${mediaCaptionMarkup(caption)}
+        </div>`;
+    },
+  });
+
+  registerWidgetDefinition({
+    type: "document",
+    displayName: "PDF / Document",
+    aliases: ["pdf", "doc", "document-preview"],
+    defaultSize: { cols: 3, rows: 3 },
+    minSize: { cols: 2, rows: 1 },
+    widgetType: "document",
+    dashboardObjectKind: "document",
+    contextRole: "reference",
+    htmlTag: "div",
+    className: "stat-card widget-card widget-card-custom media-widget-card document-widget-card",
+    capabilities: {
+      readsContext: false,
+      writesContext: false,
+      requiresDataSource: false,
+      supportsResize: true,
+    },
+    supportedSettings: ["source", "page", "caption", "color", "pin", "duplicate", "delete"],
+    queryRequirements: { fields: [] },
+    getDefaultConfig: () => ({ title: "Document", src: "", documentType: "unknown", currentPage: 1, caption: "", content: "" }),
+    resolveQuery: () => null,
+    render: ({ instance }) => {
+      const config = instance.config || {};
+      const title = mediaTitle(config, "Document");
+      const caption = String(config.caption || "").trim();
+      const content = String(config.content || "").trim();
+      const kind = documentPreviewKind(config);
+      if (content && (kind === "text" || kind === "markdown" || kind === "unknown")) {
+        return `
+          <div class="media-widget document-widget document-widget-text-mode" data-media-kind="document" data-document-type="${escapeHtml(kind)}" data-media-status="ready">
+            <div class="media-widget-header"><span class="stat-lbl">${escapeHtml(title)}</span></div>
+            <pre class="document-widget-text">${escapeHtml(content)}</pre>
+            ${mediaCaptionMarkup(caption)}
+          </div>`;
+      }
+      if (!String(config.src || "").trim()) return mediaState(title, "Configure document URL", "empty");
+      const src = safeMediaUrl(config.src, "document");
+      if (src == null) return mediaState(title, "Unsupported document URL", "error");
+      const page = Math.max(1, Number(config.currentPage) || 1);
+      const frameSrc = kind === "pdf" && !String(src).startsWith("data:")
+        ? `${src}#page=${page}`
+        : src;
+      const previewLabel = kind === "pdf" ? `Page ${page}` : kind === "html" ? "Sandboxed preview" : "Document preview";
+      return `
+        <div class="media-widget document-widget" data-media-kind="document" data-document-type="${escapeHtml(kind)}" data-media-status="ready">
+          <div class="media-widget-header">
+            <span class="stat-lbl">${escapeHtml(title)}</span>
+            <span class="media-widget-meta">${escapeHtml(previewLabel)}</span>
+          </div>
+          <div class="media-widget-stage document-widget-stage">
+            <iframe class="media-widget-frame document-widget-frame" src="${escapeHtml(frameSrc)}" title="${escapeHtml(title)}" loading="lazy" sandbox=""></iframe>
+          </div>
+          ${mediaCaptionMarkup(caption)}
+        </div>`;
+    },
+  });
+
+  registerWidgetDefinition({
     type: "table",
     displayName: "Table",
     defaultSize: { cols: 3, rows: 2 },
@@ -296,29 +1560,52 @@
       supportsResize: true,
     },
     supportedSettings: ["columns", "limit", "color", "pin", "delete"],
-    queryRequirements: { fields: "semantic", limit: 5 },
-    getDefaultConfig: () => ({ title: "Table", limit: 5 }),
+    queryRequirements: { fields: "semantic-or-configured", limit: 50, sort: true },
+    getDefaultConfig: () => ({ title: "Table", columns: [], limit: 50, sortBy: "", sortDirection: "asc" }),
     resolveQuery: (config, resolvedContext) => {
       if (!resolvedContext?.canQuery) return null;
-      const fields = Array.isArray(config.fields) && config.fields.length
-        ? config.fields
-        : defaultQueryFields(resolvedContext).slice(0, 4);
-      return { fields, limit: Number(config.limit) || 5 };
+      const columns = tableConfiguredColumns(config);
+      const semanticFields = tableSemanticFields(resolvedContext);
+      const fields = columns.length ? columns : semanticFields;
+      const sortBy = String(config.sortBy || "").trim();
+      return {
+        fields,
+        filters: Array.isArray(config.filters) ? config.filters : [],
+        timeRange: config.timeRange || null,
+        sort: sortBy ? [{ field: sortBy, direction: config.sortDirection === "desc" ? "desc" : "asc" }] : [],
+        limit: Number(config.limit) || 50,
+      };
     },
     render: ({ instance, resolvedContext, data, status }) => {
-      if (!resolvedContext?.dataSourceId) return runtimeState(instance.config.title || "Table", "Configure a data source");
-      if (status === "loading") return runtimeState(instance.config.title || "Table", "Loading");
-      if (status === "error") return runtimeState(instance.config.title || "Table", data?.error || "Unable to load rows");
+      const config = instance.config || {};
+      const title = config.title || "Table";
+      if (!resolvedContext?.dataSourceId) return runtimeState(title, "No data source");
+      if (status === "loading") return runtimeState(title, "Loading");
+      if (status === "error") return runtimeState(title, data?.error || "Unable to load rows");
       const rows = data?.rows || [];
-      const fields = data?.schema?.fields?.map((field) => field.name).slice(0, 4) || Object.keys(rows[0] || {}).slice(0, 4);
-      if (!rows.length || !fields.length) return runtimeState(instance.config.title || "Table", "No rows");
+      const configuredColumns = tableConfiguredColumns(config);
+      const semanticFields = tableSemanticFields(resolvedContext);
+      if (!configuredColumns.length && !semanticFields.length) return runtimeState(title, "Configure columns");
+      const schemaFields = data?.schema?.fields?.map((field) => field.name) || Object.keys(rows[0] || {});
+      const allFields = unique(configuredColumns.length ? configuredColumns : semanticFields.length ? semanticFields : schemaFields);
+      if (!allFields.length) return runtimeState(title, "Configure columns");
+      if (!rows.length) return runtimeState(title, "Empty result");
+      const visibleFields = allFields.slice(0, tableVisibleColumnCount(instance.cols));
+      const visibleRows = rows.slice(0, tableVisibleRowCount(instance.rows, config.limit));
+      const density = Number(instance.rows) <= 2 || Number(instance.cols) <= 2 ? "compact" : Number(instance.rows) >= 4 || Number(instance.cols) >= 4 ? "rich" : "comfortable";
+      const total = Number.isFinite(Number(data?.total)) ? Number(data.total) : rows.length;
       return `
-        <div class="runtime-table-widget">
-          <span class="stat-lbl">${escapeHtml(instance.config.title || "Table")}</span>
-          <table class="runtime-table">
-            <thead><tr>${fields.map((field) => `<th>${escapeHtml(field)}</th>`).join("")}</tr></thead>
-            <tbody>${rows.slice(0, Number(instance.config.limit) || 5).map((row) => `<tr>${fields.map((field) => `<td>${escapeHtml(row?.[field] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody>
-          </table>
+        <div class="runtime-table-widget runtime-table-density-${density}" data-visible-rows="${visibleRows.length}" data-visible-columns="${visibleFields.length}">
+          <div class="runtime-table-header">
+            <span class="stat-lbl">${escapeHtml(title)}</span>
+            <span class="runtime-table-meta">${escapeHtml(`${visibleRows.length} of ${total}`)}</span>
+          </div>
+          <div class="runtime-table-scroll">
+            <table class="runtime-table">
+              <thead><tr>${visibleFields.map((field) => `<th title="${escapeHtml(field)}">${escapeHtml(field)}</th>`).join("")}</tr></thead>
+              <tbody>${visibleRows.map((row) => `<tr>${visibleFields.map((field) => `<td title="${escapeHtml(row?.[field] ?? "")}">${escapeHtml(row?.[field] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody>
+            </table>
+          </div>
         </div>`;
     },
   });
@@ -327,7 +1614,7 @@
     type: "chart",
     displayName: "Chart",
     aliases: ["graph"],
-    defaultSize: { cols: 2, rows: 2 },
+    defaultSize: { cols: 3, rows: 2 },
     minSize: { cols: 2, rows: 1 },
     widgetType: "graph",
     dashboardObjectKind: "chart",
@@ -341,17 +1628,67 @@
       supportsTimeRange: true,
       supportsResize: true,
     },
-    supportedSettings: ["xField", "yField", "series", "color", "pin", "delete"],
-    queryRequirements: { fields: ["dateField", "valueField", "categoryField"] },
-    getDefaultConfig: () => ({ title: "Chart" }),
+    supportedSettings: ["chartType", "xField", "yField", "series", "aggregation", "color", "pin", "delete"],
+    queryRequirements: {
+      chartTypes: listChartDefinitions().map((definition) => definition.chartType),
+      fields: "chart-definition",
+      aggregations: CHART_AGGREGATIONS,
+      limit: 60,
+    },
+    getDefaultConfig: () => ({
+      title: "Chart",
+      chartType: "bar",
+      aggregation: "count",
+      groupBy: [],
+      sortBy: "",
+      sortDirection: "asc",
+      limit: 60,
+      display: {
+        showLegend: true,
+        showAxes: true,
+        showGrid: false,
+        showLabels: true,
+      },
+    }),
     resolveQuery: (config, resolvedContext) => {
       if (!resolvedContext?.canQuery) return null;
-      return { fields: defaultQueryFields(resolvedContext).slice(0, 3), limit: Number(config.limit) || 12 };
+      const definition = getChartDefinition(config.chartType || "bar");
+      if (!definition) return null;
+      const message = chartRequiredFieldMessage(definition, config, resolvedContext);
+      if (message) return null;
+      const sortBy = String(config.sortBy || "").trim();
+      return {
+        fields: chartQueryFieldsFor(definition, config, resolvedContext),
+        filters: Array.isArray(config.filters) ? config.filters : [],
+        timeRange: config.timeRange || null,
+        groupBy: Array.isArray(config.groupBy) ? config.groupBy : [],
+        sort: sortBy ? [{ field: sortBy, direction: config.sortDirection === "desc" ? "desc" : "asc" }] : [],
+        limit: chartLimit(config, 60),
+      };
     },
-    render: ({ instance, resolvedContext }) => runtimeState(
-      instance.config.title || "Chart",
-      resolvedContext?.dataSourceId ? "Ready for chart mapping" : "Configure a data source"
-    ),
+    render: ({ instance, resolvedContext, data, status }) => {
+      const config = instance.config || {};
+      const chartType = config.chartType || "bar";
+      const definition = getChartDefinition(chartType);
+      const title = config.title || "Chart";
+      if (!definition) return runtimeState(title, "Unsupported chart config");
+      if (!resolvedContext?.dataSourceId) return runtimeState(title, "No data source");
+      const requiredMessage = chartRequiredFieldMessage(definition, config, resolvedContext);
+      if (requiredMessage) return runtimeState(title, requiredMessage);
+      if (status === "loading") return runtimeState(title, "Loading");
+      if (status === "error") return runtimeState(title, data?.error || "Unable to load chart");
+      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      if (!rows.length) return runtimeState(title, "Empty data");
+      return definition.render({
+        instance,
+        definition,
+        resolvedContext,
+        data,
+        rows,
+        display: chartDisplayConfig(config),
+        status,
+      });
+    },
   });
 
   registerWidgetDefinition({
@@ -410,6 +1747,7 @@
     getWidgetDefinition,
     createWidgetInstance,
     renderWidget,
+    resolveTimeRangeConfig,
     listWidgetDefinitions: () => [...definitions.values()].map((definition) => ({
       type: definition.type,
       displayName: definition.displayName,
@@ -421,5 +1759,10 @@
       aliases: definition.aliases,
     })),
     parseConfig,
+  };
+  window.dashboardChartRuntime = {
+    registerChartDefinition,
+    getChartDefinition,
+    listChartDefinitions,
   };
 })();

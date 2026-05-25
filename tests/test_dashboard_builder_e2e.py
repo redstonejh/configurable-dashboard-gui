@@ -782,6 +782,13 @@ def test_panels_are_generic_containers_not_table_panel_types(page: Page, app_ser
     expect(page.locator('.widget-add-action[data-widget-kind="table"]')).to_have_count(1)
     expect(page.locator('.widget-add-action[data-widget-kind="search"]')).to_have_count(1)
     expect(page.locator('.widget-add-action[data-widget-kind="search"]')).to_have_text("Search Bar")
+    expect(page.locator('.widget-add-action[data-widget-kind="filter"]')).to_have_text("Filter Control")
+    expect(page.locator('.widget-add-action[data-widget-kind="image"]')).to_have_text("Image")
+    expect(page.locator('.widget-add-action[data-widget-kind="video"]')).to_have_text("Video")
+    expect(page.locator('.widget-add-action[data-widget-kind="document"]')).to_have_text("PDF / Document")
+    expect(page.locator('.widget-add-action[data-widget-kind="activity-feed"]')).to_have_text("Activity Feed")
+    expect(page.locator('.widget-add-action[data-widget-kind="ai-assistant"]')).to_have_text("AI Assistant")
+    expect(page.locator('.widget-add-action[data-widget-kind="context-inspector"]')).to_have_text("Context Inspector")
     expect(page.locator('.widget-add-action[data-widget-kind="anchor"]')).to_have_count(1)
     expect(page.locator('.divider-add-action[data-divider-kind="context-divider"]')).to_have_count(1)
 
@@ -1325,7 +1332,7 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
         })
         """
     )
-    for widget_type in ("stat", "timeframe", "search", "table", "chart"):
+    for widget_type in ("stat", "timeframe", "search", "filter", "text", "region-summary", "image", "video", "document", "activity-feed", "ai-assistant", "context-inspector", "table", "chart"):
         assert widget_type in runtime["types"]
     assert runtime["timeframe"] == "timeframe"
     assert runtime["timeframeRuntimeType"] == "timeframe"
@@ -1354,8 +1361,8 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
     assert table_state["definition"] == "table"
     assert table_state["capabilities"]["requiresDataSource"] is True
     assert "columns" in table_state["settings"]
-    assert table_state["requirements"]["fields"] == "semantic"
-    assert "Configure a data source" in table_state["text"]
+    assert table_state["requirements"]["fields"] == "semantic-or-configured"
+    assert "No data source" in table_state["text"]
 
     page.evaluate(
         """
@@ -1396,6 +1403,10 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
           widgetType: node.dataset.widgetType,
           objectKind: node.dataset.dashboardObjectKind,
           definition: node.dataset.widgetDefinition,
+          requirements: JSON.parse(node.dataset.widgetQueryRequirements || "{}"),
+          hasChartRuntime: Boolean(window.dashboardChartRuntime),
+          chartTypes: window.dashboardChartRuntime.listChartDefinitions().map((definition) => definition.chartType),
+          renderedChartType: node.querySelector(".runtime-chart-widget")?.dataset.chartType,
           text: node.textContent
         })
         """
@@ -1403,7 +1414,11 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
     assert chart_state["widgetType"] == "graph"
     assert chart_state["objectKind"] == "chart"
     assert chart_state["definition"] == "chart"
-    assert "Ready for chart mapping" in chart_state["text"]
+    assert chart_state["hasChartRuntime"] is True
+    assert "bar" in chart_state["chartTypes"]
+    assert "heatmap" in chart_state["chartTypes"]
+    assert chart_state["requirements"]["fields"] == "chart-definition"
+    assert chart_state["renderedChartType"] == "bar"
 
     page.locator(".panel-add-button").click()
     page.locator('.widget-add-action[data-widget-kind="search"]').click()
@@ -1435,6 +1450,1046 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
     expect(unsupported.locator(".unsupported-widget-state")).to_be_visible()
     expect(unsupported).to_contain_text("Unsupported widget")
     assert unsupported.evaluate("node => node.dataset.widgetDefinition") == "unsupported"
+    assert_clean_browser(page)
+
+
+def test_stat_widget_consumes_context_query_and_renders_metric_states(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    stat = page.locator('[data-widget-key="widget-1"]')
+    expect(stat).to_be_visible()
+    expect(stat).to_contain_text("Needs data source")
+
+    contract = stat.evaluate(
+        """
+        node => ({
+          definition: node.dataset.widgetDefinition,
+          capabilities: JSON.parse(node.dataset.widgetCapabilities || "{}"),
+          requirements: JSON.parse(node.dataset.widgetQueryRequirements || "{}"),
+          status: node.dataset.widgetRuntimeStatus,
+        })
+        """
+    )
+    assert contract["definition"] == "stat"
+    assert contract["capabilities"]["readsContext"] is True
+    assert contract["capabilities"]["supportsTimeRange"] is True
+    assert contract["requirements"]["metric"] == ["count", "sum", "avg", "min", "max"]
+    assert contract["status"] == "empty"
+
+    page.evaluate(
+        """
+        () => {
+          const engine = window.dashboardContextEngine;
+          const widget = document.querySelector('[data-widget-key="widget-1"]');
+          widget.dataset.widgetConfig = JSON.stringify({
+            label: "Filtered Total",
+            metric: "sum",
+            format: "currency"
+          });
+          engine.setDataSources("builder", [{
+            id: "stat-source",
+            name: "Stat Source",
+            kind: "manual",
+            config: {
+              rows: [
+                { created_at: "2026-05-01", amount: 10, name: "Alpha", category: "A" },
+                { created_at: "2026-06-01", amount: 20, name: "Beta", category: "A" },
+                { created_at: "2026-05-02", amount: 30, name: "Gamma", category: "B" }
+              ]
+            }
+          }]);
+          engine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Stat context",
+            dataSourceId: "stat-source",
+            semanticMapping: {
+              dateField: "created_at",
+              valueField: "amount",
+              labelField: "name",
+              categoryField: "category"
+            },
+            filters: [{ field: "category", operator: "eq", value: "A" }],
+            timeRange: { start: "2026-05-01", end: "2026-05-31" }
+          }]);
+          engine.refresh("builder");
+        }
+        """
+    )
+    expect(stat.locator(".stat-val")).to_contain_text("$10.00")
+    expect(stat.locator(".stat-lbl")).to_have_text("Filtered Total")
+    assert stat.evaluate("node => node.dataset.widgetRuntimeStatus") == "ready"
+
+    query_state = page.evaluate(
+        """
+        async () => {
+          const engine = window.dashboardContextEngine;
+          const widget = document.querySelector('[data-widget-key="widget-1"]');
+          const definition = window.dashboardWidgetRuntime.getWidgetDefinition("stat");
+          const context = engine.resolveContextForElement(widget);
+          const config = JSON.parse(widget.dataset.widgetConfig || "{}");
+          const query = definition.resolveQuery(config, context);
+          const result = await engine.queryContext(context, query);
+          return {
+            dataSourceId: context.dataSourceId,
+            query,
+            rows: result.rows,
+            total: result.total,
+          };
+        }
+        """
+    )
+    assert query_state["dataSourceId"] == "stat-source"
+    assert query_state["query"]["fields"][0] == "amount"
+    assert query_state["rows"] == [{"amount": 10, "name": "Alpha", "created_at": "2026-05-01", "category": "A"}]
+    assert query_state["total"] == 1
+
+    page.evaluate(
+        """
+        () => {
+          const engine = window.dashboardContextEngine;
+          engine.setWorkspaceContext("builder", {
+            id: "builder:region:root",
+            name: "No rows context",
+            dataSourceId: "stat-source",
+            semanticMapping: {
+              dateField: "created_at",
+              valueField: "amount",
+              labelField: "name",
+              categoryField: "category"
+            },
+            filters: [{ field: "category", operator: "eq", value: "missing" }]
+          });
+          engine.refresh("builder");
+        }
+        """
+    )
+    expect(stat).to_contain_text("No data")
+
+    page.evaluate(
+        """
+        () => {
+          const engine = window.dashboardContextEngine;
+          window.__slowStatResolvers = [];
+          engine.registerAdapter({
+            kind: "slow-stat",
+            introspect: async () => ({ fields: [{ name: "amount", type: "number" }] }),
+            query: async () => new Promise((resolve) => {
+              window.__slowStatResolvers.push(resolve);
+            })
+          });
+          const widget = document.querySelector('[data-widget-key="widget-1"]');
+          widget.dataset.widgetConfig = JSON.stringify({
+            label: "Slow Metric",
+            metric: "max",
+            valueField: "amount"
+          });
+          engine.setDataSources("builder", [{ id: "slow-stat-source", name: "Slow Stat Source", kind: "slow-stat", config: {} }]);
+          engine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Slow context",
+            dataSourceId: "slow-stat-source",
+            semanticMapping: { valueField: "amount" }
+          }]);
+          engine.refresh("builder");
+        }
+        """
+    )
+    expect(stat).to_contain_text("Loading")
+    page.evaluate(
+        """
+        () => window.__slowStatResolvers.splice(0).forEach((resolve) => resolve({
+          schema: { fields: [{ name: "amount", type: "number" }] },
+          rows: [{ amount: 12 }],
+          total: 1,
+          sourceId: "slow-stat-source",
+          sourceKind: "slow-stat"
+        }))
+        """
+    )
+    expect(stat.locator(".stat-val")).to_have_text("12")
+    expect(stat.locator(".stat-lbl")).to_have_text("Slow Metric")
+
+    page.evaluate(
+        """
+        () => {
+          const engine = window.dashboardContextEngine;
+          engine.registerAdapter({
+            kind: "broken-stat",
+            introspect: async () => ({ fields: [{ name: "amount", type: "number" }] }),
+            query: async () => { throw new Error("Metric adapter failed"); }
+          });
+          const widget = document.querySelector('[data-widget-key="widget-1"]');
+          widget.dataset.widgetConfig = JSON.stringify({ label: "Broken Metric", metric: "count" });
+          engine.setDataSources("builder", [{ id: "broken-stat-source", name: "Broken Stat Source", kind: "broken-stat", config: {} }]);
+          engine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Broken context",
+            dataSourceId: "broken-stat-source",
+            semanticMapping: { valueField: "amount" }
+          }]);
+          engine.refresh("builder");
+        }
+        """
+    )
+    expect(stat).to_contain_text("Metric adapter failed")
+    assert stat.evaluate("node => node.dataset.widgetRuntimeStatus") == "error"
+
+    assert_clean_browser(page)
+
+
+def test_table_widget_consumes_context_rows_density_and_persistence(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    divider = page.locator(".panel-layout > .workspace-divider").last
+    expect(divider).to_be_visible()
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="table"]').click()
+    table = page.locator('.widget-layout > .widget-card[data-widget-definition="table"]').last
+    expect(table).to_be_visible()
+    expect(table).to_contain_text("No data source")
+
+    setup = page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span = 1, rowSpan = 1) => {
+            node.hidden = false;
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+          };
+          const engine = window.dashboardContextEngine;
+          const divider = document.querySelector(".panel-layout > .workspace-divider");
+          const table = document.querySelector('.widget-layout > .widget-card[data-widget-definition="table"]');
+          place(divider, 1, 4, 6, 1);
+          place(table, 1, 1, 3, 2);
+          table.dataset.widgetConfig = JSON.stringify({
+            title: "Context Rows",
+            columns: ["name", "amount", "category", "owner", "created_at"],
+            limit: 8,
+            sortBy: "amount",
+            sortDirection: "desc"
+          });
+          engine.refresh("builder");
+          const dividerRegion = divider.dataset.contextScopeId;
+          engine.setDataSources("builder", [
+            {
+              id: "root-table-source",
+              name: "Root Table Source",
+              kind: "manual",
+              config: {
+                  rows: [
+                    { created_at: "2026-05-01", amount: 10, name: "Alpha", category: "A", owner: "North" },
+                    { created_at: "2026-05-02", amount: 50, name: "Beta", category: "A", owner: "South" },
+                    { created_at: "2026-05-03", amount: 30, name: "Gamma", category: "A", owner: "West" },
+                    { created_at: "2026-05-05", amount: 25, name: "Delta", category: "A", owner: "East" },
+                    { created_at: "2026-05-06", amount: 15, name: "Epsilon", category: "A", owner: "Central" },
+                    { created_at: "2026-05-04", amount: 5, name: "Hidden", category: "B", owner: "East" },
+                    { created_at: "2026-06-01", amount: 90, name: "Late", category: "A", owner: "North" }
+                  ]
+              }
+            },
+            {
+              id: "divider-table-source",
+              name: "Divider Table Source",
+              kind: "manual",
+                config: {
+                  rows: [
+                    { created_at: "2026-05-01", amount: 7, name: "Divider Alpha", category: "A", owner: "Bridge" },
+                    { created_at: "2026-05-02", amount: 9, name: "Divider Beta", category: "A", owner: "Bridge" }
+                  ]
+                }
+              }
+          ]);
+          engine.setWorkspaceContexts("builder", [
+            {
+              id: "builder:region:root",
+              name: "Root table context",
+              dataSourceId: "root-table-source",
+              semanticMapping: {
+                dateField: "created_at",
+                valueField: "amount",
+                labelField: "name",
+                categoryField: "category",
+                ownerField: "owner"
+              },
+              filters: [{ field: "category", operator: "eq", value: "A" }],
+              timeRange: { start: "2026-05-01", end: "2026-05-31" }
+            },
+            {
+              id: dividerRegion,
+              name: "Divider table context",
+              dataSourceId: "divider-table-source",
+              semanticMapping: {
+                dateField: "created_at",
+                valueField: "amount",
+                labelField: "name",
+                categoryField: "category",
+                ownerField: "owner"
+              }
+            }
+          ]);
+          engine.refresh("builder");
+          return { dividerRegion };
+        }
+        """
+    )
+
+    expect(table.locator(".runtime-table")).to_be_visible()
+    expect(table.locator(".runtime-table")).to_contain_text("Beta")
+    expect(table.locator(".runtime-table")).to_contain_text("Gamma")
+    expect(table.locator(".runtime-table")).not_to_contain_text("Hidden")
+    expect(table.locator(".runtime-table")).not_to_contain_text("Late")
+    compact_state = table.evaluate(
+        """
+        node => ({
+          status: node.dataset.widgetRuntimeStatus,
+          dataSourceId: node.dataset.resolvedDataSourceId,
+          rows: Number(node.querySelector(".runtime-table-widget")?.dataset.visibleRows || 0),
+          columns: Number(node.querySelector(".runtime-table-widget")?.dataset.visibleColumns || 0),
+          density: [...node.querySelector(".runtime-table-widget")?.classList || []].find((name) => name.startsWith("runtime-table-density-")),
+          firstCell: node.querySelector(".runtime-table tbody tr:first-child td:first-child")?.textContent?.trim(),
+          hasOverflow: node.scrollHeight > node.clientHeight + 1 || node.scrollWidth > node.clientWidth + 1
+        })
+        """
+    )
+    assert compact_state["status"] == "ready"
+    assert compact_state["dataSourceId"] == "root-table-source"
+    assert compact_state["rows"] == 3
+    assert compact_state["columns"] == 4
+    assert compact_state["density"] == "runtime-table-density-compact"
+    assert compact_state["firstCell"] == "Beta"
+    assert compact_state["hasOverflow"] is False
+
+    page.evaluate(
+        """
+        () => {
+          const table = document.querySelector('.widget-layout > .widget-card[data-widget-definition="table"]');
+          table.dataset.currentSpan = "4";
+          table.dataset.gridRowSpan = "4";
+          table.style.gridColumn = `${table.dataset.gridCol || 1} / span 4`;
+          table.style.gridRow = `${table.dataset.gridRow || 1} / span 4`;
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    rich_state = table.evaluate(
+        """
+        node => ({
+          rows: Number(node.querySelector(".runtime-table-widget")?.dataset.visibleRows || 0),
+          columns: Number(node.querySelector(".runtime-table-widget")?.dataset.visibleColumns || 0),
+          density: [...node.querySelector(".runtime-table-widget")?.classList || []].find((name) => name.startsWith("runtime-table-density-")),
+          hasOwnerColumn: [...node.querySelectorAll(".runtime-table th")].some((cell) => cell.textContent.trim() === "owner"),
+          hasOverflow: node.scrollHeight > node.clientHeight + 1 || node.scrollWidth > node.clientWidth + 1
+        })
+        """
+    )
+    assert rich_state["rows"] > compact_state["rows"]
+    assert rich_state["columns"] > compact_state["columns"]
+    assert rich_state["density"] == "runtime-table-density-rich"
+    assert rich_state["hasOwnerColumn"] is True
+    assert rich_state["hasOverflow"] is False
+
+    page.evaluate(
+        """
+        () => {
+          const table = document.querySelector('.widget-layout > .widget-card[data-widget-definition="table"]');
+          table.dataset.gridRow = "5";
+          table.style.gridRow = "5 / span 4";
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    expect(table.locator(".runtime-table")).to_contain_text("Divider Alpha")
+    moved_context = table.evaluate("node => node.dataset.resolvedDataSourceId")
+    assert moved_context == "divider-table-source"
+    assert setup["dividerRegion"] == table.evaluate("node => node.dataset.resolvedWorkspaceRegionId")
+
+    page.evaluate(
+        """
+        () => {
+          const table = document.querySelector('.widget-layout > .widget-card[data-widget-definition="table"]');
+          table.dataset.gridRow = "1";
+          table.style.gridRow = "1 / span 4";
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    expect(table.locator(".runtime-table")).to_contain_text("Beta")
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    table = page.locator('.widget-layout > .widget-card[data-widget-definition="table"]').last
+    expect(table.locator(".runtime-table")).to_be_visible()
+    persisted = table.evaluate(
+        """
+        node => ({
+          config: JSON.parse(node.dataset.widgetConfig || "{}"),
+          span: Number(node.dataset.currentSpan || 0),
+          rowSpan: Number(node.dataset.gridRowSpan || 0),
+          rows: Number(node.querySelector(".runtime-table-widget")?.dataset.visibleRows || 0),
+          columns: Number(node.querySelector(".runtime-table-widget")?.dataset.visibleColumns || 0)
+        })
+        """
+    )
+    assert persisted["config"]["columns"] == ["name", "amount", "category", "owner", "created_at"]
+    assert persisted["config"]["sortBy"] == "amount"
+    assert persisted["config"]["sortDirection"] == "desc"
+    assert persisted["span"] == 4
+    assert persisted["rowSpan"] == 4
+    assert persisted["rows"] == rich_state["rows"]
+    assert persisted["columns"] == rich_state["columns"]
+
+    panel_setup = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const body = panel.querySelector(":scope > .db-panel-body");
+          panel.hidden = false;
+          panel.style.removeProperty("display");
+          panel.classList.remove("db-panel-collapsed");
+          panel.dataset.gridCol = "1";
+          panel.dataset.gridRow = "2";
+          panel.dataset.currentSpan = "4";
+          panel.dataset.gridRowSpan = "4";
+          panel.style.gridColumn = "1 / span 4";
+          panel.style.gridRow = "2 / span 4";
+          panel.style.height = "372px";
+          panel.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "true");
+          let grid = body.querySelector(":scope > .panel-internal-widget-grid");
+          if (!grid) {
+            grid = document.createElement("div");
+            grid.className = "panel-internal-widget-grid widget-layout";
+            grid.dataset.widgetLayoutKey = "builder";
+            body.appendChild(grid);
+          }
+          const table = document.querySelector('.widget-layout:not(.panel-internal-widget-grid) > .widget-card[data-widget-definition="table"]');
+          table.dataset.gridCol = "1";
+          table.dataset.gridRow = "1";
+          table.dataset.currentSpan = "3";
+          table.dataset.gridRowSpan = "2";
+          table.style.gridColumn = "1 / span 3";
+          table.style.gridRow = "1 / span 2";
+          grid.appendChild(table);
+          window.dashboardContextEngine.refresh("builder");
+          return {
+            insidePanel: Boolean(panel.querySelector(".panel-internal-widget-grid > .table-widget-card")),
+          };
+        }
+        """
+    )
+    assert panel_setup["insidePanel"] is True
+    panel_table = page.locator(".panel-internal-widget-grid > .table-widget-card")
+    expect(panel_table.locator(".runtime-table")).to_contain_text("Beta")
+    panel_state = panel_table.evaluate(
+        """
+        node => ({
+          text: node.textContent.trim().replace(/\\s+/g, " "),
+          status: node.dataset.widgetRuntimeStatus,
+          hasTable: Boolean(node.querySelector(".runtime-table"))
+        })
+        """
+    )
+    assert panel_state["status"] == "ready"
+    assert panel_state["hasTable"] is True
+    assert "Beta" in panel_state["text"]
+
+    page.evaluate(
+        """
+        () => {
+          const engine = window.dashboardContextEngine;
+          const table = document.querySelector(".panel-internal-widget-grid > .table-widget-card");
+          table.dataset.widgetConfig = JSON.stringify({ title: "Raw Table", columns: [], limit: 5 });
+          engine.setWorkspaceContext("builder", {
+            id: table.dataset.resolvedWorkspaceRegionId,
+            name: "Unmapped table context",
+            dataSourceId: "divider-table-source",
+            semanticMapping: {}
+          });
+          engine.refresh("builder");
+        }
+        """
+    )
+    expect(panel_table).to_contain_text("Configure columns")
+    assert_clean_browser(page)
+
+
+def test_chart_widget_registry_renders_chart_types_and_context_rows(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    divider = page.locator(".panel-layout > .workspace-divider").last
+    expect(divider).to_be_visible()
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="graph"]').click()
+    chart = page.locator('.widget-layout > .widget-card[data-widget-definition="chart"]').last
+    expect(chart).to_be_visible()
+    expect(chart).to_contain_text("No data source")
+
+    setup = page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span = 1, rowSpan = 1) => {
+            node.hidden = false;
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+          };
+          const engine = window.dashboardContextEngine;
+          const divider = document.querySelector(".panel-layout > .workspace-divider");
+          const chart = document.querySelector('.widget-layout > .widget-card[data-widget-definition="chart"]');
+          place(divider, 1, 5, 6, 1);
+          place(chart, 1, 1, 3, 2);
+          engine.refresh("builder");
+          const dividerRegion = divider.dataset.contextScopeId;
+          engine.setDataSources("builder", [
+            {
+              id: "root-chart-source",
+              name: "Root Chart Source",
+              kind: "manual",
+              config: {
+                rows: [
+                  { created_at: "2026-05-01", category: "Alpha", owner: "North", amount: 10, amount_2: 22, size: 3 },
+                  { created_at: "2026-05-02", category: "Beta", owner: "North", amount: 24, amount_2: 16, size: 8 },
+                  { created_at: "2026-05-03", category: "Alpha", owner: "South", amount: 18, amount_2: 30, size: 5 },
+                  { created_at: "2026-05-04", category: "Gamma", owner: "West", amount: 32, amount_2: 8, size: 10 },
+                  { created_at: "2026-05-05", category: "Beta", owner: "South", amount: 14, amount_2: 26, size: 4 },
+                  { created_at: "2026-06-01", category: "Late", owner: "West", amount: 99, amount_2: 99, size: 1 }
+                ]
+              }
+            },
+            {
+              id: "divider-chart-source",
+              name: "Divider Chart Source",
+              kind: "manual",
+              config: {
+                rows: [
+                  { created_at: "2026-05-01", category: "Delta", owner: "Bridge", amount: 7, amount_2: 12, size: 2 },
+                  { created_at: "2026-05-02", category: "Delta", owner: "Bridge", amount: 11, amount_2: 18, size: 4 }
+                ]
+              }
+            }
+          ]);
+          engine.setWorkspaceContexts("builder", [
+            {
+              id: "builder:region:root",
+              name: "Root chart context",
+              dataSourceId: "root-chart-source",
+              semanticMapping: {
+                dateField: "created_at",
+                valueField: "amount",
+                labelField: "category",
+                categoryField: "category",
+                ownerField: "owner"
+              },
+              timeRange: { start: "2026-05-01", end: "2026-05-31" }
+            },
+            {
+              id: dividerRegion,
+              name: "Divider chart context",
+              dataSourceId: "divider-chart-source",
+              semanticMapping: {
+                dateField: "created_at",
+                valueField: "amount",
+                labelField: "category",
+                categoryField: "category",
+                ownerField: "owner"
+              }
+            }
+          ]);
+          engine.refresh("builder");
+          return {
+            dividerRegion,
+            chartTypes: window.dashboardChartRuntime.listChartDefinitions().map((definition) => definition.chartType),
+            chartContract: window.dashboardChartRuntime.getChartDefinition("bar"),
+          };
+        }
+        """
+    )
+    expected_types = {
+        "bar",
+        "horizontal-bar",
+        "grouped-bar",
+        "stacked-bar",
+        "lollipop",
+        "line",
+        "multi-line",
+        "area",
+        "stacked-area",
+        "sparkline",
+        "histogram",
+        "scatter",
+        "bubble",
+        "heatmap",
+        "pie",
+        "donut",
+        "gauge",
+        "radial-progress",
+        "progress-bar",
+        "kpi-trend",
+    }
+    assert expected_types.issubset(set(setup["chartTypes"]))
+    assert setup["chartContract"]["requiredFields"] == ["xField"]
+    assert "sum" in setup["chartContract"]["supportedAggregations"]
+
+    chart_configs = {
+        "bar": {"chartType": "bar", "xField": "category", "yField": "amount", "aggregation": "sum", "sortBy": "value", "sortDirection": "desc"},
+        "horizontal-bar": {"chartType": "horizontal-bar", "xField": "category", "yField": "amount", "aggregation": "sum"},
+        "grouped-bar": {"chartType": "grouped-bar", "xField": "category", "seriesField": "owner", "yField": "amount", "aggregation": "sum"},
+        "stacked-bar": {"chartType": "stacked-bar", "xField": "category", "seriesField": "owner", "yField": "amount", "aggregation": "sum"},
+        "lollipop": {"chartType": "lollipop", "xField": "category", "yField": "amount", "aggregation": "avg"},
+        "line": {"chartType": "line", "xField": "created_at", "yField": "amount"},
+        "multi-line": {"chartType": "multi-line", "xField": "created_at", "yField": "amount", "seriesField": "owner"},
+        "area": {"chartType": "area", "xField": "created_at", "yField": "amount"},
+        "stacked-area": {"chartType": "stacked-area", "xField": "created_at", "yField": "amount", "seriesField": "owner"},
+        "sparkline": {"chartType": "sparkline", "xField": "created_at", "yField": "amount"},
+        "histogram": {"chartType": "histogram", "yField": "amount"},
+        "scatter": {"chartType": "scatter", "xField": "amount", "yField": "amount_2"},
+        "bubble": {"chartType": "bubble", "xField": "amount", "yField": "amount_2", "sizeField": "size"},
+        "heatmap": {"chartType": "heatmap", "xField": "category", "seriesField": "owner", "yField": "amount", "aggregation": "sum"},
+        "pie": {"chartType": "pie", "xField": "category", "yField": "amount", "aggregation": "sum"},
+        "donut": {"chartType": "donut", "xField": "category", "yField": "amount", "aggregation": "sum"},
+        "gauge": {"chartType": "gauge", "yField": "amount", "aggregation": "avg"},
+        "radial-progress": {"chartType": "radial-progress", "yField": "amount", "aggregation": "max", "max": 40},
+        "progress-bar": {"chartType": "progress-bar", "yField": "amount", "aggregation": "max", "max": 40},
+        "kpi-trend": {"chartType": "kpi-trend", "xField": "created_at", "yField": "amount"},
+    }
+    for chart_type, config in chart_configs.items():
+        state = page.evaluate(
+            """
+            async ({ chartType, config }) => {
+              const chart = document.querySelector('.widget-layout > .widget-card[data-widget-definition="chart"]');
+              chart.dataset.widgetConfig = JSON.stringify({ title: chartType, limit: 40, ...config });
+              window.dashboardContextEngine.refresh("builder");
+              await new Promise((resolve) => setTimeout(resolve, 30));
+              const runtime = chart.querySelector(".runtime-chart-widget, .runtime-chart-kpi");
+              return {
+                chartType,
+                status: chart.dataset.widgetRuntimeStatus,
+                dataSourceId: chart.dataset.resolvedDataSourceId,
+                renderedType: runtime?.dataset.chartType,
+                hasSvg: Boolean(chart.querySelector(".runtime-chart-svg")),
+                hasState: Boolean(chart.querySelector(".widget-runtime-state")),
+                text: chart.textContent.trim().replace(/\\s+/g, " "),
+              };
+            }
+            """,
+            {"chartType": chart_type, "config": config},
+        )
+        assert state["status"] == "ready", state
+        assert state["dataSourceId"] == "root-chart-source"
+        assert state["renderedType"] == chart_type
+        assert state["hasSvg"] or chart_type == "kpi-trend"
+        assert state["hasState"] is False
+
+    page.evaluate(
+        """
+        async () => {
+          const chart = document.querySelector('.widget-layout > .widget-card[data-widget-definition="chart"]');
+          chart.dataset.currentSpan = "2";
+          chart.dataset.gridRowSpan = "1";
+          chart.style.gridColumn = `${chart.dataset.gridCol || 1} / span 2`;
+          chart.style.gridRow = `${chart.dataset.gridRow || 1} / span 1`;
+          chart.dataset.widgetConfig = JSON.stringify({
+            title: "Tiny trend",
+            chartType: "sparkline",
+            xField: "created_at",
+            yField: "amount",
+            limit: 40
+          });
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    tiny_density = chart.locator(".runtime-chart-widget")
+    expect(tiny_density).to_have_class(re.compile("runtime-chart-density-tiny"))
+    page.evaluate(
+        """
+        () => {
+          const chart = document.querySelector('.widget-layout > .widget-card[data-widget-definition="chart"]');
+          chart.dataset.currentSpan = "4";
+          chart.dataset.gridRowSpan = "4";
+          chart.style.gridColumn = `${chart.dataset.gridCol || 1} / span 4`;
+          chart.style.gridRow = `${chart.dataset.gridRow || 1} / span 4`;
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    expect(chart.locator(".runtime-chart-widget")).to_have_class(re.compile("runtime-chart-density-large"))
+
+    page.evaluate(
+        """
+        () => {
+          const chart = document.querySelector('.widget-layout > .widget-card[data-widget-definition="chart"]');
+          chart.dataset.widgetConfig = JSON.stringify({ title: "Broken", chartType: "network" });
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    expect(chart).to_contain_text("Unsupported chart config")
+
+    page.evaluate(
+        """
+        () => {
+          const engine = window.dashboardContextEngine;
+          const chart = document.querySelector('.widget-layout > .widget-card[data-widget-definition="chart"]');
+          chart.dataset.widgetConfig = JSON.stringify({ title: "Needs x", chartType: "scatter", yField: "amount" });
+          engine.setWorkspaceContext("builder", {
+            id: "builder:region:root",
+            name: "Value only",
+            dataSourceId: "root-chart-source",
+            semanticMapping: { valueField: "amount" }
+          });
+          engine.refresh("builder");
+        }
+        """
+    )
+    expect(chart).to_contain_text("Missing x field")
+
+    page.evaluate(
+        """
+        () => {
+          const engine = window.dashboardContextEngine;
+          const chart = document.querySelector('.widget-layout > .widget-card[data-widget-definition="chart"]');
+          chart.dataset.widgetConfig = JSON.stringify({ title: "Needs aggregation", chartType: "bar", xField: "category", yField: "amount", aggregation: "median" });
+          engine.setWorkspaceContext("builder", {
+            id: "builder:region:root",
+            name: "Root chart context",
+            dataSourceId: "root-chart-source",
+            semanticMapping: {
+              dateField: "created_at",
+              valueField: "amount",
+              labelField: "category",
+              categoryField: "category",
+              ownerField: "owner"
+            }
+          });
+          engine.refresh("builder");
+        }
+        """
+    )
+    expect(chart).to_contain_text("Missing aggregation")
+
+    page.evaluate(
+        """
+        () => {
+          const engine = window.dashboardContextEngine;
+          const chart = document.querySelector('.widget-layout > .widget-card[data-widget-definition="chart"]');
+          chart.dataset.widgetConfig = JSON.stringify({ title: "Empty", chartType: "bar", xField: "category", aggregation: "count", filters: [{ field: "category", operator: "eq", value: "Missing" }] });
+          engine.setWorkspaceContext("builder", {
+            id: "builder:region:root",
+            name: "Root chart context",
+            dataSourceId: "root-chart-source",
+            semanticMapping: {
+              dateField: "created_at",
+              valueField: "amount",
+              labelField: "category",
+              categoryField: "category",
+              ownerField: "owner"
+            }
+          });
+          engine.refresh("builder");
+        }
+        """
+    )
+    expect(chart).to_contain_text("Empty data")
+
+    page.evaluate(
+        """
+        () => {
+          const chart = document.querySelector('.widget-layout > .widget-card[data-widget-definition="chart"]');
+          chart.dataset.widgetConfig = JSON.stringify({ title: "Moved chart", chartType: "bar", xField: "category", yField: "amount", aggregation: "sum" });
+          chart.dataset.gridRow = "6";
+          chart.style.gridRow = "6 / span 4";
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    expect(chart.locator(".runtime-chart-widget")).to_be_visible()
+    assert chart.evaluate("node => node.dataset.resolvedDataSourceId") == "divider-chart-source"
+    assert chart.evaluate("node => node.dataset.resolvedWorkspaceRegionId") == setup["dividerRegion"]
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    chart = page.locator('.widget-layout > .widget-card[data-widget-definition="chart"]').last
+    expect(chart.locator(".runtime-chart-widget")).to_have_attribute("data-chart-type", "bar")
+    persisted = chart.evaluate(
+        """
+        node => ({
+          config: JSON.parse(node.dataset.widgetConfig || "{}"),
+          span: Number(node.dataset.currentSpan || 0),
+          rowSpan: Number(node.dataset.gridRowSpan || 0),
+          dataSourceId: node.dataset.resolvedDataSourceId,
+        })
+        """
+    )
+    assert persisted["config"]["title"] == "Moved chart"
+    assert persisted["config"]["chartType"] == "bar"
+    assert persisted["config"]["aggregation"] == "sum"
+    assert persisted["span"] == 4
+    assert persisted["rowSpan"] == 4
+    assert persisted["dataSourceId"] == "divider-chart-source"
+
+    panel_setup = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const body = panel.querySelector(":scope > .db-panel-body");
+          panel.classList.remove("db-panel-collapsed");
+          panel.dataset.gridCol = "1";
+          panel.dataset.gridRow = "2";
+          panel.dataset.currentSpan = "4";
+          panel.dataset.gridRowSpan = "4";
+          panel.style.gridColumn = "1 / span 4";
+          panel.style.gridRow = "2 / span 4";
+          panel.style.height = "372px";
+          panel.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "true");
+          let grid = body.querySelector(":scope > .panel-internal-widget-grid");
+          if (!grid) {
+            grid = document.createElement("div");
+            grid.className = "panel-internal-widget-grid widget-layout";
+            grid.dataset.widgetLayoutKey = "builder";
+            body.appendChild(grid);
+          }
+          const chart = document.querySelector('.widget-layout:not(.panel-internal-widget-grid) > .widget-card[data-widget-definition="chart"]');
+          chart.dataset.gridCol = "1";
+          chart.dataset.gridRow = "1";
+          chart.dataset.currentSpan = "3";
+          chart.dataset.gridRowSpan = "2";
+          chart.style.gridColumn = "1 / span 3";
+          chart.style.gridRow = "1 / span 2";
+          chart.dataset.widgetConfig = JSON.stringify({ title: "Panel Chart", chartType: "donut", xField: "category", yField: "amount", aggregation: "sum" });
+          grid.appendChild(chart);
+          window.dashboardContextEngine.refresh("builder");
+          return { insidePanel: Boolean(panel.querySelector(".panel-internal-widget-grid > .chart-widget-card")) };
+        }
+        """
+    )
+    assert panel_setup["insidePanel"] is True
+    panel_chart = page.locator(".panel-internal-widget-grid > .chart-widget-card")
+    expect(panel_chart.locator(".runtime-chart-widget")).to_have_attribute("data-chart-type", "donut")
+    assert panel_chart.evaluate("node => node.dataset.widgetRuntimeStatus") == "ready"
+    assert_clean_browser(page)
+
+
+def test_filter_control_widget_emits_context_filters_and_persists(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="filter"]').click()
+    filter_widget = page.locator('.widget-layout > .widget-card[data-widget-definition="filter"]').last
+    expect(filter_widget).to_be_visible()
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="table"]').click()
+    table = page.locator('.widget-layout > .widget-card[data-widget-definition="table"]').last
+    expect(table).to_be_visible()
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="graph"]').click()
+    chart = page.locator('.widget-layout > .widget-card[data-widget-definition="chart"]').last
+    expect(chart).to_be_visible()
+
+    page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span = 1, rowSpan = 1) => {
+            node.hidden = false;
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+          };
+          const engine = window.dashboardContextEngine;
+          const stat = document.querySelector('[data-widget-key="widget-1"]');
+          const filter = document.querySelector('.widget-layout > .widget-card[data-widget-definition="filter"]');
+          const table = document.querySelector('.widget-layout > .widget-card[data-widget-definition="table"]');
+          const chart = document.querySelector('.widget-layout > .widget-card[data-widget-definition="chart"]');
+          document.querySelectorAll('.panel-layout > .db-panel:not(.workspace-divider)').forEach((panel) => {
+            panel.hidden = true;
+            panel.style.display = "none";
+          });
+          place(stat, 1, 1, 1, 1);
+          place(filter, 1, 2, 4, 4);
+          place(table, 1, 6, 4, 4);
+          place(chart, 5, 6, 2, 2);
+          stat.dataset.widgetConfig = JSON.stringify({ label: "Filtered Count", metric: "count" });
+          filter.dataset.widgetConfig = JSON.stringify({
+            title: "Region Filters",
+            filters: [
+              { id: "query", type: "text", label: "Name", field: "name", operator: "contains", value: "" },
+              { id: "category", type: "dropdown", label: "Category", field: "category", options: ["A", "B"], value: "" },
+              { id: "owners", type: "multi-select", label: "Owners", field: "owner", options: ["North", "South", "West"], values: [] },
+              { id: "amount", type: "number-range", label: "Amount", field: "amount", min: "", max: "" },
+              { id: "created", type: "date-range", label: "Created", field: "created_at", start: "", end: "" },
+              { id: "active", type: "boolean", label: "Active only", field: "active", value: true, enabled: false }
+            ]
+          });
+          table.dataset.widgetConfig = JSON.stringify({ title: "Filtered Rows", columns: ["name", "category", "owner", "amount", "active"], limit: 10 });
+          chart.dataset.widgetConfig = JSON.stringify({ title: "Filtered Chart", chartType: "bar", xField: "category", aggregation: "count", limit: 20 });
+          engine.setDataSources("builder", [{
+            id: "filter-source",
+            name: "Filter Source",
+            kind: "manual",
+            config: {
+              rows: [
+                { created_at: "2026-05-01", name: "Alpha", category: "A", owner: "North", amount: 10, active: true },
+                { created_at: "2026-05-02", name: "Beta", category: "A", owner: "South", amount: 25, active: true },
+                { created_at: "2026-05-03", name: "Gamma", category: "B", owner: "West", amount: 20, active: true },
+                { created_at: "2026-05-04", name: "Delta", category: "A", owner: "North", amount: 18, active: false },
+                { created_at: "2026-05-05", name: "Epsilon", category: "A", owner: "South", amount: 80, active: true }
+              ]
+            }
+          }]);
+          engine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Filter context",
+            dataSourceId: "filter-source",
+            semanticMapping: {
+              dateField: "created_at",
+              valueField: "amount",
+              labelField: "name",
+              categoryField: "category",
+              ownerField: "owner"
+            }
+          }]);
+          engine.refresh("builder");
+        }
+        """
+    )
+    expect(filter_widget.locator(".filter-widget-content")).to_be_visible()
+    expect(filter_widget.locator('.filter-widget-control[data-filter-id="query"]')).to_be_visible()
+    expect(filter_widget.locator('.filter-widget-control[data-filter-id="category"]')).to_be_visible()
+    expect(filter_widget.locator('.filter-widget-control[data-filter-id="owners"]')).to_be_visible()
+    expect(filter_widget.locator('.filter-widget-control[data-filter-id="amount"]')).to_be_visible()
+    expect(filter_widget.locator('.filter-widget-control[data-filter-id="created"]')).to_be_visible()
+    expect(filter_widget.locator('.filter-widget-control[data-filter-id="active"]')).to_be_visible()
+    expect(page.locator('[data-widget-key="widget-1"] .stat-val')).to_have_text("5")
+    expect(table.locator(".runtime-table")).to_contain_text("Gamma")
+    expect(chart.locator(".runtime-chart-widget")).to_have_attribute("data-chart-type", "bar")
+
+    filter_widget.locator('.filter-widget-control[data-filter-id="category"] select').select_option("A")
+    expect(page.locator('[data-widget-key="widget-1"] .stat-val')).to_have_text("4")
+    expect(table.locator(".runtime-table")).not_to_contain_text("Gamma")
+
+    filter_widget.locator('.filter-widget-control[data-filter-id="amount"] input[data-filter-part="max"]').fill("30")
+    page.evaluate(
+        """
+        node => {
+          const config = JSON.parse(node.dataset.widgetConfig || "{}");
+          const filters = config.filters || [];
+          const dateFilter = filters.find((filter) => filter.id === "created");
+          if (dateFilter) dateFilter.end = "2026-05-04";
+          node.dataset.widgetConfig = JSON.stringify({ ...config, filters });
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """,
+        arg=filter_widget.element_handle(),
+    )
+    page.keyboard.press("Tab")
+    expect(page.locator('[data-widget-key="widget-1"] .stat-val')).to_have_text("3")
+    expect(table.locator(".runtime-table")).to_contain_text("Delta")
+    expect(table.locator(".runtime-table")).not_to_contain_text("Epsilon")
+
+    filter_widget.locator('.filter-widget-control[data-filter-id="active"] input[data-filter-part="enabled"]').check()
+    expect(page.locator('[data-widget-key="widget-1"] .stat-val')).to_have_text("2")
+    expect(table.locator(".runtime-table")).not_to_contain_text("Delta")
+    active_filters = filter_widget.evaluate("node => JSON.parse(node.dataset.contextFilters || '[]')")
+    assert {"field": "category", "operator": "eq", "value": "A"} in active_filters
+    assert {"field": "amount", "operator": "lte", "value": "30"} in active_filters
+    assert {"field": "created_at", "operator": "lte", "value": "2026-05-04"} in active_filters
+    assert {"field": "active", "operator": "eq", "value": True} in active_filters
+
+    page.locator(".app-nav").click(position={"x": 16, "y": 16})
+    page.keyboard.press("Control+Z")
+    expect(page.locator('[data-widget-key="widget-1"] .stat-val')).to_have_text("3")
+    page.keyboard.press("Control+Y")
+    expect(page.locator('[data-widget-key="widget-1"] .stat-val')).to_have_text("2")
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    filter_widget = page.locator('.widget-layout > .widget-card[data-widget-definition="filter"]').last
+    expect(filter_widget.locator('.filter-widget-control[data-filter-id="active"] input[data-filter-part="enabled"]')).to_be_checked()
+    expect(page.locator('[data-widget-key="widget-1"] .stat-val')).to_have_text("2")
+    page.evaluate(
+        """
+        () => {
+          const filter = document.querySelector('.widget-layout > .widget-card[data-widget-definition="filter"]');
+          filter.dataset.currentSpan = "2";
+          filter.dataset.gridRowSpan = "1";
+          filter.style.gridColumn = `${filter.dataset.gridCol || 1} / span 2`;
+          filter.style.gridRow = `${filter.dataset.gridRow || 1} / span 1`;
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    expect(filter_widget.locator(".filter-widget-content")).to_have_class(re.compile("filter-widget-density-small"))
+    assert filter_widget.locator(".filter-widget-control").count() == 1
+
+    panel_setup = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const body = panel.querySelector(":scope > .db-panel-body");
+          panel.classList.remove("db-panel-collapsed");
+          panel.dataset.gridCol = "1";
+          panel.dataset.gridRow = "2";
+          panel.dataset.currentSpan = "4";
+          panel.dataset.gridRowSpan = "5";
+          panel.style.gridColumn = "1 / span 4";
+          panel.style.gridRow = "2 / span 5";
+          panel.style.height = "468px";
+          panel.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "true");
+          let grid = body.querySelector(":scope > .panel-internal-widget-grid");
+          if (!grid) {
+            grid = document.createElement("div");
+            grid.className = "panel-internal-widget-grid widget-layout";
+            grid.dataset.widgetLayoutKey = "builder";
+            body.appendChild(grid);
+          }
+          const filter = document.querySelector('.widget-layout:not(.panel-internal-widget-grid) > .widget-card[data-widget-definition="filter"]');
+          filter.dataset.gridCol = "1";
+          filter.dataset.gridRow = "1";
+          filter.dataset.currentSpan = "3";
+          filter.dataset.gridRowSpan = "2";
+          filter.style.gridColumn = "1 / span 3";
+          filter.style.gridRow = "1 / span 2";
+          grid.appendChild(filter);
+          window.dashboardContextEngine.refresh("builder");
+          return { insidePanel: Boolean(panel.querySelector(".panel-internal-widget-grid > .filter-widget-card")) };
+        }
+        """
+    )
+    assert panel_setup["insidePanel"] is True
+    panel_filter = page.locator(".panel-internal-widget-grid > .filter-widget-card")
+    expect(panel_filter.locator(".filter-widget-content")).to_be_visible()
     assert_clean_browser(page)
 
 
@@ -2566,7 +3621,7 @@ def test_background_presets_do_not_change_shared_glass_materials(page: Page, app
                 nav: read(".app-nav"),
                 panel: read(".panel-layout > .db-panel"),
                 widget: read(".widget-layout > .stat-card.widget-card:not(.range-bar)"),
-                timeframe: read(".timeframe-widget .preset-btn.active"),
+                timeframe: read(".timeframe-widget .preset-btn.active, .timeframe-widget .preset-btn"),
                 settings: read(".timeframe-widget .panel-settings-toggle"),
                 panelBody: read(".panel-layout > .db-panel .db-panel-body"),
               };
@@ -2887,7 +3942,7 @@ def test_workspace_chrome_is_spatial_and_modes_still_work(page: Page, app_server
     )
     assert add_alignment["leftDelta"] <= 1.5
     assert 6 <= add_alignment["topGap"] <= 14
-    for label in ("Stat", "Timeframe", "Stat + Filter", "Graph", "Table", "Calendar", "Anchor", "Panel", "Divider"):
+    for label in ("Stat", "Timeframe", "Filter Control", "Text / Notes", "Region Summary", "Image", "Video", "PDF / Document", "Activity Feed", "AI Assistant", "Context Inspector", "Stat + Filter", "Graph", "Table", "Calendar", "Anchor", "Panel", "Divider"):
         expect(page.locator(".panel-add-menu")).to_contain_text(label)
     expect(page.locator(".panel-add-menu")).not_to_contain_text("Context Panel")
     page.mouse.click(24, 24)
@@ -4072,7 +5127,7 @@ def test_timeframe_controls_use_shared_glass_color(page: Page, app_server: str) 
         return control.evaluate(
             """
             node => {
-              const preset = node.querySelector(".preset-btn.active");
+              const preset = node.querySelector(".preset-btn.active") || node.querySelector(".preset-btn");
               const selector = node.querySelector(".timeframe-selector");
               const refresh = node.querySelector(".range-icon-button");
               const calendar = node.querySelector(".timeframe-calendar");
@@ -4132,9 +5187,9 @@ def test_timeframe_widget_is_createable_and_uses_widget_system(page: Page, app_s
     expect(created).to_be_visible()
     expect(created.locator(".timeframe-command-surface")).to_be_visible()
     expect(created.locator(".preset-btn", has_text="Today")).to_have_count(1)
-    expect(created.locator(".preset-btn", has_text="7 days")).to_have_count(1)
-    expect(created.locator(".preset-btn", has_text="30 days")).to_have_count(1)
-    expect(created.locator(".range-custom-trigger")).to_contain_text("This week")
+    expect(created.locator(".preset-btn", has_text="Last 7 days")).to_have_count(1)
+    expect(created.locator(".preset-btn", has_text="Last 30 days")).to_have_count(1)
+    expect(created.locator(".range-custom-trigger")).to_contain_text("Any time")
     expect(created.locator(".timeframe-refresh")).to_have_count(1)
     expect(created.locator(".timeframe-calendar")).to_have_count(1)
 
@@ -4230,6 +5285,749 @@ def test_timeframe_widget_is_createable_and_uses_widget_system(page: Page, app_s
     persisted = page.locator('.widget-layout > .timeframe-widget[data-custom-widget="true"][data-widget-type="controls"]').last
     assert grid_item_state(page, '.widget-layout > .timeframe-widget[data-custom-widget="true"][data-widget-type="controls"]')["span"] == 2
     expect(persisted.locator(".timeframe-command-surface")).to_be_visible()
+    assert_clean_browser(page)
+
+
+def test_timeframe_control_widget_writes_context_time_range_and_persists(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="timeframe"]').click()
+    timeframe = page.locator('.widget-layout > .timeframe-widget[data-widget-definition="timeframe"]').last
+    expect(timeframe).to_be_visible()
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="table"]').click()
+    table = page.locator('.widget-layout > .widget-card[data-widget-definition="table"]').last
+    expect(table).to_be_visible()
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="graph"]').click()
+    chart = page.locator('.widget-layout > .widget-card[data-widget-definition="chart"]').last
+    expect(chart).to_be_visible()
+
+    setup = page.evaluate(
+        """
+        () => {
+          const dateOnly = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+          const shift = (days) => {
+            const now = new Date();
+            const date = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            date.setDate(date.getDate() + days);
+            return dateOnly(date);
+          };
+          const place = (node, col, row, span = 1, rowSpan = 1) => {
+            node.hidden = false;
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+          };
+          const engine = window.dashboardContextEngine;
+          const stat = document.querySelector('[data-widget-key="widget-1"]');
+          const timeframe = document.querySelector('.widget-layout > .timeframe-widget[data-custom-widget="true"]');
+          const table = document.querySelector('.widget-layout > .widget-card[data-widget-definition="table"]');
+          const chart = document.querySelector('.widget-layout > .widget-card[data-widget-definition="chart"]');
+          document.querySelectorAll('.panel-layout > .db-panel:not(.workspace-divider)').forEach((panel) => {
+            panel.hidden = true;
+            panel.style.display = "none";
+          });
+          document.querySelectorAll('.widget-layout > .widget-card:not([data-widget-key="widget-1"]):not([data-custom-widget="true"])').forEach((widget) => {
+            if (widget !== table && widget !== chart) {
+              widget.hidden = true;
+              widget.style.display = "none";
+            }
+          });
+          place(timeframe, 1, 1, 5, 1);
+          place(stat, 1, 2, 1, 1);
+          place(table, 1, 3, 4, 3);
+          place(chart, 5, 3, 2, 2);
+          stat.dataset.widgetConfig = JSON.stringify({ label: "Timed Count", metric: "count" });
+          table.dataset.widgetConfig = JSON.stringify({ title: "Timed Rows", columns: ["name", "created_at", "category"], limit: 10 });
+          chart.dataset.widgetConfig = JSON.stringify({ title: "Timed Chart", chartType: "bar", xField: "category", aggregation: "count", limit: 10 });
+          engine.setDataSources("builder", [{
+            id: "time-source",
+            name: "Time Source",
+            kind: "manual",
+            config: {
+              rows: [
+                { created_at: shift(0), name: "Today row", category: "Current", amount: 10 },
+                { created_at: shift(-1), name: "Yesterday row", category: "Current", amount: 20 },
+                { created_at: shift(-3), name: "Recent row", category: "Current", amount: 30 },
+                { created_at: shift(-20), name: "Old row", category: "Archive", amount: 40 }
+              ]
+            }
+          }]);
+          engine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Time context",
+            dataSourceId: "time-source",
+            semanticMapping: {
+              dateField: "created_at",
+              valueField: "amount",
+              labelField: "name",
+              categoryField: "category"
+            }
+          }]);
+          engine.refresh("builder");
+          return { today: shift(0), yesterday: shift(-1) };
+        }
+        """
+    )
+
+    expect(page.locator('[data-widget-key="widget-1"] .stat-val')).to_have_text("4")
+    timeframe.locator('.preset-btn[data-timeframe-preset="last_7_days"]').evaluate("node => node.click()")
+    expect(page.locator('[data-widget-key="widget-1"] .stat-val')).to_have_text("3")
+    expect(table.locator(".runtime-table")).not_to_contain_text("Old row")
+    expect(chart.locator(".runtime-chart-widget")).to_have_attribute("data-chart-type", "bar")
+    time_range = timeframe.evaluate("node => JSON.parse(node.dataset.contextTimeRange || '{}')")
+    assert time_range["preset"] == "last_7_days"
+    assert time_range["field"] == "created_at"
+
+    timeframe.locator('.preset-btn[data-timeframe-preset="yesterday"]').evaluate("node => node.click()")
+    expect(page.locator('[data-widget-key="widget-1"] .stat-val')).to_have_text("1")
+    expect(table.locator(".runtime-table")).to_contain_text("Yesterday row")
+    expect(table.locator(".runtime-table")).not_to_contain_text("Today row")
+
+    page.evaluate(
+        """
+        () => {
+          const timeframe = document.querySelector('.widget-layout > .timeframe-widget[data-custom-widget="true"]');
+          timeframe.dataset.currentSpan = "5";
+          timeframe.dataset.gridRowSpan = "2";
+          timeframe.style.gridColumn = `${timeframe.dataset.gridCol || 1} / span 5`;
+          timeframe.style.gridRow = `${timeframe.dataset.gridRow || 1} / span 2`;
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    expect(timeframe.locator(".timeframe-command-surface")).to_have_class(re.compile("timeframe-density-large"))
+    page.evaluate(
+        """
+        ({ today }) => {
+          const setDate = (part) => {
+            const input = document.querySelector(`.widget-layout > .timeframe-widget[data-custom-widget="true"] .timeframe-custom-date[data-timeframe-part="${part}"]`);
+            input.value = today;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+          };
+          setDate("customStart");
+          setDate("customEnd");
+        }
+        """,
+        {"today": setup["today"]},
+    )
+    expect(page.locator('[data-widget-key="widget-1"] .stat-val')).to_have_text("1")
+    expect(table.locator(".runtime-table")).to_contain_text("Today row")
+    expect(table.locator(".runtime-table")).not_to_contain_text("Yesterday row")
+
+    page.evaluate(
+        """
+        () => {
+          const timeframe = document.querySelector('.widget-layout > .timeframe-widget[data-custom-widget="true"]');
+          timeframe.dataset.currentSpan = "2";
+          timeframe.dataset.gridRowSpan = "1";
+          timeframe.style.gridColumn = `${timeframe.dataset.gridCol || 1} / span 2`;
+          timeframe.style.gridRow = `${timeframe.dataset.gridRow || 1} / span 1`;
+          document.activeElement?.blur?.();
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    expect(timeframe.locator(".timeframe-command-surface")).to_have_class(re.compile("timeframe-density-small"))
+    expect(timeframe.locator(".timeframe-selector")).to_contain_text(setup["today"])
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    timeframe = page.locator('.widget-layout > .timeframe-widget[data-custom-widget="true"]').last
+    expect(timeframe.locator(".timeframe-selector")).to_contain_text(setup["today"])
+    expect(page.locator('[data-widget-key="widget-1"] .stat-val')).to_have_text("1")
+    persisted_range = timeframe.evaluate("node => JSON.parse(node.dataset.contextTimeRange || '{}')")
+    assert persisted_range["start"] == setup["today"]
+    assert persisted_range["end"] == setup["today"]
+    assert_clean_browser(page)
+
+
+def test_text_notes_widget_edits_persists_and_respects_keyboard_shortcuts(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    expect(page.locator('.widget-add-action[data-widget-kind="text"]')).to_have_text("Text / Notes")
+    page.locator('.widget-add-action[data-widget-kind="text"]').click()
+
+    note = page.locator('.widget-layout > .text-widget-card[data-widget-definition="text"]').last
+    expect(note).to_be_visible()
+    expect(note.locator(".text-widget-editor")).to_be_visible()
+    note_key = note.evaluate("node => node.dataset.widgetKey")
+    note_text = "Workspace note\\nKeep filters and time ranges aligned."
+    editor = note.locator(".text-widget-editor")
+    editor.fill(note_text)
+    expect(editor).to_have_value(note_text)
+    assert note.evaluate("node => JSON.parse(node.dataset.widgetConfig || '{}').body") == note_text
+
+    editor.press("Delete")
+    expect(page.locator(f'.widget-layout > .text-widget-card[data-widget-key="{note_key}"]')).to_be_visible()
+    editor.press("Control+C")
+    editor.press("Control+V")
+    expect(page.locator(".widget-layout > .text-widget-card")).to_have_count(1)
+
+    page.locator(".app-nav").click(position={"x": 16, "y": 16})
+    press_dashboard_undo(page)
+    note = page.locator(f'.widget-layout > .text-widget-card[data-widget-key="{note_key}"]')
+    expect(note).to_be_visible()
+    expect(note.locator(".text-widget-editor")).to_have_value("")
+    press_dashboard_redo(page)
+    note = page.locator(f'.widget-layout > .text-widget-card[data-widget-key="{note_key}"]')
+    expect(note.locator(".text-widget-editor")).to_have_value(note_text)
+
+    open_tools(note)
+    note.locator(".panel-delete-handle").click(force=True)
+    expect(page.locator("#panel-delete-dialog")).to_be_visible()
+    page.locator(".confirm-dialog-cancel").click()
+    expect(note).to_be_visible()
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    note = page.locator(f'.widget-layout > .text-widget-card[data-widget-key="{note_key}"]')
+    expect(note.locator(".text-widget-editor")).to_have_value(note_text)
+
+    page.locator(".layout-group-button").click()
+    expect(page.locator(".layout-group-button")).to_have_attribute("aria-pressed", "true")
+    note.click(position={"x": 18, "y": 18}, force=True)
+    expect(note).to_have_class(re.compile("group-selected"))
+    page.keyboard.press("Control+C")
+    page.keyboard.press("Control+V")
+    expect(page.locator(".widget-layout > .text-widget-card")).to_have_count(2)
+    duplicated = page.locator(".widget-layout > .text-widget-card").last
+    expect(duplicated.locator(".text-widget-editor")).to_have_value(note_text)
+
+    page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const body = panel.querySelector(":scope > .db-panel-body");
+          panel.classList.remove("db-panel-collapsed");
+          panel.dataset.gridCol = "1";
+          panel.dataset.gridRow = "2";
+          panel.dataset.currentSpan = "4";
+          panel.dataset.gridRowSpan = "4";
+          panel.style.gridColumn = "1 / span 4";
+          panel.style.gridRow = "2 / span 4";
+          panel.style.height = "372px";
+          panel.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "true");
+          let grid = body.querySelector(":scope > .panel-internal-widget-grid");
+          if (!grid) {
+            grid = document.createElement("div");
+            grid.className = "panel-internal-widget-grid widget-layout";
+            grid.dataset.widgetLayoutKey = "builder";
+            body.appendChild(grid);
+          }
+          const note = document.querySelector('.widget-layout:not(.panel-internal-widget-grid) > .text-widget-card');
+          note.dataset.gridCol = "1";
+          note.dataset.gridRow = "1";
+          note.dataset.currentSpan = "3";
+          note.dataset.gridRowSpan = "2";
+          note.style.gridColumn = "1 / span 3";
+          note.style.gridRow = "1 / span 2";
+          grid.appendChild(note);
+          window.dashboardContextEngine.refresh("builder");
+          return Boolean(panel.querySelector(".panel-internal-widget-grid > .text-widget-card"));
+        }
+        """
+    )
+    panel_note = page.locator(".panel-internal-widget-grid > .text-widget-card").first
+    expect(panel_note.locator(".text-widget-editor")).to_have_value(note_text)
+    assert_clean_browser(page)
+
+
+def test_region_summary_widget_uses_spatial_runtime_and_persists(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="region-summary"]').click()
+    summary = page.locator('.widget-layout > .region-summary-widget-card[data-widget-definition="region-summary"]').last
+    expect(summary).to_be_visible()
+    expect(summary.locator(".region-summary-widget")).to_be_visible()
+    expect(summary.locator(".region-summary-title")).to_contain_text("Top region")
+    expect(summary.locator(".region-summary-metrics")).to_contain_text("Widgets")
+
+    page.evaluate(
+        """
+        () => {
+          window.dashboardContextEngine.setDataSources("builder", [{
+            id: "summary-source",
+            name: "Summary Source",
+            kind: "manual",
+            config: { rows: [{ name: "A", amount: 1 }] }
+          }]);
+          window.dashboardContextEngine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Top region",
+            dataSourceId: "summary-source",
+            semanticMapping: { labelField: "name", valueField: "amount" }
+          }]);
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    expect(summary.locator(".region-summary-context")).to_contain_text("Summary Source")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    divider = page.locator(".panel-layout > .workspace-divider").last
+    expect(divider).to_be_visible()
+    page.evaluate(
+        """
+        () => {
+          const divider = document.querySelector(".panel-layout > .workspace-divider:last-of-type");
+          const summary = document.querySelector('.widget-layout > .region-summary-widget-card[data-widget-definition="region-summary"]');
+          divider.dataset.gridCol = "1";
+          divider.dataset.gridRow = "9";
+          divider.dataset.currentSpan = "6";
+          divider.dataset.gridRowSpan = "1";
+          divider.style.gridColumn = "1 / span 6";
+          divider.style.gridRow = "9 / span 1";
+          summary.dataset.gridCol = "1";
+          summary.dataset.gridRow = "10";
+          summary.dataset.currentSpan = "2";
+          summary.dataset.gridRowSpan = "2";
+          summary.style.gridColumn = "1 / span 2";
+          summary.style.gridRow = "10 / span 2";
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    expect(summary.locator(".region-summary-title")).not_to_contain_text("Top region")
+    region_id = summary.locator(".region-summary-widget").get_attribute("data-region-id")
+    assert region_id and region_id != "builder:region:root"
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    reloaded = page.locator('.widget-layout > .region-summary-widget-card[data-widget-definition="region-summary"]').last
+    expect(reloaded.locator(".region-summary-widget")).to_be_visible()
+    assert reloaded.locator(".region-summary-widget").get_attribute("data-region-id") == region_id
+    assert_clean_browser(page)
+
+
+def test_media_rich_content_widgets_render_safely_and_persist(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    expect(page.locator('.widget-add-action[data-widget-kind="image"]')).to_have_text("Image")
+    expect(page.locator('.widget-add-action[data-widget-kind="video"]')).to_have_text("Video")
+    expect(page.locator('.widget-add-action[data-widget-kind="document"]')).to_have_text("PDF / Document")
+    page.locator('.widget-add-action[data-widget-kind="image"]').click()
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="video"]').click()
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="document"]').click()
+
+    image = page.locator('.widget-layout > .image-widget-card[data-widget-definition="image"]').last
+    video = page.locator('.widget-layout > .video-widget-card[data-widget-definition="video"]').last
+    document = page.locator('.widget-layout > .document-widget-card[data-widget-definition="document"]').last
+    expect(image).to_be_visible()
+    expect(video).to_be_visible()
+    expect(document).to_be_visible()
+    expect(image.locator(".media-widget-state")).to_contain_text("Configure image URL")
+    expect(video.locator(".media-widget-state")).to_contain_text("Configure video URL")
+    expect(document.locator(".media-widget-state")).to_contain_text("Configure document URL")
+
+    media_state = page.evaluate(
+        """
+        () => {
+          const image = document.querySelector('.image-widget-card[data-widget-definition="image"]');
+          const video = document.querySelector('.video-widget-card[data-widget-definition="video"]');
+          const doc = document.querySelector('.document-widget-card[data-widget-definition="document"]');
+          const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" rx="22" fill="#2563eb"/><circle cx="82" cy="90" r="38" fill="#bfdbfe"/><text x="142" y="101" font-size="34" font-family="Arial" fill="#eff6ff">Image</text></svg>`;
+          image.dataset.widgetConfig = JSON.stringify({
+            title: "Reference Image",
+            src: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+            alt: "Reference diagram",
+            fit: "contain",
+            caption: "Diagram reference"
+          });
+          video.dataset.widgetConfig = JSON.stringify({
+            title: "Demo Clip",
+            src: "data:video/mp4;base64,AAAA",
+            embedType: "url",
+            muted: true,
+            caption: "Walkthrough clip"
+          });
+          doc.dataset.widgetConfig = JSON.stringify({
+            title: "Inline Notes",
+            documentType: "text",
+            content: "Document preview\\nStored in widget config.",
+            caption: "Reference document"
+          });
+          window.dashboardContextEngine.refresh("builder");
+          return {
+            imageKey: image.dataset.widgetKey,
+            videoKey: video.dataset.widgetKey,
+            documentKey: doc.dataset.widgetKey,
+          };
+        }
+        """
+    )
+    expect(image.locator(".media-widget-image")).to_be_visible()
+    expect(image.locator(".media-widget-caption")).to_contain_text("Diagram reference")
+    expect(video.locator(".media-widget-video")).to_be_visible()
+    expect(video.locator(".media-widget-caption")).to_contain_text("Walkthrough clip")
+    expect(document.locator(".document-widget-text")).to_contain_text("Stored in widget config")
+    expect(document.locator(".media-widget-caption")).to_contain_text("Reference document")
+
+    fit_modes = page.evaluate(
+        """
+        async () => {
+          const image = document.querySelector('.image-widget-card[data-widget-definition="image"]');
+          const results = {};
+          for (const fit of ["contain", "cover", "fill", "center"]) {
+            const config = JSON.parse(image.dataset.widgetConfig || "{}");
+            image.dataset.widgetConfig = JSON.stringify({ ...config, fit });
+            window.dashboardContextEngine.refresh("builder");
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+            const img = image.querySelector(".media-widget-image");
+            results[fit] = {
+              className: image.querySelector(".media-widget")?.className || "",
+              objectFit: getComputedStyle(img).objectFit,
+            };
+          }
+          return results;
+        }
+        """
+    )
+    assert fit_modes["contain"]["objectFit"] == "contain"
+    assert fit_modes["cover"]["objectFit"] == "cover"
+    assert fit_modes["fill"]["objectFit"] == "fill"
+    assert fit_modes["center"]["objectFit"] == "none"
+    assert "media-fit-center" in fit_modes["center"]["className"]
+
+    invalid = page.evaluate(
+        """
+        () => {
+          const image = document.querySelector('.image-widget-card[data-widget-definition="image"]');
+          image.dataset.widgetConfig = JSON.stringify({ title: "Unsafe Image", src: "javascript:alert(1)" });
+          window.dashboardContextEngine.refresh("builder");
+          return {
+            hasImage: Boolean(image.querySelector("img")),
+            text: image.textContent,
+            config: JSON.parse(image.dataset.widgetConfig || "{}"),
+          };
+        }
+        """
+    )
+    assert invalid["hasImage"] is False
+    assert "Unsupported image URL" in invalid["text"]
+    assert invalid["config"]["src"].startswith("javascript:")
+
+    page.evaluate(
+        """
+        () => {
+          const image = document.querySelector('.image-widget-card[data-widget-definition="image"]');
+          const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" rx="22" fill="#2563eb"/><text x="32" y="102" font-size="34" font-family="Arial" fill="#eff6ff">Persisted</text></svg>`;
+          image.dataset.widgetConfig = JSON.stringify({
+            title: "Reference Image",
+            src: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+            fit: "cover",
+            caption: "Persisted diagram"
+          });
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+
+    bounds = image.evaluate(
+        """
+        node => {
+          const stage = node.querySelector(".media-widget-stage").getBoundingClientRect();
+          const rect = node.getBoundingClientRect();
+          const settings = node.querySelector(".widget-settings-toggle").getBoundingClientRect();
+          return {
+            stageInside: stage.left >= rect.left && stage.top >= rect.top && stage.right <= settings.left - 4 && stage.bottom <= rect.bottom,
+            stageWidth: stage.width,
+            stageHeight: stage.height,
+            settingsGap: settings.left - stage.right,
+          };
+        }
+        """
+    )
+    assert bounds["stageInside"] is True
+    assert bounds["stageWidth"] > 40
+    assert bounds["stageHeight"] > 30
+    assert bounds["settingsGap"] >= 4
+
+    open_tools(image)
+    expect(image).to_have_class(re.compile("widget-tools-open"))
+    image.locator(".panel-delete-handle").click(force=True)
+    expect(page.locator("#panel-delete-dialog")).to_be_visible()
+    page.locator(".confirm-dialog-cancel").click()
+    expect(image).to_be_visible()
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    expect(page.locator(f'.image-widget-card[data-widget-key="{media_state["imageKey"]}"] .media-widget-image')).to_be_visible()
+    expect(page.locator(f'.image-widget-card[data-widget-key="{media_state["imageKey"]}"]')).to_contain_text("Persisted diagram")
+    expect(page.locator(f'.video-widget-card[data-widget-key="{media_state["videoKey"]}"] .media-widget-video')).to_be_visible()
+    expect(page.locator(f'.document-widget-card[data-widget-key="{media_state["documentKey"]}"] .document-widget-text')).to_contain_text("Stored in widget config")
+
+    page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const body = panel.querySelector(":scope > .db-panel-body");
+          panel.classList.remove("db-panel-collapsed");
+          panel.dataset.gridCol = "1";
+          panel.dataset.gridRow = "2";
+          panel.dataset.currentSpan = "4";
+          panel.dataset.gridRowSpan = "4";
+          panel.style.gridColumn = "1 / span 4";
+          panel.style.gridRow = "2 / span 4";
+          panel.style.height = "372px";
+          panel.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "true");
+          let grid = body.querySelector(":scope > .panel-internal-widget-grid");
+          if (!grid) {
+            grid = document.createElement("div");
+            grid.className = "panel-internal-widget-grid widget-layout";
+            grid.dataset.widgetLayoutKey = "builder";
+            body.appendChild(grid);
+          }
+          const doc = document.querySelector('.widget-layout:not(.panel-internal-widget-grid) > .document-widget-card');
+          doc.dataset.gridCol = "1";
+          doc.dataset.gridRow = "1";
+          doc.dataset.currentSpan = "3";
+          doc.dataset.gridRowSpan = "2";
+          doc.style.gridColumn = "1 / span 3";
+          doc.style.gridRow = "1 / span 2";
+          grid.appendChild(doc);
+          window.dashboardContextEngine.refresh("builder");
+          return Boolean(panel.querySelector(".panel-internal-widget-grid > .document-widget-card"));
+        }
+        """
+    )
+    expect(page.locator(".panel-internal-widget-grid > .document-widget-card .document-widget-text")).to_contain_text("Stored in widget config")
+    assert_clean_browser(page)
+
+
+def test_system_meta_widgets_render_context_and_engineer_gated_inspector(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.evaluate(
+        """
+        () => {
+          const engine = window.dashboardContextEngine;
+          engine.setDataSources("builder", [{
+            id: "meta-source",
+            name: "Meta Source",
+            kind: "manual",
+            config: { rows: [{ created_at: "2026-05-25", amount: 7, name: "Alpha", category: "A" }] }
+          }]);
+          engine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Meta Root",
+            dataSourceId: "meta-source",
+            semanticMapping: { dateField: "created_at", valueField: "amount", labelField: "name", categoryField: "category" },
+            filters: [{ field: "category", operator: "eq", value: "A" }],
+            timeRange: { start: "2026-05-25", end: "2026-05-25", label: "Today" }
+          }]);
+          engine.refresh("builder");
+        }
+        """
+    )
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="activity-feed"]').click()
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="ai-assistant"]').click()
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="context-inspector"]').click()
+
+    activity = page.locator('.widget-layout > .activity-feed-widget-card[data-widget-definition="activity-feed"]').last
+    assistant = page.locator('.widget-layout > .ai-assistant-widget-card[data-widget-definition="ai-assistant"]').last
+    inspector = page.locator('.widget-layout > .context-inspector-widget-card[data-widget-definition="context-inspector"]').last
+    expect(activity).to_be_visible()
+    expect(assistant).to_be_visible()
+    expect(inspector).to_be_hidden()
+    expect(activity.locator(".activity-feed-widget")).to_be_visible()
+    expect(activity.locator(".activity-feed-item").first).to_contain_text(re.compile("added|ready|changed", re.I))
+    expect(assistant.locator(".ai-assistant-widget")).to_be_visible()
+    expect(assistant).to_contain_text("No external AI service is connected")
+    expect(assistant).to_contain_text("Meta Source")
+    expect(assistant).to_contain_text("Filters")
+
+    config_state = page.evaluate(
+        """
+        () => {
+          const activity = document.querySelector('.activity-feed-widget-card[data-widget-definition="activity-feed"]');
+          const assistant = document.querySelector('.ai-assistant-widget-card[data-widget-definition="ai-assistant"]');
+          const inspector = document.querySelector('.context-inspector-widget-card[data-widget-definition="context-inspector"]');
+          activity.dataset.widgetConfig = JSON.stringify({ title: "Recent Activity", scope: "currentRegion", maxItems: 4, eventTypes: ["object-created", "layout-saved"] });
+          assistant.dataset.widgetConfig = JSON.stringify({ title: "Scoped Assistant", scope: "region", promptTemplate: "Summarize this region" });
+          inspector.dataset.widgetConfig = JSON.stringify({ title: "Context Debug", target: "currentRegion", showInheritanceTree: true, showFilters: true, showDataSource: true });
+          window.dashboardContextEngine.refresh("builder");
+          return {
+            activityKey: activity.dataset.widgetKey,
+            assistantKey: assistant.dataset.widgetKey,
+            inspectorKey: inspector.dataset.widgetKey,
+          };
+        }
+        """
+    )
+    expect(activity).to_contain_text("Recent Activity")
+    expect(assistant).to_contain_text("Scoped Assistant")
+
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
+    expect(inspector).to_be_visible()
+    expect(inspector.locator(".context-inspector-widget")).to_be_visible()
+    expect(inspector).to_contain_text("Context Debug")
+    expect(inspector).to_contain_text("Meta Source")
+    expect(inspector).to_contain_text("category")
+    expect(inspector).to_contain_text("Today")
+
+    density = page.evaluate(
+        """
+        () => {
+          const activity = document.querySelector('.activity-feed-widget-card[data-widget-definition="activity-feed"]');
+          activity.dataset.gridRowSpan = "1";
+          activity.style.gridRow = `${activity.dataset.gridRow || 1} / span 1`;
+          window.dashboardContextEngine.refresh("builder");
+          return {
+            density: activity.querySelector(".activity-feed-widget")?.className || "",
+            visibleItems: activity.querySelectorAll(".activity-feed-item").length,
+          };
+        }
+        """
+    )
+    assert "meta-density-compact" in density["density"]
+    assert density["visibleItems"] <= 3
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    page.locator(".engineer-mode-button").click()
+    reloaded_activity = page.locator(f'.activity-feed-widget-card[data-widget-key="{config_state["activityKey"]}"]')
+    reloaded_assistant = page.locator(f'.ai-assistant-widget-card[data-widget-key="{config_state["assistantKey"]}"]')
+    reloaded_inspector = page.locator(f'.context-inspector-widget-card[data-widget-key="{config_state["inspectorKey"]}"]')
+    expect(reloaded_activity).to_contain_text("Recent Activity")
+    expect(reloaded_assistant).to_contain_text("Scoped Assistant")
+    expect(reloaded_inspector).to_contain_text("Context Debug")
+
+    page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const body = panel.querySelector(":scope > .db-panel-body");
+          panel.classList.remove("db-panel-collapsed");
+          panel.dataset.gridCol = "1";
+          panel.dataset.gridRow = "2";
+          panel.dataset.currentSpan = "4";
+          panel.dataset.gridRowSpan = "4";
+          panel.style.gridColumn = "1 / span 4";
+          panel.style.gridRow = "2 / span 4";
+          panel.style.height = "372px";
+          panel.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "true");
+          let grid = body.querySelector(":scope > .panel-internal-widget-grid");
+          if (!grid) {
+            grid = document.createElement("div");
+            grid.className = "panel-internal-widget-grid widget-layout";
+            grid.dataset.widgetLayoutKey = "builder";
+            body.appendChild(grid);
+          }
+          const assistant = document.querySelector('.widget-layout:not(.panel-internal-widget-grid) > .ai-assistant-widget-card');
+          assistant.dataset.gridCol = "1";
+          assistant.dataset.gridRow = "1";
+          assistant.dataset.currentSpan = "3";
+          assistant.dataset.gridRowSpan = "2";
+          assistant.style.gridColumn = "1 / span 3";
+          assistant.style.gridRow = "1 / span 2";
+          grid.appendChild(assistant);
+          window.dashboardContextEngine.refresh("builder");
+          return Boolean(panel.querySelector(".panel-internal-widget-grid > .ai-assistant-widget-card"));
+        }
+        """
+    )
+    expect(page.locator(".panel-internal-widget-grid > .ai-assistant-widget-card .ai-assistant-widget")).to_be_visible()
+    assert_clean_browser(page)
+
+
+def test_engineer_minimap_overlay_tracks_workspace_and_navigates(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    minimap = page.locator(".workspace-minimap-layer")
+    expect(minimap.locator(".workspace-minimap-surface")).to_be_hidden()
+
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="stat"]').click()
+    page.evaluate(
+        """
+        () => {
+          const widget = document.querySelector('.widget-layout > .widget-card[data-custom-widget="true"]:last-of-type');
+          widget.dataset.gridCol = "5";
+          widget.dataset.gridRow = "24";
+          widget.dataset.currentSpan = "2";
+          widget.dataset.gridRowSpan = "2";
+          widget.style.gridColumn = "5 / span 2";
+          widget.style.gridRow = "24 / span 2";
+          window.dashboardContextEngine.refresh("builder");
+          window.dashboardSpatialRuntime.refreshMiniMaps("builder");
+        }
+        """
+    )
+
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
+    expect(minimap.locator(".workspace-minimap-surface")).to_be_visible()
+    page.wait_for_function(
+        "() => document.querySelectorAll('.workspace-minimap-svg .workspace-minimap-object').length >= 2"
+    )
+    object_count_before = page.locator(".workspace-minimap-svg .workspace-minimap-object").count()
+    assert object_count_before >= 2
+
+    viewport_y_before = float(minimap.locator(".workspace-minimap-viewport").get_attribute("y") or "0")
+    page.evaluate("window.scrollTo(0, 520)")
+    page.wait_for_timeout(220)
+    page.evaluate("window.dashboardSpatialRuntime.refreshMiniMaps('builder')")
+    page.wait_for_timeout(80)
+    viewport_y_after = float(minimap.locator(".workspace-minimap-viewport").get_attribute("y") or "0")
+    assert viewport_y_after > viewport_y_before
+
+    scroll_before_click = page.evaluate("window.scrollY")
+    svg_box = minimap.locator(".workspace-minimap-svg").bounding_box()
+    assert svg_box
+    page.mouse.click(svg_box["x"] + svg_box["width"] / 2, svg_box["y"] + svg_box["height"] - 12)
+    page.wait_for_function("(before) => window.scrollY > before + 80", arg=scroll_before_click)
+
+    minimap.locator(".workspace-minimap-collapse").click()
+    expect(minimap.locator(".workspace-minimap-surface")).to_be_hidden()
+    expect(minimap.locator(".workspace-minimap-toggle")).to_be_visible()
+    minimap.locator(".workspace-minimap-toggle").click()
+    expect(minimap.locator(".workspace-minimap-surface")).to_be_visible()
+
+    page.locator(".panel-add-button").click()
+    expect(page.locator(".panel-add-menu")).to_have_class(re.compile("open"))
     assert_clean_browser(page)
 
 
@@ -6526,8 +8324,7 @@ def test_panel_expand_collapse_does_not_shift_dashboard_when_scrollbar_changes(p
 
 def test_ordered_drag_reflows_widgets_without_overlap(page: Page, app_server: str) -> None:
     goto(page, app_server)
-    before = visual_grid_items(page, ".widget-layout > .stat-card.widget-card:not(.range-bar)")
-    moved_before = next(item for item in before if item["text"] == "0 Widget 3")
+    moved_before = grid_item_state(page, '[data-widget-key="widget-3"]')
     assert moved_before["col"] >= 5
 
     dragged = page.locator('[data-widget-key="widget-3"]')
@@ -6537,8 +8334,7 @@ def test_ordered_drag_reflows_widgets_without_overlap(page: Page, app_server: st
     end_drag(page, x, y, -390, 10)
     page.wait_for_timeout(350)
 
-    after = visual_grid_items(page, ".widget-layout > .stat-card.widget-card:not(.range-bar)")
-    moved = next(item for item in after if item["text"] == "0 Widget 3")
+    moved = grid_item_state(page, '[data-widget-key="widget-3"]')
     assert moved["col"] < moved_before["col"]
     assert no_visible_overlaps(page, ".widget-layout > .widget-card") == []
     assert grid_alignment_error(page, ".widget-layout > .stat-card.widget-card:not(.range-bar):nth-of-type(3)") <= 3

@@ -44,6 +44,9 @@ The upcoming work is intentionally staged around stabilization first, then large
 - Smart object insertion now treats the top/default workspace area as a first-class visible divider region, keeps repeated adds deterministic, and places new objects in the region the user is actually viewing.
 - Newly added widget cards remain in-app workspace objects when clicked, so link-backed placeholder content no longer reloads away unsaved additions.
 - Top-edge drag auto-scroll now brakes smoothly near the fixed navbar and workspace top while preserving the existing bottom-edge runway behavior.
+- Engineer Mode now includes an optional right-side mini-map overlay rendered from committed workspace geometry, and Region Summary is available as a normal spatial-awareness widget.
+- Image, Video, and PDF / Document are now registry-backed rich content widgets with safe URL/reference previews, captions, resize-aware containment, save/load persistence, and normal workspace/panel behavior.
+- Activity Feed, AI Assistant placeholder, and Engineer-gated Context Inspector widgets are now registry-backed workspace meta widgets that consume resolved workspace/context state without dashboard-renderer special cases.
 
 ### Near-Term Stabilization
 
