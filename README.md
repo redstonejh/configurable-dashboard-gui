@@ -49,7 +49,7 @@ The upcoming work is intentionally staged around stabilization first, then large
 - Activity Feed, AI Assistant placeholder, and Engineer-gated Context Inspector widgets are now registry-backed workspace meta widgets that consume resolved workspace/context state without dashboard-renderer special cases.
 - Workspace infrastructure now includes centralized query lifecycle/caching, schema-driven widget settings, asset references for rich media, adaptive density tiers, a structured workspace event bus, and centralized Engineer Mode diagnostics for context, layout, ownership, cache, event, and LOD visibility.
 - Viewport-aware pseudo-LOD is now centralized around shared visual tiers and overscan rules, with focused/selected/dragged/resized objects promoted to full fidelity, anchor rail objects classified separately, and far-offscreen hover/material effects reduced without changing layout correctness.
-- Engineer Mode now exposes a persisted relationship graph with subtle spatial links for context, filter, query, containment, semantic, operator, and conditional-style relationships. Foundational AND/OR/NOT logical operator nodes and StyleRule nodes are hidden from normal mode, while normal widgets still apply the computed visual results.
+- Engineer Mode now exposes a persisted relationship graph with subtle spatial links for Context Links, filters, queries, containment, semantic relationships, operators, and conditional styling. Context Links let dividers, panels, widgets, and contexts share or override semantic context across non-adjacent workspace regions while remaining hidden in normal mode.
 
 ### Near-Term Stabilization
 

@@ -64,13 +64,15 @@ Events describe what happened; they are not canonical state and are not persiste
 
 ## Relationship Graph And Logical Operators
 
-Workspace computational relationships live in a persisted sidecar graph exposed through `window.dashboardRelationshipRuntime`. The graph stores `relationships`, `operators`, and `styleRules` by stable object ids rather than DOM nodes. Relationships support `context`, `filter`, `query`, `containment`, `operator`, and `semantic` types; logical operators currently support `AND`, `OR`, and `NOT` nodes with normalized input/output ids.
+Workspace computational relationships live in a persisted sidecar graph exposed through `window.dashboardRelationshipRuntime`. The graph stores `relationships`, `contextLinks`, `operators`, and `styleRules` by stable object ids rather than DOM nodes. Relationships support `context`, `filter`, `query`, `containment`, `operator`, and `semantic` types; logical operators currently support `AND`, `OR`, and `NOT` nodes with normalized input/output ids.
+
+Context Links are semantic graph edges with `{ id, sourceObjectId, targetObjectId, mode }`, where `mode` is `inherit`, `share`, `override`, or `reference`. They let a divider, panel, widget, context record, or future logic node resolve context from a non-adjacent source while physical region ownership remains unchanged. Dividers still define visual/organizational regions; a linked divider region can resolve its semantic context from another divider/context source without copying that context into the divider or its child objects. Circular links are rejected or short-circuited during resolution.
 
 Style rules evaluate logic expressions against widget query results, resolved context, widget config, and constants, then apply temporary visual effects such as accent color, text color, background tint, rim state, icon state, or future visibility state. Style rules are persisted and undoable, but their computed CSS variables/classes are ephemeral render state and must not be copied into widget config or layout geometry.
 
-The graph is state, not layout. It is included in save/load snapshots and undo/redo checkpoints, but it does not participate in dashboard grid collision, panel internal grid collision, anchor rail positioning, or object placement. Runtime-derived Engineer links may be calculated from committed context inheritance, panel containment, filter propagation, operator chains, and style-rule data/effect flow, but those derived links are not saved as separate layout objects.
+The graph is state, not layout. It is included in save/load snapshots and undo/redo checkpoints, but it does not participate in dashboard grid collision, panel internal grid collision, anchor rail positioning, or object placement. Runtime-derived Engineer links may be calculated from committed context inheritance, explicit Context Links, panel containment, filter propagation, operator chains, and style-rule data/effect flow, but those derived links are not saved as separate layout objects.
 
-Relationship links, operator tools, and style-rule nodes are hidden in normal mode. Engineer Mode reveals a low-opacity relationship overlay and a compact logical-operator toolbox; normal widgets may still consume the resulting logic internally when the layer is hidden. The overlay is rendered from committed layout state, uses `pointer-events: none` for links, and must remain visually subtle rather than becoming a node-editor surface.
+Relationship links, Context Link labels/tools, operator tools, and style-rule nodes are hidden in normal mode. Engineer Mode reveals a low-opacity relationship overlay and a compact logical-operator toolbox; normal widgets may still consume the resulting logic internally when the layer is hidden. The overlay is rendered from committed layout state, uses `pointer-events: none` for links, and must remain visually subtle rather than becoming a node-editor surface.
 
 ## Engineer Mode Infrastructure
 
@@ -88,6 +90,8 @@ Divider -> derived context region -> resolved object context -> widget query
 ```
 
 Workspace context entities are stored separately from widgets and dividers. Dividers own region ids, regions are derived from current committed divider positions, and objects resolve inherited context dynamically from their committed spatial membership.
+
+Context resolution first follows the physical divider region chain, then applies any semantic Context Links targeting the active divider, panel, widget, or context source. Linked context is resolved by object/context id at query time, so moving dividers or widgets does not require copying context values or updating cached coordinates. Removing a link restores normal nearest-divider inheritance.
 
 The context engine exposes these stable helpers on `window.dashboardContextEngine`:
 
@@ -122,6 +126,7 @@ The top-level layout state owns:
 - `contexts`;
 - `dataSources`;
 - `relationships`;
+- `contextLinks`;
 - `operators`;
 - `styleRules`;
 - optional `assets`.

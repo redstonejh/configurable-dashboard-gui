@@ -1546,6 +1546,41 @@ document.addEventListener("DOMContentLoaded", () => {
     if (existing && (layoutKey === "default" || !existing.startsWith("default:region:"))) return existing;
     return `${layoutKey}:region:${key}`;
   };
+  const CONTEXT_LINK_MODES = Object.freeze({
+    inherit: "inherit",
+    share: "share",
+    override: "override",
+    reference: "reference",
+  });
+  const contextLinkId = () => `context-link-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const normalizeContextLinkMode = (mode) => (
+    Object.values(CONTEXT_LINK_MODES).includes(mode) ? mode : CONTEXT_LINK_MODES.inherit
+  );
+  const normalizeContextLink = (link = {}) => ({
+    id: String(link.id || contextLinkId()),
+    sourceObjectId: String(link.sourceObjectId || link.sourceId || ""),
+    targetObjectId: String(link.targetObjectId || link.targetId || ""),
+    mode: normalizeContextLinkMode(link.mode),
+    label: String(link.label || ""),
+    enabled: link.enabled !== false,
+    metadata: link.metadata && typeof link.metadata === "object" ? { ...link.metadata } : {},
+  });
+  const loadWorkspaceContextLinks = (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+    const graph = readJsonStore(workspaceLogicGraphKey(layoutKey, profile), { contextLinks: [] });
+    return Array.isArray(graph.contextLinks)
+      ? graph.contextLinks.map(normalizeContextLink).filter((link) => link.id && link.sourceObjectId && link.targetObjectId)
+      : [];
+  };
+  const contextElementById = (id, layoutKey = "builder") => {
+    const key = String(id || "");
+    if (!key) return null;
+    const escaped = CSS.escape(key);
+    return document.querySelector(`.widget-layout[data-widget-layout-key="${CSS.escape(layoutKey)}"] .widget-card[data-widget-key="${escaped}"]`) ||
+      document.querySelector(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"] .db-panel[data-panel-key="${escaped}"]`) ||
+      document.querySelector(`.workspace-anchor-layer[data-anchor-layout-key="${CSS.escape(layoutKey)}"] .workspace-anchor-object[data-anchor-key="${escaped}"]`) ||
+      document.querySelector(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"] .db-panel[data-context-scope-id="${escaped}"], .panel-layout[data-layout-key="${CSS.escape(layoutKey)}"] .db-panel[data-workspace-region-id="${escaped}"]`) ||
+      null;
+  };
   const ensureWorkspaceObjectMetadata = (item, metadata = {}) => {
     if (!item) return;
     const inferredType = metadata.workspaceObjectType || metadata.objectType || workspaceObjectType(item);
@@ -1897,6 +1932,53 @@ document.addEventListener("DOMContentLoaded", () => {
     const layout = groupItemLayout(item) || item?.closest?.(".widget-layout, .panel-layout");
     return gridItemLayoutKey(layout || document.querySelector(".panel-layout") || document.querySelector(".widget-layout"));
   };
+  const dividerForRegionId = (regionId, layoutKey = "builder") => {
+    if (!regionId || regionId === workspaceRootRegionId(layoutKey)) return null;
+    return [...document.querySelectorAll(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"] > .db-panel:not([hidden])`)]
+      .find((panel) => workspaceObjectType(panel) === WORKSPACE_OBJECT_TYPES.divider &&
+        (workspaceRegionIdForDivider(panel, layoutKey) === regionId || panel.dataset.contextScopeId === regionId || panel.dataset.workspaceRegionId === regionId)) || null;
+  };
+  const contextLinksForTarget = (layoutKey, profile, targetId) =>
+    loadWorkspaceContextLinks(layoutKey, profile).filter((link) => link.enabled !== false && link.targetObjectId === targetId);
+  const mergeLinkedContext = (baseContext = {}, linkedContext = {}, mode = CONTEXT_LINK_MODES.inherit) => {
+    if (!linkedContext || !Object.keys(linkedContext).length || mode === CONTEXT_LINK_MODES.reference) return baseContext || {};
+    if (mode === CONTEXT_LINK_MODES.override) return mergeWorkspaceContexts(baseContext, linkedContext);
+    return mergeWorkspaceContexts(linkedContext, baseContext);
+  };
+  const baseContextForSourceObject = (sourceId, layoutKey, profile, stack = new Set()) => {
+    const id = String(sourceId || "");
+    if (!id || stack.has(id)) return null;
+    const directContext = contextById(layoutKey, profile, id);
+    if (directContext) return directContext;
+    const source = contextElementById(id, layoutKey);
+    if (!source) return null;
+    const nextStack = new Set(stack);
+    nextStack.add(id);
+    if (workspaceObjectType(source) === WORKSPACE_OBJECT_TYPES.divider) {
+      const regionId = workspaceRegionIdForDivider(source, layoutKey);
+      return resolveWorkspaceRegionContext(layoutKey, profile, regionId, nextStack);
+    }
+    return resolveWorkspaceContextForItem(source, { layoutKey, profile, contextLinkStack: nextStack });
+  };
+  const linkedContextForTarget = (targetId, layoutKey, profile, baseContext = {}, stack = new Set()) => {
+    const links = contextLinksForTarget(layoutKey, profile, targetId);
+    if (!links.length || stack.has(targetId)) return baseContext || {};
+    const nextStack = new Set(stack);
+    nextStack.add(targetId);
+    return links.reduce((context, link) => {
+      const sourceContext = baseContextForSourceObject(link.sourceObjectId, layoutKey, profile, nextStack);
+      return mergeLinkedContext(context, sourceContext, link.mode);
+    }, baseContext || {});
+  };
+  const resolveWorkspaceRegionContext = (layoutKey, profile, regionId, stack = new Set()) => {
+    const rootContext = contextById(layoutKey, profile, workspaceRootRegionId(layoutKey));
+    const regionContext = contextById(layoutKey, profile, regionId);
+    const divider = dividerForRegionId(regionId, layoutKey);
+    const targetId = divider ? workspaceObjectKey(divider) : regionId;
+    if (!targetId) return mergeWorkspaceContexts(rootContext, regionContext);
+    const linkedRegionContext = linkedContextForTarget(targetId, layoutKey, profile, regionContext || {}, stack);
+    return mergeWorkspaceContexts(rootContext, linkedRegionContext);
+  };
   const regionIdForWorkspaceItem = (item) => {
     const internalPanel = panelForInternalWidgetLayout(item?.closest?.(".panel-internal-widget-grid"));
     if (internalPanel) return internalPanel.dataset.workspaceRegionId || internalPanel.dataset.contextInheritedFrom;
@@ -1906,13 +1988,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const layoutKey = options.layoutKey || activeLayoutKeyForItem(item);
     const profile = options.profile || getActivePanelProfile(layoutKey);
     const regionId = regionIdForWorkspaceItem(item);
-    const rootContext = contextById(layoutKey, profile, workspaceRootRegionId(layoutKey));
-    const regionContext = contextById(layoutKey, profile, regionId);
+    const objectId = workspaceObjectKey(item);
     const localContext = workspaceContextFromElement(item);
-    const inheritedContext = mergeWorkspaceContexts(rootContext, regionContext);
+    const inheritedContext = resolveWorkspaceRegionContext(layoutKey, profile, regionId, options.contextLinkStack || new Set());
+    const objectLinkedContext = objectId
+      ? linkedContextForTarget(objectId, layoutKey, profile, {}, options.contextLinkStack || new Set())
+      : {};
     const timeRangeContext = timeRangeContextForRegion(layoutKey, regionId, inheritedContext);
-    const filterContext = filterContextForRegion(layoutKey, regionId, mergeWorkspaceContexts(inheritedContext, timeRangeContext));
-    const resolved = mergeWorkspaceContexts(inheritedContext, timeRangeContext, filterContext, localContext);
+    const filterContext = filterContextForRegion(layoutKey, regionId, mergeWorkspaceContexts(inheritedContext, objectLinkedContext, timeRangeContext));
+    const resolved = mergeWorkspaceContexts(inheritedContext, objectLinkedContext, timeRangeContext, filterContext, localContext);
     const dataSource = resolved.dataSourceId ? dataSourceById(layoutKey, profile, resolved.dataSourceId) : null;
     const adapter = dataSource ? dataSourceAdapters.get(dataSource.kind) : null;
     return {
@@ -2503,9 +2587,12 @@ document.addEventListener("DOMContentLoaded", () => {
     styleRules: Array.isArray(graph.styleRules)
       ? graph.styleRules.map(normalizeStyleRule).filter((rule) => rule.id && rule.targetObjectId && rule.effects.length)
       : [],
+    contextLinks: Array.isArray(graph.contextLinks)
+      ? graph.contextLinks.map(normalizeContextLink).filter((link) => link.id && link.sourceObjectId && link.targetObjectId)
+      : [],
   });
   const loadWorkspaceLogicGraph = (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) =>
-    normalizeWorkspaceLogicGraph(readJsonStore(workspaceLogicGraphKey(layoutKey, profile), { version: 1, relationships: [], operators: [], styleRules: [] }));
+    normalizeWorkspaceLogicGraph(readJsonStore(workspaceLogicGraphKey(layoutKey, profile), { version: 1, relationships: [], operators: [], styleRules: [], contextLinks: [] }));
   const saveWorkspaceLogicGraph = (layoutKey = "builder", graph = {}, profile = getActivePanelProfile(layoutKey), options = {}) => {
     const normalized = normalizeWorkspaceLogicGraph(graph);
     writeJsonStore(workspaceLogicGraphKey(layoutKey, profile), normalized);
@@ -2521,6 +2608,7 @@ document.addEventListener("DOMContentLoaded", () => {
           relationshipCount: normalized.relationships.length,
           operatorCount: normalized.operators.length,
           styleRuleCount: normalized.styleRules.length,
+          contextLinkCount: normalized.contextLinks.length,
         },
       });
     }
@@ -2556,6 +2644,18 @@ document.addEventListener("DOMContentLoaded", () => {
   const deriveWorkspaceRelationships = (layoutKey = "builder", graph = loadWorkspaceLogicGraph(layoutKey)) => {
     const relationships = [];
     (graph.relationships || []).forEach((relationship) => addUniqueRelationship(relationships, relationship));
+
+    graph.contextLinks.forEach((link) => {
+      addUniqueRelationship(relationships, {
+        id: `context-link-${link.id}`,
+        sourceId: link.sourceObjectId,
+        targetId: link.targetObjectId,
+        type: WORKSPACE_RELATIONSHIP_TYPES.context,
+        visualState: "active",
+        label: link.mode,
+        metadata: { mode: link.mode, contextLinkId: link.id },
+      });
+    });
 
     const items = allCommittedWorkspaceGridItems(layoutKey);
     items.forEach((item) => {
@@ -2722,9 +2822,20 @@ document.addEventListener("DOMContentLoaded", () => {
         class: "workspace-relationship-path",
         "data-relationship-type": relationship.type,
         "data-relationship-state": relationship.visualState || "ambient",
+        "data-relationship-label": relationship.label || "",
         d: `M ${source.x.toFixed(1)} ${source.y.toFixed(1)} C ${c1x.toFixed(1)} ${source.y.toFixed(1)}, ${c2x.toFixed(1)} ${target.y.toFixed(1)}, ${target.x.toFixed(1)} ${target.y.toFixed(1)}`,
       });
       svg.appendChild(path);
+      if (relationship.metadata?.contextLinkId) {
+        const label = document.createElement("div");
+        label.className = "workspace-context-link-label";
+        label.dataset.contextLinkId = relationship.metadata.contextLinkId;
+        label.dataset.contextLinkMode = relationship.metadata.mode || relationship.label || "";
+        label.style.left = `${Math.round((source.x + target.x) / 2)}px`;
+        label.style.top = `${Math.round((source.y + target.y) / 2)}px`;
+        label.textContent = relationship.metadata.mode || relationship.label || "context";
+        layer.appendChild(label);
+      }
     });
     layer.appendChild(svg);
 
@@ -7560,9 +7671,19 @@ document.addEventListener("DOMContentLoaded", () => {
     const roots = selectedClipboardRoots();
     if (!roots.length) return false;
     const layoutKey = groupItemLayoutKey(roots[0]);
+    const selectedIds = new Set(roots.flatMap((item) => {
+      const ids = [workspaceObjectKey(item)].filter(Boolean);
+      item.querySelectorAll?.("[data-widget-key], [data-panel-key], [data-anchor-key]").forEach((node) => {
+        const id = workspaceObjectKey(node);
+        if (id) ids.push(id);
+      });
+      return ids;
+    }));
+    const graph = loadWorkspaceLogicGraph(layoutKey, getActivePanelProfile(layoutKey));
     workspaceObjectClipboard = {
       layoutKey,
       copiedAt: Date.now(),
+      contextLinks: graph.contextLinks.filter((link) => selectedIds.has(link.sourceObjectId) && selectedIds.has(link.targetObjectId)),
       items: visualGridOrder(roots).map((item) => ({
         kind: workspaceDeleteKind(item),
         layoutKey: groupItemLayoutKey(item),
@@ -7656,6 +7777,28 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   };
 
+  const pasteClipboardContextLinks = (layoutKey, profile, clipboard, idMap) => {
+    const links = Array.isArray(clipboard?.contextLinks) ? clipboard.contextLinks : [];
+    if (!links.length) return;
+    const remapped = links.flatMap((link) => {
+      const sourceObjectId = idMap.get(link.sourceObjectId);
+      const targetObjectId = idMap.get(link.targetObjectId);
+      if (!sourceObjectId || !targetObjectId) return [];
+      return normalizeContextLink({
+        ...link,
+        id: contextLinkId(),
+        sourceObjectId,
+        targetObjectId,
+      });
+    });
+    if (!remapped.length) return;
+    const graph = loadWorkspaceLogicGraph(layoutKey, profile);
+    saveWorkspaceLogicGraph(layoutKey, {
+      ...graph,
+      contextLinks: [...graph.contextLinks, ...remapped],
+    }, profile, { history: false, event: false });
+  };
+
   const createGroupPasteFootprint = (boundsList) => {
     const minCol = Math.min(...boundsList.map((bounds) => bounds.col));
     const minRow = Math.min(...boundsList.map((bounds) => bounds.row));
@@ -7723,6 +7866,7 @@ document.addEventListener("DOMContentLoaded", () => {
         setGroupItemSelected(entry.element, true);
       });
       syncWorkspaceRegions(targetLayout);
+      pasteClipboardContextLinks(layoutKey, profile, clipboard, idMap);
     };
 
     const animationLayout = panelLayout || widgetLayout;
@@ -10972,6 +11116,7 @@ document.addEventListener("DOMContentLoaded", () => {
       relationships: logicGraph.relationships,
       operators: logicGraph.operators,
       styleRules: logicGraph.styleRules,
+      contextLinks: logicGraph.contextLinks,
       assets: loadAssets(layoutKey, profile),
       assetReferences: widgets.flatMap(assetReferencesFromWidget),
     };
@@ -11080,6 +11225,24 @@ document.addEventListener("DOMContentLoaded", () => {
         addDiagnostic("warning", "missing-relationship-target", `Relationship target "${relationship.targetId}" is not present in persisted objects.`, relationship.id, "relationship");
       }
     });
+    (snapshot.contextLinks || []).forEach((link) => {
+      addId("context-link", link.id);
+      if (!link.sourceObjectId || !link.targetObjectId) {
+        addDiagnostic("error", "context-link-missing-endpoint", "Context link must include both sourceObjectId and targetObjectId.", link.id, "context-link");
+      }
+      if (link.sourceObjectId === link.targetObjectId) {
+        addDiagnostic("error", "context-link-self-cycle", "Context link source and target must be different objects.", link.id, "context-link");
+      }
+      if (link.mode && !Object.values(CONTEXT_LINK_MODES).includes(link.mode)) {
+        addDiagnostic("error", "invalid-context-link-mode", `Unsupported context link mode "${link.mode}".`, link.id, "context-link");
+      }
+      if (link.sourceObjectId && !relationshipEndpointIds.has(link.sourceObjectId)) {
+        addDiagnostic("warning", "missing-context-link-source", `Context link source "${link.sourceObjectId}" is not present in persisted objects.`, link.id, "context-link");
+      }
+      if (link.targetObjectId && !relationshipEndpointIds.has(link.targetObjectId)) {
+        addDiagnostic("warning", "missing-context-link-target", `Context link target "${link.targetObjectId}" is not present in persisted objects.`, link.id, "context-link");
+      }
+    });
     const styleRuleProperties = new Set(Object.values(STYLE_RULE_EFFECT_PROPERTIES));
     (snapshot.styleRules || []).forEach((rule) => {
       addId("style-rule", rule.id);
@@ -11163,6 +11326,58 @@ document.addEventListener("DOMContentLoaded", () => {
     relationships: (layoutKey = "builder", options = {}) => {
       const graph = loadWorkspaceLogicGraph(layoutKey, options.profile || getActivePanelProfile(layoutKey));
       return options.derived === false ? graph.relationships : deriveWorkspaceRelationships(layoutKey, graph);
+    },
+    contextLinkModes: () => ({ ...CONTEXT_LINK_MODES }),
+    contextLinks: (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) =>
+      loadWorkspaceLogicGraph(layoutKey, profile).contextLinks,
+    addContextLink: (layoutKey = "builder", link = {}, profile = getActivePanelProfile(layoutKey), options = {}) => {
+      if (!logicEditAllowed(options)) return null;
+      const graph = loadWorkspaceLogicGraph(layoutKey, profile);
+      const next = normalizeContextLink(link);
+      if (!next.sourceObjectId || !next.targetObjectId || next.sourceObjectId === next.targetObjectId) return null;
+      const candidateLinks = graph.contextLinks.filter((entry) => entry.id !== next.id);
+      const cycleCheck = [...candidateLinks, next];
+      const reachesSource = (currentId, targetId, visited = new Set()) => {
+        if (currentId === targetId) return true;
+        if (visited.has(currentId)) return false;
+        visited.add(currentId);
+        return cycleCheck
+          .filter((entry) => entry.targetObjectId === currentId && entry.enabled !== false)
+          .some((entry) => reachesSource(entry.sourceObjectId, targetId, visited));
+      };
+      if (reachesSource(next.sourceObjectId, next.targetObjectId)) return null;
+      const contextLinks = candidateLinks.filter((entry) => !(entry.sourceObjectId === next.sourceObjectId && entry.targetObjectId === next.targetObjectId && entry.mode === next.mode));
+      contextLinks.push(next);
+      saveWorkspaceLogicGraph(layoutKey, { ...graph, contextLinks }, profile, options);
+      return next;
+    },
+    updateContextLink: (layoutKey = "builder", linkId = "", patch = {}, profile = getActivePanelProfile(layoutKey), options = {}) => {
+      if (!logicEditAllowed(options)) return null;
+      const graph = loadWorkspaceLogicGraph(layoutKey, profile);
+      const contextLinks = graph.contextLinks.map((link) => link.id === linkId
+        ? normalizeContextLink({ ...link, ...patch, id: link.id })
+        : link);
+      const updated = contextLinks.find((link) => link.id === linkId) || null;
+      if (!updated || updated.sourceObjectId === updated.targetObjectId) return null;
+      const reachesSource = (currentId, targetId, visited = new Set()) => {
+        if (currentId === targetId) return true;
+        if (visited.has(currentId)) return false;
+        visited.add(currentId);
+        return contextLinks
+          .filter((entry) => entry.id !== updated.id && entry.targetObjectId === currentId && entry.enabled !== false)
+          .some((entry) => reachesSource(entry.sourceObjectId, targetId, visited));
+      };
+      if (reachesSource(updated.sourceObjectId, updated.targetObjectId)) return null;
+      saveWorkspaceLogicGraph(layoutKey, { ...graph, contextLinks }, profile, options);
+      return updated;
+    },
+    removeContextLink: (layoutKey = "builder", linkId = "", profile = getActivePanelProfile(layoutKey), options = {}) => {
+      if (!logicEditAllowed(options)) return false;
+      const graph = loadWorkspaceLogicGraph(layoutKey, profile);
+      const contextLinks = graph.contextLinks.filter((link) => link.id !== linkId);
+      if (contextLinks.length === graph.contextLinks.length) return false;
+      saveWorkspaceLogicGraph(layoutKey, { ...graph, contextLinks }, profile, options);
+      return true;
     },
     addRelationship: (layoutKey = "builder", relationship = {}, profile = getActivePanelProfile(layoutKey), options = {}) => {
       if (!logicEditAllowed(options)) return null;
@@ -11744,6 +11959,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const currentDataSources = loadDataSources(layoutKey, currentProfile);
       const currentWorkspaceContexts = loadWorkspaceContexts(layoutKey, currentProfile);
       const currentAssets = loadAssets(layoutKey, currentProfile);
+      const currentLogicGraph = loadWorkspaceLogicGraph(layoutKey, currentProfile);
       try {
         localStorage.setItem(`${panelProfilePrefix}${layoutKey}`, selected);
         layoutStorageKeys(layoutKey, selected).forEach((key) => localStorage.removeItem(key));
@@ -11751,6 +11967,7 @@ document.addEventListener("DOMContentLoaded", () => {
       saveDataSources(layoutKey, selected, currentDataSources);
       saveWorkspaceContexts(layoutKey, selected, currentWorkspaceContexts);
       saveAssets(layoutKey, selected, currentAssets);
+      saveWorkspaceLogicGraph(layoutKey, currentLogicGraph, selected, { history: false, event: false });
       const layout = document.querySelector(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"]`);
       if (layout) savePanelLayouts(layout, selected, { persist: true });
       const widgetLayout = document.querySelector(`.widget-layout[data-widget-layout-key="${CSS.escape(layoutKey)}"]`);

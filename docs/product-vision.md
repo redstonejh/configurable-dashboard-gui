@@ -54,6 +54,7 @@ Engineer Mode is an advanced visual wiring mode.
 - Links are drawn with subtle theme-aware lines.
 - Selected links can be deleted.
 - Context propagation stays active after Engineer Mode is turned off.
+- Context Links can share, inherit, override, or reference semantic context across non-adjacent dividers, widgets, panels, and context records while preserving the physical divider layout as the visual organization layer.
 - Experimental computational logic may be inspectable here over time, including hidden StyleRule, event, signal, or simulation wiring that remains invisible in Normal Mode.
 
 Engineer Mode should feel native to the dashboard, not like a separate node editor bolted on top.

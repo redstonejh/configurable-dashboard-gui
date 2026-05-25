@@ -5225,6 +5225,225 @@ def test_source_agnostic_context_inheritance_uses_adapters_and_semantic_mappings
     assert_clean_browser(page)
 
 
+def test_context_links_share_divider_contexts_through_engineer_graph(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".panel-add-button").click()
+    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    page.locator(".panel-add-button").click()
+    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    expect(page.locator(".panel-layout > .workspace-divider")).to_have_count(2)
+
+    setup = page.evaluate(
+        """
+        () => {
+          const place = (node, col, row, span = 1) => {
+            node.hidden = false;
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = "1";
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span 1`;
+          };
+          const [dividerA, dividerB] = [...document.querySelectorAll(".panel-layout > .workspace-divider")];
+          const widget = document.querySelector('[data-widget-key="widget-1"]');
+          place(dividerA, 1, 3, 6);
+          place(dividerB, 1, 9, 6);
+          place(widget, 1, 11, 1);
+          const engine = window.dashboardContextEngine;
+          engine.refresh("builder");
+          const regionA = dividerA.dataset.contextScopeId;
+          const regionB = dividerB.dataset.contextScopeId;
+          engine.setDataSources("builder", [
+            { id: "sales-source", name: "Sales Source", kind: "manual", config: { rows: [{ revenue: 100, label: "Sales" }] } },
+            { id: "support-source", name: "Support Source", kind: "manual", config: { rows: [{ tickets: 7, label: "Support" }] } }
+          ]);
+          engine.setWorkspaceContexts("builder", [
+            {
+              id: regionA,
+              name: "Sales Region",
+              dataSourceId: "sales-source",
+              semanticMapping: { valueField: "revenue", labelField: "label" },
+              tags: ["sales"]
+            },
+            {
+              id: regionB,
+              name: "Support Region",
+              dataSourceId: "support-source",
+              semanticMapping: { valueField: "tickets", labelField: "label" },
+              tags: ["support"]
+            }
+          ]);
+          engine.refresh("builder");
+          return {
+            dividerA: dividerA.dataset.panelKey,
+            dividerB: dividerB.dataset.panelKey,
+            regionA,
+            regionB,
+            before: engine.resolveContextForElement(widget),
+          };
+        }
+        """
+    )
+    assert setup["before"]["dataSourceId"] == "support-source"
+    assert setup["before"]["semanticMapping"]["valueField"] == "tickets"
+
+    normal_attempt = page.evaluate(
+        """
+        ({ dividerA, dividerB }) => window.dashboardRelationshipRuntime.addContextLink("builder", {
+          id: "normal-context-link",
+          sourceObjectId: dividerA,
+          targetObjectId: dividerB,
+          mode: "override"
+        })
+        """,
+        setup,
+    )
+    assert normal_attempt is None
+
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
+    linked = page.evaluate(
+        """
+        ({ dividerA, dividerB }) => {
+          const runtime = window.dashboardRelationshipRuntime;
+          const link = runtime.addContextLink("builder", {
+            id: "sales-to-support-section",
+            sourceObjectId: dividerA,
+            targetObjectId: dividerB,
+            mode: "override",
+            label: "Share Sales context"
+          });
+          const circular = runtime.addContextLink("builder", {
+            id: "circular-context-link",
+            sourceObjectId: dividerB,
+            targetObjectId: dividerA,
+            mode: "override"
+          });
+          window.dashboardContextEngine.refresh("builder");
+          return {
+            link,
+            circular,
+            resolved: window.dashboardContextEngine.resolveContextForElement('[data-widget-key="widget-1"]'),
+            snapshot: window.dashboardPersistenceRuntime.snapshot("builder", "1"),
+          };
+        }
+        """,
+        setup,
+    )
+    assert linked["link"]["id"] == "sales-to-support-section"
+    assert linked["circular"] is None
+    assert linked["resolved"]["dataSourceId"] == "sales-source"
+    assert linked["resolved"]["semanticMapping"]["valueField"] == "revenue"
+    assert linked["snapshot"]["contextLinks"][0]["id"] == "sales-to-support-section"
+
+    page.wait_for_function(
+        """
+        () => document.querySelector('.workspace-relationship-path[data-relationship-type="context"][data-relationship-state="active"]')
+        """
+    )
+    engineer_links = page.evaluate(
+        """
+        () => ({
+          contextLinks: window.dashboardRelationshipRuntime.contextLinks("builder").length,
+          visiblePaths: document.querySelectorAll(".workspace-relationship-path").length,
+          linkLabel: document.querySelector(".workspace-context-link-label")?.textContent?.trim() || "",
+          validationOk: window.dashboardPersistenceRuntime.validate("builder", "1").ok,
+        })
+        """
+    )
+    assert engineer_links["contextLinks"] == 1
+    assert engineer_links["visiblePaths"] > 0
+    assert engineer_links["linkLabel"] == "override"
+    assert engineer_links["validationOk"] is True
+
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "false")
+    page.wait_for_function("() => document.querySelector('.workspace-engineer-overlay-layer')?.hidden === true")
+    normal_hidden = page.evaluate(
+        """
+        () => ({
+          resolved: window.dashboardContextEngine.resolveContextForElement('[data-widget-key="widget-1"]').dataSourceId,
+          paths: document.querySelectorAll(".workspace-relationship-path").length,
+          labels: document.querySelectorAll(".workspace-context-link-label").length,
+        })
+        """
+    )
+    assert normal_hidden == {"resolved": "sales-source", "paths": 0, "labels": 0}
+
+    press_dashboard_undo(page)
+    undone = page.evaluate(
+        """
+        () => ({
+          contextLinks: window.dashboardRelationshipRuntime.contextLinks("builder").length,
+          resolved: window.dashboardContextEngine.resolveContextForElement('[data-widget-key="widget-1"]').dataSourceId,
+        })
+        """
+    )
+    assert undone == {"contextLinks": 0, "resolved": "support-source"}
+
+    press_dashboard_redo(page)
+    redone = page.evaluate(
+        """
+        () => ({
+          contextLinks: window.dashboardRelationshipRuntime.contextLinks("builder").length,
+          resolved: window.dashboardContextEngine.resolveContextForElement('[data-widget-key="widget-1"]').dataSourceId,
+        })
+        """
+    )
+    assert redone == {"contextLinks": 1, "resolved": "sales-source"}
+
+    moved_context = page.evaluate(
+        """
+        () => {
+          const dividerB = document.querySelectorAll(".panel-layout > .workspace-divider")[1];
+          dividerB.dataset.gridRow = "14";
+          dividerB.style.gridRow = "14 / span 1";
+          const widget = document.querySelector('[data-widget-key="widget-1"]');
+          widget.dataset.gridRow = "16";
+          widget.style.gridRow = "16 / span 1";
+          window.dashboardContextEngine.refresh("builder");
+          return window.dashboardContextEngine.resolveContextForElement(widget).dataSourceId;
+        }
+        """
+    )
+    assert moved_context == "sales-source"
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    reloaded = page.evaluate(
+        """
+        () => {
+          window.dashboardContextEngine.refresh("builder");
+          return {
+            links: window.dashboardRelationshipRuntime.contextLinks("builder"),
+            resolved: window.dashboardContextEngine.resolveContextForElement('[data-widget-key="widget-1"]').dataSourceId,
+          };
+        }
+        """
+    )
+    assert reloaded["links"][0]["id"] == "sales-to-support-section"
+    assert reloaded["resolved"] == "sales-source"
+
+    page.locator(".engineer-mode-button").click()
+    page.evaluate("() => window.dashboardRelationshipRuntime.removeContextLink('builder', 'sales-to-support-section')")
+    removed = page.evaluate(
+        """
+        () => ({
+          links: window.dashboardRelationshipRuntime.contextLinks("builder").length,
+          resolved: window.dashboardContextEngine.resolveContextForElement('[data-widget-key="widget-1"]').dataSourceId,
+        })
+        """
+    )
+    assert removed == {"links": 0, "resolved": "support-source"}
+    assert_clean_browser(page)
+
+
 def test_engineer_mode_infrastructure_centralizes_debug_overlays(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate("localStorage.clear()")
@@ -5365,7 +5584,7 @@ def test_engineer_mode_relationship_links_and_logic_graph_are_gated_and_persiste
         """
     )
     assert normal_state["attempted"] is None
-    assert normal_state["graph"] == {"version": 1, "relationships": [], "operators": [], "styleRules": []}
+    assert normal_state["graph"] == {"version": 1, "relationships": [], "operators": [], "styleRules": [], "contextLinks": []}
     assert normal_state["links"] == 0
     assert normal_state["toolbox"] == 0
 
@@ -5468,7 +5687,7 @@ def test_engineer_mode_relationship_links_and_logic_graph_are_gated_and_persiste
 
     press_dashboard_undo(page)
     undone = page.evaluate("() => window.dashboardRelationshipRuntime.getGraph('builder')")
-    assert undone == {"version": 1, "relationships": [], "operators": [], "styleRules": []}
+    assert undone == {"version": 1, "relationships": [], "operators": [], "styleRules": [], "contextLinks": []}
     press_dashboard_redo(page)
     redone = page.evaluate("() => window.dashboardRelationshipRuntime.getGraph('builder')")
     assert redone["relationships"][0]["id"] == "query-link-widget-1-widget-2"
@@ -12826,6 +13045,20 @@ def test_select_mode_copy_paste_duplicates_selected_workspace_group(page: Page, 
         """
     )
 
+    page.evaluate(
+        """
+        ({ sourceWidgetKey, sourcePanelKey }) => {
+          window.dashboardRelationshipRuntime.addContextLink("builder", {
+            id: "copy-source-context-link",
+            sourceObjectId: sourceWidgetKey,
+            targetObjectId: sourcePanelKey,
+            mode: "inherit"
+          }, "1", { force: true });
+        }
+        """,
+        setup,
+    )
+
     page.keyboard.press("Escape")
     select_button.click()
     expect(select_button).to_have_attribute("aria-pressed", "true")
@@ -12886,6 +13119,8 @@ def test_select_mode_copy_paste_duplicates_selected_workspace_group(page: Page, 
           const pastedPanel = selected.find((node) => node.classList.contains("db-panel"));
           const child = pastedPanel?.querySelector(".panel-internal-widget-grid > .widget-card");
           const blocker = document.querySelector('[data-widget-key="widget-2"]');
+          const pastedLink = window.dashboardRelationshipRuntime.contextLinks("builder")
+            .find((link) => link.sourceObjectId === pastedWidget?.dataset.widgetKey && link.targetObjectId === pastedPanel?.dataset.panelKey);
           return {
             sourceWidget: bounds(sourceWidget),
             sourcePanel: bounds(sourcePanel),
@@ -12894,6 +13129,11 @@ def test_select_mode_copy_paste_duplicates_selected_workspace_group(page: Page, 
             child: child ? {
               key: child.dataset.widgetKey,
               parentPanelKey: child.dataset.parentPanelKey,
+            } : null,
+            pastedContextLink: pastedLink ? {
+              sourceObjectId: pastedLink.sourceObjectId,
+              targetObjectId: pastedLink.targetObjectId,
+              mode: pastedLink.mode,
             } : null,
             blocker: bounds(blocker),
           };
@@ -12904,6 +13144,11 @@ def test_select_mode_copy_paste_duplicates_selected_workspace_group(page: Page, 
     assert pasted["pastedPanel"]["key"] != setup["sourcePanelKey"]
     assert pasted["child"]["key"] != setup["childKey"]
     assert pasted["child"]["parentPanelKey"] == pasted["pastedPanel"]["key"]
+    assert pasted["pastedContextLink"] == {
+        "sourceObjectId": pasted["pastedWidget"]["key"],
+        "targetObjectId": pasted["pastedPanel"]["key"],
+        "mode": "inherit",
+    }
     assert pasted["pastedWidget"]["row"] >= setup["targetRow"]
     assert pasted["blocker"] == {"key": "widget-2", "col": 1, "row": setup["targetRow"], "span": 2, "rowSpan": 1}
     assert pasted["sourcePanel"]["col"] - pasted["sourceWidget"]["col"] == pasted["pastedPanel"]["col"] - pasted["pastedWidget"]["col"]

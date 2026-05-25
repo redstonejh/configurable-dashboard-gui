@@ -330,6 +330,31 @@ body:not(.engineer-mode-active) .workspace-engineer-overlay-layer {
     inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 48%, transparent);
 }
 
+.workspace-context-link-label {
+  position: fixed;
+  z-index: 2;
+  translate: -50% -50%;
+  max-width: 112px;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, #60a5fa 38%, var(--line));
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--glass-surface-strong) 78%, transparent), color-mix(in srgb, var(--glass-surface) 48%, transparent)),
+    color-mix(in srgb, #0f172a 58%, transparent);
+  color: color-mix(in srgb, #eff6ff 92%, transparent);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, .14), inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 40%, transparent);
+  font-size: 9px;
+  font-weight: 780;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  backdrop-filter: blur(8px) saturate(1.04);
+  -webkit-backdrop-filter: blur(8px) saturate(1.04);
+}
+
 .workspace-logic-toolbox {
   position: fixed;
   right: 16px;
