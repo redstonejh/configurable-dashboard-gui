@@ -3703,7 +3703,6 @@ body {
 }
 
 .app-nav.workspace-chrome .layout-slot-button,
-.app-nav.workspace-chrome .panel-undo-button,
 .app-nav.workspace-chrome .panel-reset-button,
 .app-nav.workspace-chrome .workspace-mode-button {
   min-width: 58px;
@@ -3711,6 +3710,7 @@ body {
 }
 
 .app-nav.workspace-chrome .background-tone-trigger,
+.app-nav.workspace-chrome .composition-undo-button,
 .app-nav.workspace-chrome .composition-add-button {
   width: var(--navbar-control-height);
   min-width: var(--navbar-control-height);
@@ -3718,24 +3718,33 @@ body {
   border-radius: 999px;
 }
 
+.app-nav.workspace-chrome .composition-undo-button,
 .app-nav.workspace-chrome .composition-add-button {
-  border-color: color-mix(in srgb, var(--blue) 22%, var(--navbar-control-border));
+  --rocker-illumination: var(--blue);
+  border-color: color-mix(in srgb, var(--rocker-illumination) 22%, var(--navbar-control-border));
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--blue) 10%, var(--navbar-control-bg)), color-mix(in srgb, var(--blue) 6%, var(--navbar-control-bg)));
-  color: color-mix(in srgb, var(--blue) 70%, var(--ink-strong));
+    linear-gradient(180deg, color-mix(in srgb, var(--rocker-illumination) 10%, var(--navbar-control-bg)), color-mix(in srgb, var(--rocker-illumination) 6%, var(--navbar-control-bg)));
+  color: color-mix(in srgb, var(--rocker-illumination) 70%, var(--ink-strong));
   box-shadow:
     0 4px 10px rgba(15, 23, 42, .06),
-    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 62%, transparent);
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 62%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--rocker-illumination) 8%, transparent);
   font-size: 21px;
   font-weight: 560;
 }
 
+.app-nav.workspace-chrome .composition-undo-button {
+  --rocker-illumination: var(--red);
+}
+
+.app-nav.workspace-chrome .composition-undo-button::before,
 .app-nav.workspace-chrome .composition-add-button::before {
   content: none;
   display: none;
 }
 
-.app-nav.workspace-chrome .chrome-add-glyph {
+.app-nav.workspace-chrome .chrome-add-glyph,
+.app-nav.workspace-chrome .chrome-rocker-glyph {
   display: block;
   line-height: 1;
   transform: translateY(-1px);
@@ -3775,6 +3784,28 @@ body {
   transform: var(--pressable-focus-transform);
 }
 
+.app-nav.workspace-chrome .composition-undo-button:hover,
+.app-nav.workspace-chrome .composition-add-button:hover {
+  border-color: color-mix(in srgb, var(--rocker-illumination) 34%, color-mix(in srgb, #98a4b2 76%, rgba(255, 255, 255, .40)));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--rocker-illumination) 12%, var(--navbar-control-hover-bg)), color-mix(in srgb, var(--rocker-illumination) 9%, color-mix(in srgb, var(--navbar-control-hover-bg) 82%, #9ca3af)));
+  color: color-mix(in srgb, var(--rocker-illumination) 82%, var(--ink-strong));
+  box-shadow:
+    0 2px 6px rgba(15, 23, 42, .055),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 62%, transparent),
+    inset 0 2px 5px color-mix(in srgb, var(--rocker-illumination) 7%, rgba(15, 23, 42, .04)),
+    inset 0 -1px 0 color-mix(in srgb, var(--rocker-illumination) 13%, transparent);
+}
+
+.app-nav.workspace-chrome .composition-undo-button:focus-visible,
+.app-nav.workspace-chrome .composition-add-button:focus-visible {
+  border-color: color-mix(in srgb, var(--rocker-illumination) 36%, var(--line));
+  outline-color: color-mix(in srgb, var(--rocker-illumination) 24%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--rocker-illumination) 12%, var(--navbar-control-hover-bg)), color-mix(in srgb, var(--rocker-illumination) 8%, var(--navbar-control-hover-bg)));
+  color: color-mix(in srgb, var(--rocker-illumination) 82%, var(--ink-strong));
+}
+
 .app-nav.workspace-chrome button.dash-switch-hero:active,
 .app-nav.workspace-chrome .background-tone-trigger:active,
 .app-nav.workspace-chrome .panel-reset-button:active,
@@ -3793,6 +3824,19 @@ body {
     inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 54%, transparent),
     inset 0 2px 5px color-mix(in srgb, var(--blue) 10%, rgba(15, 23, 42, .08));
   transform: var(--pressable-active-transform);
+}
+
+.app-nav.workspace-chrome .composition-undo-button:active,
+.app-nav.workspace-chrome .composition-add-button:active {
+  border-color: color-mix(in srgb, var(--rocker-illumination) 40%, var(--line));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--rocker-illumination) 13%, var(--glass-surface-strong)), color-mix(in srgb, var(--rocker-illumination) 10%, var(--navbar-control-hover-bg)));
+  color: color-mix(in srgb, var(--rocker-illumination) 86%, var(--ink-strong));
+  box-shadow:
+    0 1px 4px color-mix(in srgb, var(--rocker-illumination) 8%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 50%, transparent),
+    inset 0 2px 6px color-mix(in srgb, var(--rocker-illumination) 13%, rgba(15, 23, 42, .10)),
+    inset 0 -1px 0 color-mix(in srgb, var(--rocker-illumination) 16%, transparent);
 }
 
 .app-nav.workspace-chrome .panel-add-menu,

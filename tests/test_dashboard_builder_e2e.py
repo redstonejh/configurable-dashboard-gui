@@ -4492,6 +4492,8 @@ def test_workspace_chrome_is_spatial_and_modes_still_work(page: Page, app_server
     expect(page.locator(".dash-switch-hero")).to_contain_text("user@example.com")
     expect(page.locator(".dash-switch-hero")).not_to_contain_text("Dashboard")
     expect(page.locator(".layout-command-island .layout-slot-controls")).to_be_visible()
+    expect(page.locator(".composition-command-island .composition-undo-button")).to_have_text("-")
+    expect(page.locator(".composition-command-island .composition-undo-button")).to_have_attribute("aria-label", "Undo last layout change")
     expect(page.locator(".composition-add-button")).to_have_attribute("aria-label", "Add dashboard object")
     expect(page.locator(".mode-command-island .engineer-mode-button")).to_be_visible()
     expect(page.locator(".appearance-command-island .background-tone-trigger")).to_be_visible()
@@ -4591,6 +4593,46 @@ def test_workspace_chrome_is_spatial_and_modes_still_work(page: Page, app_server
     assert add_styles["radius"] >= 20
     assert add_styles["shadow"] != "none"
     assert add_styles["backdrop"] != "none"
+
+    rocker_metrics = page.locator(".composition-command-island").evaluate(
+        """
+        node => {
+          const undo = node.querySelector(".composition-undo-button");
+          const add = node.querySelector(".composition-add-button");
+          const undoRect = undo.getBoundingClientRect();
+          const addRect = add.getBoundingClientRect();
+          const undoStyles = getComputedStyle(undo);
+          const addStyles = getComputedStyle(add);
+          return {
+            undoWidth: undoRect.width,
+            addWidth: addRect.width,
+            undoHeight: undoRect.height,
+            addHeight: addRect.height,
+            gap: addRect.left - undoRect.right,
+            topDelta: Math.abs(addRect.top - undoRect.top),
+            radiusDelta: Math.abs(parseFloat(addStyles.borderTopLeftRadius) - parseFloat(undoStyles.borderTopLeftRadius)),
+            addColor: addStyles.color,
+            undoColor: undoStyles.color,
+            addBorder: addStyles.borderTopColor,
+            undoBorder: undoStyles.borderTopColor,
+            addBackground: `${addStyles.backgroundColor} ${addStyles.backgroundImage}`,
+            undoBackground: `${undoStyles.backgroundColor} ${undoStyles.backgroundImage}`,
+            addShadow: addStyles.boxShadow,
+            undoShadow: undoStyles.boxShadow,
+          };
+        }
+        """
+    )
+    assert abs(rocker_metrics["undoWidth"] - rocker_metrics["addWidth"]) <= .5
+    assert abs(rocker_metrics["undoHeight"] - rocker_metrics["addHeight"]) <= .5
+    assert 4 <= rocker_metrics["gap"] <= 8
+    assert rocker_metrics["topDelta"] <= .5
+    assert rocker_metrics["radiusDelta"] <= .5
+    assert rocker_metrics["addColor"] != rocker_metrics["undoColor"]
+    assert rocker_metrics["addBorder"] != rocker_metrics["undoBorder"]
+    assert rocker_metrics["addBackground"] != rocker_metrics["undoBackground"]
+    assert "inset" in rocker_metrics["addShadow"]
+    assert "inset" in rocker_metrics["undoShadow"]
     identity_metrics = page.locator(".dash-switch-hero").evaluate(
         """
         node => {
@@ -4765,9 +4807,10 @@ def test_workspace_chrome_is_spatial_and_modes_still_work(page: Page, app_server
     )
     assert add_alignment["leftDelta"] <= 1.5
     assert 6 <= add_alignment["topGap"] <= 14
-    for label in ("Stat", "Timeframe", "Filter Control", "Text / Notes", "Region Summary", "Image", "Video", "PDF / Document", "Activity Feed", "AI Assistant", "Context Inspector", "Stat + Filter", "Graph", "Table", "Calendar", "Anchor", "Panel", "Divider"):
+    for label in ("Stat", "Table", "Bar", "Line", "Area", "Scatter", "Histogram", "Heatmap", "Pie / Donut", "Gauge", "Sparkline", "Timeframe", "Filter Control", "Text / Notes", "Region Summary", "Image", "Video", "PDF / Document", "Activity Feed", "AI Assistant", "Calendar", "Anchor", "Panel", "Divider"):
         expect(page.locator(".panel-add-menu")).to_contain_text(label)
     expect(page.locator(".panel-add-menu")).not_to_contain_text("Context Panel")
+    expect(page.locator(".panel-add-menu")).not_to_contain_text("Context Inspector")
     page.mouse.click(24, 24)
     expect(page.locator(".panel-add-menu")).not_to_have_class(re.compile("open"))
 
@@ -4778,6 +4821,27 @@ def test_workspace_chrome_is_spatial_and_modes_still_work(page: Page, app_server
     assert not page.locator("body").evaluate("node => node.classList.contains('context-view-active')")
 
     assert_clean_browser(page)
+
+
+def test_navbar_rocker_controls_keep_add_and_undo_behavior(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+
+    undo_button = page.locator(".composition-command-island .composition-undo-button")
+    add_button = page.locator(".composition-command-island .composition-add-button")
+    expect(undo_button).to_have_text("-")
+    expect(add_button).to_have_text("+")
+
+    add_button.click()
+    expect(page.locator(".panel-add-menu")).to_have_class(re.compile("open"))
+    page.keyboard.press("Escape")
+    expect(page.locator(".panel-add-menu")).not_to_have_class(re.compile("open"))
+
+    initial_widgets = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').count()
+    open_add_category(page, "data").locator('.widget-add-action[data-widget-kind="stat"]').click()
+    expect(page.locator('.widget-layout > .widget-card[data-custom-widget="true"]')).to_have_count(initial_widgets + 1)
+
+    undo_button.click()
+    expect(page.locator('.widget-layout > .widget-card[data-custom-widget="true"]')).to_have_count(initial_widgets)
 
 
 def test_workspace_composition_uses_balanced_shell_and_column_rhythm(page: Page, app_server: str) -> None:
@@ -13227,9 +13291,16 @@ def test_compact_pressable_controls_depress_without_sinking_large_surfaces(page:
 
     page.locator(".composition-add-button").click()
     expect(page.locator(".panel-add-menu")).to_have_class(re.compile("open"))
-    assert_compact_hover(page.locator('.widget-add-action[data-widget-kind="timeframe"]'))
-    assert_compact_hover(page.locator('.panel-add-action[data-panel-kind="panel"]'))
-    assert_compact_hover(page.locator('.divider-add-action[data-divider-kind="context-divider"]'))
+    add_menu = page.locator(".panel-add-menu")
+    controls_category = add_menu.locator('.object-add-category[data-object-menu-category="controls"]')
+    controls_category.locator(".object-add-category-trigger").hover()
+    assert_compact_hover(controls_category.locator('.widget-add-action[data-widget-kind="timeframe"]'))
+    containers_category = add_menu.locator('.object-add-category[data-object-menu-category="containers"]')
+    containers_category.locator(".object-add-category-trigger").hover()
+    assert_compact_hover(containers_category.locator('.panel-add-action[data-panel-kind="panel"]'))
+    dividers_category = add_menu.locator('.object-add-category[data-object-menu-category="dividers"]')
+    dividers_category.locator(".object-add-category-trigger").hover()
+    assert_compact_hover(dividers_category.locator('.divider-add-action[data-divider-kind="context-divider"]'))
     page.mouse.click(24, 24)
     page.wait_for_timeout(120)
 
