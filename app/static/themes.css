@@ -1765,7 +1765,7 @@ body::-webkit-scrollbar-thumb:hover {
 }
 
 .workspace-anchor-object.widget-card.db-panel-custom-color.anchor-body-pressing {
-  transform: var(--pressable-active-transform);
+  transform: var(--surface-zone-press-transform, var(--pressable-active-transform));
   background: linear-gradient(90deg, rgba(var(--panel-accent-rgb), .52), rgba(var(--panel-accent-rgb), .32));
   border-color: color-mix(in srgb, var(--panel-accent) 72%, var(--panel-hover-tint)) !important;
   box-shadow:
@@ -2852,22 +2852,26 @@ body {
     inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 72%, transparent);
   backdrop-filter: blur(26px) saturate(1.18);
   -webkit-backdrop-filter: blur(26px) saturate(1.18);
+  isolation: isolate;
 }
 
 .app-nav.workspace-chrome::before {
   content: "";
   position: absolute;
+  pointer-events: none;
   inset: 1px 22px auto;
+  z-index: 0;
   height: 1px;
   border-radius: 999px;
   background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--glass-highlight) 78%, transparent), transparent);
-  pointer-events: none;
 }
 
 .app-nav.workspace-chrome > .app-nav-brand-group,
 .app-nav.workspace-chrome > .app-nav-status,
 .app-nav.workspace-chrome > .app-nav-actions {
   min-width: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .app-nav.workspace-chrome > .app-nav-brand-group {
@@ -3542,6 +3546,43 @@ body {
 .app-nav.workspace-chrome::after {
   content: none;
   display: none;
+}
+
+.app-nav.workspace-chrome::after {
+  content: "";
+  display: block;
+  position: absolute;
+  inset: 1px;
+  z-index: 0;
+  border-radius: inherit;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--ink-strong) 4%, transparent) 0 1px,
+      transparent 1px 4px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      color-mix(in srgb, var(--glass-highlight) 3%, transparent) 0 1px,
+      transparent 1px 5px
+    ),
+    linear-gradient(
+      112deg,
+      transparent 0 18%,
+      color-mix(in srgb, var(--glass-highlight) 4%, transparent) 34%,
+      transparent 52% 100%
+    );
+  opacity: .34;
+  mix-blend-mode: soft-light;
+  pointer-events: none;
+  mask-image:
+    linear-gradient(90deg, transparent 0%, black 7%, black 93%, transparent 100%),
+    linear-gradient(180deg, transparent 0%, black 18%, black 82%, transparent 100%);
+  mask-composite: intersect;
+  -webkit-mask-image:
+    linear-gradient(90deg, transparent 0%, black 7%, black 93%, transparent 100%),
+    linear-gradient(180deg, transparent 0%, black 18%, black 82%, transparent 100%);
+  -webkit-mask-composite: source-in;
 }
 
 .app-nav.workspace-chrome > .app-nav-brand-group,

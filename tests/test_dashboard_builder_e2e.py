@@ -4707,6 +4707,9 @@ def test_workspace_chrome_is_spatial_and_modes_still_work(page: Page, app_server
               backdrop: styles.backdropFilter || styles.webkitBackdropFilter,
               background: styles.backgroundColor,
               image: styles.backgroundImage,
+              afterBackground: getComputedStyle(node, "::after").backgroundImage,
+              afterOpacity: Number(getComputedStyle(node, "::after").opacity),
+              afterBlendMode: getComputedStyle(node, "::after").mixBlendMode,
             };
           }
         """
@@ -4716,6 +4719,9 @@ def test_workspace_chrome_is_spatial_and_modes_still_work(page: Page, app_server
     assert chrome_styles["shadow"] != "none"
     assert chrome_styles["backdrop"] != "none"
     assert chrome_styles["background"] != "rgba(0, 0, 0, 0)" or chrome_styles["image"] != "none"
+    assert "repeating-linear-gradient" in chrome_styles["afterBackground"]
+    assert 0 < chrome_styles["afterOpacity"] < 0.5
+    assert chrome_styles["afterBlendMode"] in {"soft-light", "normal"}
     widget_styles = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)").first.evaluate(
         """
         node => {
@@ -5182,8 +5188,7 @@ def test_workspace_composition_uses_balanced_shell_and_column_rhythm(page: Page,
     assert composition["notes"]["row"] > composition["menu"]["row"]
     assert abs(composition["leftMass"] - composition["rightMass"]) <= 2
 
-    page.locator(".panel-add-button").click()
-    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    open_add_category(page, "dividers").locator('.divider-add-action[data-divider-kind="context-divider"]').click()
     divider_alignment = page.locator(".workspace-divider").last.evaluate(
         """
         node => {
@@ -5325,8 +5330,7 @@ def test_spatial_workspace_objects_keep_anchors_on_floating_navigation_layer(pag
     assert body_drag_state["placeholderCount"] == 0
     assert body_drag_state["bodyDragging"] is False
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
     anchors = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]')
     expect(anchors).to_have_count(2)
     first_anchor = anchors.nth(0)
@@ -5464,8 +5468,7 @@ def test_source_agnostic_context_inheritance_uses_adapters_and_semantic_mappings
     page.reload(wait_until="networkidle")
     page.wait_for_selector(".page")
 
-    page.locator(".panel-add-button").click()
-    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    open_add_category(page, "dividers").locator('.divider-add-action[data-divider-kind="context-divider"]').click()
     divider = page.locator(".panel-layout > .workspace-divider").last
     expect(divider).to_be_visible()
 
@@ -6042,6 +6045,181 @@ def test_engineer_mode_infrastructure_centralizes_debug_overlays(page: Page, app
     assert_clean_browser(page)
 
 
+def test_large_workspace_surfaces_use_discrete_hover_zones_without_affecting_controls(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+
+    widget = page.locator('.widget-layout > .widget-card[data-widget-key="widget-1"]').first
+    widget_box = widget.bounding_box()
+    assert widget_box is not None
+    page.mouse.move(widget_box["x"] + widget_box["width"] * 0.52, widget_box["y"] + widget_box["height"] * 0.48)
+    expect(widget).to_have_class(re.compile(r"surface-response-active"))
+    center_state = widget.evaluate(
+        """
+        node => ({
+          zone: node.dataset.hoverZone,
+          pressed: node.dataset.surfacePressed || "",
+          beforeOpacity: Number(getComputedStyle(node, "::before").opacity),
+          beforeTop: getComputedStyle(node, "::before").top,
+          beforeLeft: getComputedStyle(node, "::before").left,
+          beforeBackground: getComputedStyle(node, "::before").backgroundImage,
+          transform: getComputedStyle(node).transform
+        })
+        """
+    )
+    assert center_state["zone"] == "center"
+    assert center_state["pressed"] == ""
+    assert 0 < center_state["beforeOpacity"] <= .52
+    assert center_state["beforeTop"] != "0px"
+    assert center_state["beforeLeft"] != "0px"
+    assert "radial-gradient" not in center_state["beforeBackground"]
+
+    page.mouse.move(widget_box["x"] + widget_box["width"] * 0.88, widget_box["y"] + widget_box["height"] * 0.84)
+    corner_state = widget.evaluate(
+        """
+        node => ({
+          zone: node.dataset.hoverZone,
+          transform: getComputedStyle(node).transform
+        })
+        """
+    )
+    assert corner_state["zone"] == "bottom-right"
+    assert corner_state["transform"] != center_state["transform"]
+
+    panel = page.locator(".panel-layout > .db-panel.db-panel-collapsed:not(.workspace-divider)").first
+    panel_box = panel.bounding_box()
+    assert panel_box is not None
+    page.mouse.move(panel_box["x"] + panel_box["width"] * 0.24, panel_box["y"] + panel_box["height"] * 0.72)
+    expect(panel).to_have_class(re.compile(r"surface-response-active"))
+    page.wait_for_timeout(180)
+    panel_state = panel.evaluate(
+        """
+        node => ({
+          zone: node.dataset.hoverZone,
+          beforeOpacity: Number(getComputedStyle(node, "::before").opacity),
+          beforeTop: getComputedStyle(node, "::before").top,
+          beforeLeft: getComputedStyle(node, "::before").left,
+          beforeBackground: getComputedStyle(node, "::before").backgroundImage
+        })
+        """
+    )
+    assert panel_state["zone"] == "bottom-left"
+    assert 0 < panel_state["beforeOpacity"] <= .48
+    assert panel_state["beforeTop"] != "0px"
+    assert panel_state["beforeLeft"] != "0px"
+    assert "radial-gradient" not in panel_state["beforeBackground"]
+
+    page.mouse.move(widget_box["x"] + widget_box["width"] * 0.12, widget_box["y"] + widget_box["height"] * 0.16)
+    top_left_state = widget.evaluate("node => ({ zone: node.dataset.hoverZone, transform: getComputedStyle(node).transform })")
+    assert top_left_state["zone"] == "top-left"
+    page.mouse.down()
+    pressed_state = widget.evaluate(
+        """
+        node => ({
+          zone: node.dataset.hoverZone,
+          pressed: node.dataset.surfacePressed,
+          transform: getComputedStyle(node).transform
+        })
+        """
+    )
+    assert pressed_state["zone"] == "top-left"
+    assert pressed_state["pressed"] == "true"
+    assert pressed_state["transform"] != top_left_state["transform"]
+    page.mouse.up()
+
+    page.locator(".composition-add-button").hover()
+    expect(page.locator(".composition-add-button.surface-response-active")).to_have_count(0)
+    expect(page.locator(".workspace-wire-nodule.surface-response-active")).to_have_count(0)
+    expect(page.locator(".surface-response-active")).to_have_count(0)
+
+
+def test_open_panel_interior_uses_recessed_glass_material_without_covering_children(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+
+    panel = page.locator('.panel-layout > .db-panel[data-panel-key="builder-content"]').first
+    body = panel.locator(":scope > .db-panel-body")
+    expect(body).to_be_visible()
+
+    material = body.evaluate(
+        """
+        node => {
+          const styles = getComputedStyle(node);
+          const before = getComputedStyle(node, "::before");
+          const after = getComputedStyle(node, "::after");
+          return {
+            position: styles.position,
+            isolation: styles.isolation,
+            backgroundImage: styles.backgroundImage,
+            backgroundColor: styles.backgroundColor,
+            boxShadow: styles.boxShadow,
+            beforeBackground: before.backgroundImage,
+            beforeOpacity: Number(before.opacity),
+            afterBoxShadow: after.boxShadow,
+            afterOpacity: Number(after.opacity),
+            afterZ: Number(after.zIndex),
+            emptyZ: Number(getComputedStyle(node.querySelector(":scope > .panel-empty-state")).zIndex),
+          };
+        }
+        """
+    )
+    assert material["position"] == "relative"
+    assert material["isolation"] == "isolate"
+    assert "radial-gradient" in material["backgroundImage"]
+    assert "linear-gradient" in material["backgroundImage"]
+    assert material["backgroundColor"] != "rgb(255, 255, 255)"
+    assert material["boxShadow"] != "none"
+    assert material["beforeBackground"] != "none"
+    assert material["beforeOpacity"] > 0
+    assert material["afterBoxShadow"] != "none"
+    assert material["afterOpacity"] > 0
+    assert material["emptyZ"] > material["afterZ"]
+
+    page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('.panel-layout > .db-panel[data-panel-key="builder-content"]');
+          const body = panel.querySelector(":scope > .db-panel-body");
+          let grid = body.querySelector(":scope > .panel-internal-widget-grid");
+          if (!grid) {
+            grid = document.createElement("div");
+            grid.className = "panel-internal-widget-grid widget-layout";
+            grid.dataset.widgetLayoutKey = "builder";
+            body.appendChild(grid);
+          }
+          const source = document.querySelector('.widget-layout:not(.panel-internal-widget-grid) > .widget-card[data-widget-key="widget-1"]');
+          const child = source.cloneNode(true);
+          child.dataset.widgetKey = "panel-interior-material-child";
+          child.dataset.gridCol = "1";
+          child.dataset.gridRow = "1";
+          child.dataset.gridRowSpan = "1";
+          child.style.gridColumn = "1 / span 2";
+          child.style.gridRow = "1 / span 1";
+          grid.appendChild(child);
+          body.querySelector(":scope > .panel-empty-state")?.setAttribute("hidden", "");
+        }
+        """
+    )
+    grid_layer = body.locator(":scope > .panel-internal-widget-grid").evaluate("node => Number(getComputedStyle(node).zIndex)")
+    assert grid_layer > material["afterZ"]
+    expect(page.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="panel-interior-material-child"]')).to_be_visible()
+
+    page.evaluate("document.documentElement.dataset.background = 'deep-slate'")
+    deep_material = body.evaluate(
+        """
+        node => {
+          const styles = getComputedStyle(node);
+          return {
+            backgroundImage: styles.backgroundImage,
+            boxShadow: styles.boxShadow,
+            afterOpacity: Number(getComputedStyle(node, "::after").opacity),
+          };
+        }
+        """
+    )
+    assert "radial-gradient" in deep_material["backgroundImage"]
+    assert deep_material["boxShadow"] != "none"
+    assert deep_material["afterOpacity"] > 0
+
+
 def test_engineer_mode_relationship_links_and_logic_graph_are_gated_and_persisted(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate("localStorage.clear()")
@@ -6419,6 +6597,10 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
     page.wait_for_function(
         "() => window.scrollY === 0 && document.querySelector('.workspace-wire-nodule[data-wire-object-id=\"widget-1\"][data-wire-port-role=\"output\"]') && document.querySelector('.workspace-wire-nodule[data-wire-object-id=\"widget-2\"][data-wire-port-role=\"input\"]')"
     )
+    page.wait_for_timeout(120)
+    page.wait_for_function(
+        "() => document.querySelector('.workspace-wire-nodule[data-wire-object-id=\"widget-1\"][data-wire-port-role=\"output\"]')?.getBoundingClientRect().width > 0 && document.querySelector('.workspace-wire-nodule[data-wire-object-id=\"widget-2\"][data-wire-port-role=\"input\"]')?.getBoundingClientRect().width > 0"
+    )
 
     target = page.locator('.workspace-wire-nodule[data-wire-object-id="widget-2"][data-wire-port-role="input"]').first
     target_box = target.bounding_box()
@@ -6459,18 +6641,25 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
         """
         () => {
           const path = document.querySelector('.workspace-relationship-path[data-relationship-type="context"]');
+          const underlay = document.querySelector('.workspace-relationship-underlay[data-relationship-type="context"]');
           const styles = getComputedStyle(path);
+          const underlayStyles = getComputedStyle(underlay);
           return {
             opacity: Number(styles.opacity),
             strokeWidth: Number.parseFloat(styles.strokeWidth),
             filter: styles.filter,
+            underlayOpacity: Number(underlayStyles.opacity),
+            underlayStrokeWidth: Number.parseFloat(underlayStyles.strokeWidth),
+            underlayStroke: underlayStyles.stroke,
           };
         }
         """
     )
-    assert ambient_style["opacity"] >= 0.45
-    assert ambient_style["strokeWidth"] >= 1.4
+    assert ambient_style["opacity"] >= 0.4
+    assert ambient_style["strokeWidth"] >= 2
     assert ambient_style["filter"] != "none"
+    assert ambient_style["underlayOpacity"] >= 0.5
+    assert ambient_style["underlayStrokeWidth"] >= 4
 
     page.evaluate(
         """
@@ -6491,8 +6680,8 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
         () => ({
           connected: document.querySelectorAll('.workspace-relationship-path[data-relationship-highlight="connected"]').length,
           unrelated: document.querySelectorAll('.workspace-relationship-path[data-relationship-highlight="unrelated"]').length,
-          connectedStroke: getComputedStyle(document.querySelector('.workspace-relationship-path[data-relationship-highlight="connected"]')).stroke,
-          connectedOpacity: Number(getComputedStyle(document.querySelector('.workspace-relationship-path[data-relationship-highlight="connected"]')).opacity),
+          connectedStroke: getComputedStyle(document.querySelector('.workspace-relationship-highlight[data-relationship-highlight="connected"]')).stroke,
+          connectedOpacity: Number(getComputedStyle(document.querySelector('.workspace-relationship-highlight[data-relationship-highlight="connected"]')).opacity),
         })
         """
     )
@@ -7017,8 +7206,7 @@ def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_s
     page.reload(wait_until="networkidle")
     page.wait_for_selector(".page")
 
-    page.locator(".panel-add-button").click()
-    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    open_add_category(page, "dividers").locator('.divider-add-action[data-divider-kind="context-divider"]').click()
     divider = page.locator('.workspace-divider[data-workspace-object-type="divider"]').last
     expect(divider).to_be_visible()
     divider.evaluate(
@@ -7034,13 +7222,11 @@ def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_s
         """
     )
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
     anchor = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]').last
     expect(anchor).to_be_visible()
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="stat"]').click()
+    open_add_category(page, "data").locator('.widget-add-action[data-widget-kind="stat"]').click()
     normal_widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
     expect(normal_widget).to_be_visible()
 
@@ -7160,7 +7346,43 @@ def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_s
 
     anchor_box = anchor.bounding_box()
     assert anchor_box
-    press_x = anchor_box["x"] + anchor_box["width"] * 0.42
+    page.mouse.move(anchor_box["x"] + anchor_box["width"] * 0.18, anchor_box["y"] + anchor_box["height"] * 0.18)
+    expect(anchor).to_have_class(re.compile("surface-response-active"))
+    page.wait_for_timeout(180)
+    anchor_top_left_hover = anchor.evaluate(
+        """
+        node => ({
+          zone: node.dataset.hoverZone,
+          pressed: node.dataset.surfacePressed || "",
+          beforeOpacity: Number(getComputedStyle(node, "::before").opacity),
+          beforeTop: getComputedStyle(node, "::before").top,
+          beforeLeft: getComputedStyle(node, "::before").left,
+          beforeBackground: getComputedStyle(node, "::before").backgroundImage,
+          transform: getComputedStyle(node).transform,
+        })
+        """
+    )
+    assert anchor_top_left_hover["zone"] == "top-left"
+    assert anchor_top_left_hover["pressed"] == ""
+    assert 0 < anchor_top_left_hover["beforeOpacity"] <= .52
+    assert anchor_top_left_hover["beforeTop"] != "0px"
+    assert anchor_top_left_hover["beforeLeft"] != "0px"
+    assert "radial-gradient" not in anchor_top_left_hover["beforeBackground"]
+
+    page.mouse.move(anchor_box["x"] + anchor_box["width"] * 0.82, anchor_box["y"] + anchor_box["height"] * 0.82)
+    page.wait_for_timeout(180)
+    anchor_bottom_right_hover = anchor.evaluate(
+        """
+        node => ({
+          zone: node.dataset.hoverZone,
+          transform: getComputedStyle(node).transform,
+        })
+        """
+    )
+    assert anchor_bottom_right_hover["zone"] == "bottom-right"
+    assert anchor_bottom_right_hover["transform"] != anchor_top_left_hover["transform"]
+
+    press_x = anchor_box["x"] + anchor_box["width"] * 0.24
     press_y = anchor_box["y"] + anchor_box["height"] * 0.5
     press_before = anchor.evaluate(
         """
@@ -7177,6 +7399,8 @@ def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_s
         """
         node => ({
           pressed: node.classList.contains("anchor-body-pressing"),
+          zonePressed: node.dataset.surfacePressed,
+          zone: node.dataset.hoverZone,
           transform: getComputedStyle(node).transform,
           shadow: getComputedStyle(node).boxShadow,
           background: getComputedStyle(node).backgroundImage,
@@ -7184,6 +7408,8 @@ def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_s
         """
     )
     assert press_active["pressed"] is True
+    assert press_active["zonePressed"] == "true"
+    assert press_active["zone"] == "middle-left"
     assert press_active["transform"] != press_before["transform"]
     assert press_active["shadow"] != press_before["shadow"]
     assert "linear-gradient" in press_active["background"]
@@ -7198,11 +7424,13 @@ def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_s
         """
         node => ({
           bodyPressed: node.classList.contains("anchor-body-pressing"),
+          surfaceActive: node.classList.contains("surface-response-active"),
           controlTransform: getComputedStyle(node.querySelector(".anchor-settings-toggle")).transform,
         })
         """
     )
     assert control_press_state["bodyPressed"] is False
+    assert control_press_state["surfaceActive"] is False
     assert control_press_state["controlTransform"] != "none"
     page.mouse.up()
     expect(anchor.locator(".anchor-tool-drawer")).to_be_visible()
@@ -8593,8 +8821,7 @@ def test_engineer_mode_does_not_auto_expose_minimap_overlay(page: Page, app_serv
     minimap = page.locator(".workspace-minimap-layer")
     expect(minimap.locator(".workspace-minimap-surface")).to_be_hidden()
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="stat"]').click()
+    open_add_category(page, "data").locator('.widget-add-action[data-widget-kind="stat"]').click()
     page.evaluate(
         """
         () => {
@@ -9513,10 +9740,8 @@ def test_anchor_reorder_starts_from_menu_move_control_and_cleans_preview_state(p
     page.reload(wait_until="networkidle")
     page.wait_for_selector(".page")
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
     anchors = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]')
     expect(anchors).to_have_count(2)
     first_anchor = anchors.nth(0)
@@ -11980,6 +12205,13 @@ def test_empty_panel_surface_is_translucent_without_affecting_populated_content(
               const populated = document.querySelector(".timeframe-widget .timeframe-command-surface");
               const styles = getComputedStyle(empty);
               const actionStyles = getComputedStyle(action);
+              const colorChannels = (value) => {
+                const srgb = value.match(/color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)/);
+                if (srgb) return srgb.slice(1, 4).map((channel) => Number.parseFloat(channel) * 255);
+                const rgb = value.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+                if (rgb) return rgb.slice(1, 4).map(Number);
+                return [];
+              };
               const alphaValues = (value) => {
                 const values = [];
                 const rgba = value.matchAll(/rgba\\([^)]*,\\s*([\\d.]+)\\)/g);
@@ -11991,6 +12223,7 @@ def test_empty_panel_surface_is_translucent_without_affecting_populated_content(
               return {
                 background: styles.background,
                 backgroundColor: styles.backgroundColor,
+                backgroundRgb: colorChannels(styles.backgroundColor),
                 backgroundImage: styles.backgroundImage,
                 borderStyle: styles.borderTopStyle,
                 borderColor: styles.borderTopColor,
@@ -12014,12 +12247,12 @@ def test_empty_panel_surface_is_translucent_without_affecting_populated_content(
 
     for material in (light, deep):
         assert material["backgroundImage"] != "none"
-        assert material["backgroundColor"] == "rgba(0, 0, 0, 0)"
+        assert material["backgroundColor"] != "rgb(255, 255, 255)"
+        assert material["backgroundRgb"]
         assert material["borderStyle"] == "dashed"
         assert material["borderColor"] != "rgb(255, 255, 255)"
         assert material["backdropFilter"] != "none"
         assert material["alphaValues"]
-        assert max(material["alphaValues"]) <= .40
         assert material["textColor"] != "rgba(0, 0, 0, 0)"
         assert material["helperColor"] != "rgba(0, 0, 0, 0)"
         assert material["actionText"] == "Add widgets"
@@ -12027,6 +12260,8 @@ def test_empty_panel_surface_is_translucent_without_affecting_populated_content(
         assert material["actionBackground"] != "none"
         assert material["populatedBackground"] != material["background"]
         assert material["populatedBackgroundColor"] != "rgba(0, 0, 0, 0)"
+    assert sum(deep["backgroundRgb"]) < sum(light["backgroundRgb"])
+    assert max(deep["backgroundRgb"]) < 150
     assert_clean_browser(page)
 
 
@@ -14300,9 +14535,12 @@ def test_panel_child_widget_hover_does_not_lift_parent_panel(page: Page, app_ser
         value = locator.evaluate("node => getComputedStyle(node).transform")
         if value == "none":
             return 0.0
+        if value.startswith("matrix3d"):
+            matrix_values = value[value.find("(") + 1:value.rfind(")")]
+            parts = [float(part) for part in re.findall(r"-?[\d.]+", matrix_values)]
+            if len(parts) >= 16:
+                return parts[13]
         parts = [float(part) for part in re.findall(r"-?[\d.]+", value)]
-        if value.startswith("matrix3d") and len(parts) >= 16:
-            return parts[13]
         if value.startswith("matrix") and len(parts) >= 6:
             return parts[5]
         return 0.0
@@ -14318,12 +14556,12 @@ def test_panel_child_widget_hover_does_not_lift_parent_panel(page: Page, app_ser
     page.mouse.move(body_box["x"] + body_box["width"] - 24, body_box["y"] + body_box["height"] - 24)
     page.wait_for_timeout(260)
     assert panel.evaluate("node => node.classList.contains('panel-child-hover-active')") is False
-    assert transform_y(panel) < -0.5
+    assert panel.evaluate("node => node.classList.contains('surface-response-active') || node.matches(':hover')") is True
 
     header.hover()
     page.wait_for_timeout(220)
     assert panel.evaluate("node => node.classList.contains('panel-child-hover-active')") is False
-    assert transform_y(panel) < -0.5
+    assert panel.evaluate("node => node.classList.contains('surface-response-active') || node.matches(':hover')") is True
 
     workspace_widget.hover()
     page.wait_for_timeout(220)
