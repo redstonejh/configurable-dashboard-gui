@@ -241,27 +241,81 @@
     </label>`;
   };
 
-  const TIMEFRAME_PRESETS = [
+  const TIMEFRAME_FILTER_TYPES = [
     { id: "today", label: "Today" },
     { id: "yesterday", label: "Yesterday" },
+    { id: "this_week", label: "This week" },
+    { id: "last_week", label: "Last week" },
+    { id: "this_month", label: "This month" },
+    { id: "last_month", label: "Last month" },
+    { id: "custom_fixed", label: "Custom fixed range" },
+    { id: "custom_repeating", label: "Custom repeating interval" },
+  ];
+  const LEGACY_TIMEFRAME_PRESETS = [
     { id: "last_7_days", label: "Last 7 days" },
     { id: "last_30_days", label: "Last 30 days" },
     { id: "month_to_date", label: "Month to date" },
     { id: "year_to_date", label: "Year to date" },
     { id: "custom", label: "Custom range" },
   ];
+  const TIMEFRAME_PRESETS = [...TIMEFRAME_FILTER_TYPES, ...LEGACY_TIMEFRAME_PRESETS];
+  const DEFAULT_TIMEFRAME_FILTERS = [
+    { id: "time-today", label: "Today", type: "today" },
+    { id: "time-this-week", label: "This week", type: "this_week" },
+    { id: "time-last-7-days", label: "Last 7 days", type: "last_7_days" },
+    { id: "time-last-30-days", label: "Last 30 days", type: "last_30_days" },
+    { id: "time-yesterday", label: "Yesterday", type: "yesterday" },
+    { id: "time-last-week", label: "Last week", type: "last_week" },
+    { id: "time-this-month", label: "This month", type: "this_month" },
+    { id: "time-last-month", label: "Last month", type: "last_month" },
+  ];
+  const WEEKDAY_OPTIONS = [
+    { value: 0, label: "Sunday" },
+    { value: 1, label: "Monday" },
+    { value: 2, label: "Tuesday" },
+    { value: 3, label: "Wednesday" },
+    { value: 4, label: "Thursday" },
+    { value: 5, label: "Friday" },
+    { value: 6, label: "Saturday" },
+  ];
   const datePad = (value) => String(value).padStart(2, "0");
   const dateOnly = (date) => `${date.getFullYear()}-${datePad(date.getMonth() + 1)}-${datePad(date.getDate())}`;
+  const parseDateOnly = (value) => {
+    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
   const localToday = () => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  };
+  const localDateFrom = (value) => {
+    const source = value instanceof Date && !Number.isNaN(value.getTime()) ? value : new Date(value || Date.now());
+    return new Date(source.getFullYear(), source.getMonth(), source.getDate());
   };
   const shiftedDate = (date, days) => {
     const next = new Date(date);
     next.setDate(next.getDate() + days);
     return next;
   };
+  const addMonths = (date, months) => {
+    const next = new Date(date);
+    const day = next.getDate();
+    next.setDate(1);
+    next.setMonth(next.getMonth() + months);
+    const lastDay = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+    next.setDate(Math.min(day, lastDay));
+    return next;
+  };
+  const daysBetween = (start, end) => Math.round((localDateFrom(end) - localDateFrom(start)) / 86400000);
   const timeframePresetById = (id) => TIMEFRAME_PRESETS.find((preset) => preset.id === id) || null;
+  const timeframeFilterTypeById = (id) => TIMEFRAME_FILTER_TYPES.find((type) => type.id === id) || timeframePresetById(id) || null;
+  const normalizeWeekStartDay = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    return Math.max(0, Math.min(6, Math.round(numeric)));
+  };
   const timeframeLabel = (timeRange, fallback = "Any time") => {
     if (!timeRange?.start && !timeRange?.end) return fallback;
     if (timeRange.label) return timeRange.label;
@@ -269,11 +323,128 @@
     if (timeRange.start) return `Since ${timeRange.start}`;
     return `Until ${timeRange.end}`;
   };
-  const resolveTimeRangeConfig = (config = {}, resolvedContext = {}) => {
+  const normalizeTimeframeFilter = (filter, index = 0) => {
+    const type = String(filter?.type || filter?.preset || filter?.id || "today").trim();
+    const typeRecord = timeframeFilterTypeById(type) || { id: type, label: type };
+    const id = String(filter?.id || `time-filter-${index + 1}`).trim();
+    return {
+      id,
+      label: String(filter?.label || typeRecord.label || id).trim() || typeRecord.label || "Time filter",
+      type: typeRecord.id || type,
+      weekStartDay: filter?.weekStartDay,
+      start: filter?.start || filter?.fixedStart || filter?.customStart || "",
+      end: filter?.end || filter?.fixedEnd || filter?.customEnd || "",
+      seedStart: filter?.seedStart || filter?.start || "",
+      seedEnd: filter?.seedEnd || filter?.end || "",
+      repeatUnit: String(filter?.repeatUnit || "weeks"),
+      repeatEvery: Math.max(1, Math.round(Number(filter?.repeatEvery) || 1)),
+      occurrence: ["previous", "current", "next"].includes(filter?.occurrence) ? filter.occurrence : "current",
+    };
+  };
+  const legacyPresetToFilter = (preset, index = 0) => {
+    const record = typeof preset === "string"
+      ? timeframePresetById(preset) || { id: preset, label: preset }
+      : { id: preset?.id, label: preset?.label || preset?.id };
+    return normalizeTimeframeFilter({ id: `time-${record.id || index}`, label: record.label, type: record.id }, index);
+  };
+  const normalizeTimeframeFilters = (config = {}) => {
+    const configured = Array.isArray(config.filters) && config.filters.length
+      ? config.filters.map(normalizeTimeframeFilter)
+      : Array.isArray(config.presets) && config.presets.length
+        ? config.presets.map(legacyPresetToFilter)
+        : DEFAULT_TIMEFRAME_FILTERS.map((filter, index) => normalizeTimeframeFilter(filter, index));
+    return configured.filter((filter) => filter.id && filter.type);
+  };
+  const selectedTimeframeFilterId = (config = {}, filters = normalizeTimeframeFilters(config)) => {
+    const explicitId = String(config.selectedFilterId || "").trim();
+    if (explicitId && filters.some((filter) => filter.id === explicitId)) return explicitId;
+    const preset = String(config.selectedPreset || config.preset || "").trim();
+    const presetMatch = preset ? filters.find((filter) => filter.type === preset || filter.id === preset || filter.id === `time-${preset}`) : null;
+    return presetMatch?.id || "";
+  };
+  const monthRange = (today, offset = 0) => {
+    const monthStart = new Date(today.getFullYear(), today.getMonth() + offset, 1);
+    const monthEnd = new Date(today.getFullYear(), today.getMonth() + offset + 1, 0);
+    return { start: dateOnly(monthStart), end: dateOnly(monthEnd) };
+  };
+  const weekRange = (today, weekStartDay = 0, offsetWeeks = 0) => {
+    const startDay = normalizeWeekStartDay(weekStartDay);
+    const delta = (today.getDay() - startDay + 7) % 7;
+    const start = shiftedDate(today, -delta + (offsetWeeks * 7));
+    return { start: dateOnly(start), end: dateOnly(shiftedDate(start, 6)) };
+  };
+  const repeatingIntervalRange = (filter, today) => {
+    const seedStart = parseDateOnly(filter.seedStart);
+    const seedEnd = parseDateOnly(filter.seedEnd);
+    if (!seedStart || !seedEnd) return null;
+    const seedLengthDays = Math.max(1, daysBetween(seedStart, seedEnd) + 1);
+    const repeatEvery = Math.max(1, Math.round(Number(filter.repeatEvery) || 1));
+    const repeatUnit = String(filter.repeatUnit || "weeks");
+    const occurrenceOffset = filter.occurrence === "previous" ? -1 : filter.occurrence === "next" ? 1 : 0;
+    let start;
+    if (repeatUnit === "monthly") {
+      const monthDiff = ((today.getFullYear() - seedStart.getFullYear()) * 12) + (today.getMonth() - seedStart.getMonth());
+      let cycles = Math.floor(monthDiff / repeatEvery);
+      let candidate = addMonths(seedStart, cycles * repeatEvery);
+      if (candidate > today) {
+        cycles -= 1;
+        candidate = addMonths(seedStart, cycles * repeatEvery);
+      }
+      start = addMonths(seedStart, (cycles + occurrenceOffset) * repeatEvery);
+    } else {
+      const stepDays = repeatUnit === "days" ? repeatEvery : repeatEvery * 7;
+      let cycles = Math.floor(daysBetween(seedStart, today) / stepDays);
+      let candidate = shiftedDate(seedStart, cycles * stepDays);
+      if (candidate > today) {
+        cycles -= 1;
+        candidate = shiftedDate(seedStart, cycles * stepDays);
+      }
+      start = shiftedDate(seedStart, (cycles + occurrenceOffset) * stepDays);
+    }
+    const end = shiftedDate(start, seedLengthDays - 1);
+    return { start: dateOnly(start), end: dateOnly(end) };
+  };
+  const resolveTimeframeFilter = (filter, config = {}, resolvedContext = {}, now = null) => {
+    const normalized = normalizeTimeframeFilter(filter);
+    const today = now ? localDateFrom(now) : localToday();
+    const weekStartDay = normalized.weekStartDay ?? config.weekStartDay ?? 0;
+    let range = null;
+    if (normalized.type === "today") range = { start: dateOnly(today), end: dateOnly(today) };
+    if (normalized.type === "yesterday") {
+      const day = shiftedDate(today, -1);
+      range = { start: dateOnly(day), end: dateOnly(day) };
+    }
+    if (normalized.type === "this_week") range = weekRange(today, weekStartDay, 0);
+    if (normalized.type === "last_week") range = weekRange(today, weekStartDay, -1);
+    if (normalized.type === "this_month") range = monthRange(today, 0);
+    if (normalized.type === "last_month") range = monthRange(today, -1);
+    if (normalized.type === "custom_fixed" || normalized.type === "custom") {
+      range = { start: normalized.start || config.customStart || "", end: normalized.end || config.customEnd || "" };
+    }
+    if (normalized.type === "custom_repeating") range = repeatingIntervalRange(normalized, today);
+    if (normalized.type === "last_7_days") range = { start: dateOnly(shiftedDate(today, -6)), end: dateOnly(today) };
+    if (normalized.type === "last_30_days") range = { start: dateOnly(shiftedDate(today, -29)), end: dateOnly(today) };
+    if (normalized.type === "month_to_date") range = { start: dateOnly(new Date(today.getFullYear(), today.getMonth(), 1)), end: dateOnly(today) };
+    if (normalized.type === "year_to_date") range = { start: dateOnly(new Date(today.getFullYear(), 0, 1)), end: dateOnly(today) };
+    if (!range?.start && !range?.end) return null;
+    const field = String(config.field || resolvedContext?.semanticMapping?.dateField || "").trim();
+    return {
+      field: field || undefined,
+      start: range.start || undefined,
+      end: range.end || undefined,
+      preset: normalized.type,
+      filterId: normalized.id,
+      label: normalized.label || timeframeLabel(range, "Time range"),
+    };
+  };
+  const resolveTimeRangeConfig = (config = {}, resolvedContext = {}, now = null) => {
+    const filters = normalizeTimeframeFilters(config);
+    const selectedFilter = filters.find((filter) => filter.id === selectedTimeframeFilterId(config, filters));
+    if (selectedFilter) return resolveTimeframeFilter(selectedFilter, config, resolvedContext, now);
     const preset = String(config.selectedPreset || config.preset || "").trim();
     const explicit = config.timeRange && typeof config.timeRange === "object" ? config.timeRange : null;
     const field = String(config.field || explicit?.field || resolvedContext?.semanticMapping?.dateField || "").trim();
-    const today = localToday();
+    const today = now ? localDateFrom(now) : localToday();
     let start = "";
     let end = "";
     let label = "";
@@ -1072,23 +1243,21 @@
     getDefaultConfig: () => ({
       title: "Timeframe",
       activeLabel: "Any time",
+      selectedFilterId: "",
+      weekStartDay: 0,
       selectedPreset: "",
       customStart: "",
       customEnd: "",
-      presets: TIMEFRAME_PRESETS.map((preset) => preset.id),
+      filters: DEFAULT_TIMEFRAME_FILTERS.map((filter) => ({ ...filter })),
+      presets: ["today", "last_7_days", "last_30_days", "yesterday", "custom"],
     }),
     resolveQuery: () => null,
     render: ({ instance, resolvedContext, density: densityProp = instance.density || "standard" }) => {
       const config = instance.config || {};
-      const configuredPresets = Array.isArray(config.presets) && config.presets.length
-        ? config.presets
-        : TIMEFRAME_PRESETS.map((preset) => preset.id);
-      const presets = configuredPresets
-        .map((preset) => typeof preset === "string"
-          ? timeframePresetById(preset) || { id: preset, label: preset }
-          : { id: preset.id, label: preset.label || preset.id })
-        .filter((preset) => preset.id && preset.label);
-      const selectedPreset = String(config.selectedPreset || config.preset || "").trim();
+      const filters = normalizeTimeframeFilters(config);
+      const selectedFilterId = selectedTimeframeFilterId(config, filters);
+      const selectedFilter = filters.find((filter) => filter.id === selectedFilterId) || null;
+      const selectedPreset = selectedFilter?.type || String(config.selectedPreset || config.preset || "").trim();
       const timeRange = resolveTimeRangeConfig(config, resolvedContext);
       const label = timeframeLabel(timeRange, config.activeLabel || "Any time");
       const densityTier = normalizeDensity(densityProp);
@@ -1101,20 +1270,22 @@
           : compactDensity(densityTier)
             ? "small"
             : "medium";
-      const visiblePresets = density === "large"
-        ? presets
-        : presets.filter((preset) => ["today", "last_7_days", "last_30_days"].includes(preset.id));
+      const visibleFilters = density === "large"
+        ? filters
+        : density === "small"
+          ? (selectedFilter ? [selectedFilter] : filters.slice(0, 1))
+          : filters.slice(0, 4);
       const customStart = config.customStart || timeRange?.start || "";
       const customEnd = config.customEnd || timeRange?.end || "";
       return `
         <div class="timeframe-command-surface timeframe-density-${density} widget-density-${densityTier}" data-density="${escapeHtml(densityTier)}" data-timeframe-current-label="${escapeHtml(label)}">
           ${density === "small" ? "" : `<div class="range-controls timeframe-controls">
-            <div class="range-presets timeframe-presets" role="group" aria-label="Time range presets">
-              ${visiblePresets.map((preset) => `<button class="preset-btn${preset.id === selectedPreset ? " active" : ""}" type="button" data-timeframe-preset="${escapeHtml(preset.id)}" aria-pressed="${preset.id === selectedPreset ? "true" : "false"}">${escapeHtml(preset.label)}</button>`).join("")}
+            <div class="range-presets timeframe-presets" role="group" aria-label="Time filters">
+              ${visibleFilters.map((filter) => `<button class="preset-btn timeframe-filter-button${filter.id === selectedFilterId ? " active" : ""}" type="button" data-timeframe-filter-id="${escapeHtml(filter.id)}" data-timeframe-preset="${escapeHtml(filter.type)}" aria-pressed="${filter.id === selectedFilterId ? "true" : "false"}">${escapeHtml(filter.label)}</button>`).join("")}
             </div>
           </div>`}
           <div class="timeframe-active-cluster">
-            <button class="range-custom-trigger timeframe-selector${selectedPreset === "custom" ? " active" : ""}" type="button" data-timeframe-preset="custom" aria-label="Selected time range" title="Selected time range">${escapeHtml(label)}</button>
+            <button class="range-custom-trigger timeframe-selector${selectedPreset === "custom" || selectedPreset === "custom_fixed" || selectedPreset === "custom_repeating" ? " active" : ""}" type="button" data-timeframe-preset="custom" aria-label="Selected time range" title="Selected time range">${escapeHtml(label)}</button>
           </div>
           ${density === "large" ? `<div class="timeframe-custom-range" role="group" aria-label="Custom time range">
             <input class="timeframe-custom-date" type="date" data-timeframe-part="customStart" value="${escapeHtml(customStart)}" aria-label="Custom start date">
@@ -1948,6 +2119,10 @@
     renderWidget,
     resolveWidgetDensity,
     resolveTimeRangeConfig,
+    resolveTimeframeFilter,
+    normalizeTimeframeFilters,
+    timeframeFilterTypes: () => TIMEFRAME_FILTER_TYPES.map((type) => ({ ...type })),
+    weekStartOptions: () => WEEKDAY_OPTIONS.map((option) => ({ ...option })),
     densityTiers: () => [...DENSITY_TIERS],
     listWidgetDefinitions: () => [...definitions.values()].map((definition) => ({
       type: definition.type,

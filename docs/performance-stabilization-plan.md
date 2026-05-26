@@ -482,6 +482,7 @@ Behavior constraints:
 - Temporary workspace extension is removed after interaction end; no permanent blank area is introduced unless the committed item layout itself creates it.
 - The snapped placeholder or resize footprint remains the source of truth for final commit, including rows that only became reachable because the temporary runway existed during the interaction.
 - No save/load work runs during the auto-scroll loop.
+- Direct widget/panel resize may activate a temporary resize-aware camera layer when the live bounds exceed the visible viewport vertically. The camera scales only live resize/preview visual surfaces and is cleared by resize lifecycle cleanup; committed rows, collision math, save/load state, and undo history stay in normal grid coordinates.
 
 Regression coverage:
 

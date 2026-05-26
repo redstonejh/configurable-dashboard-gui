@@ -236,11 +236,13 @@ body:not(.engineer-mode-active) .workspace-engineer-overlay-layer {
 
 .workspace-relationship-path {
   fill: none;
-  stroke: color-mix(in srgb, #93c5fd 34%, transparent);
-  stroke-width: 1.25;
+  stroke: color-mix(in srgb, #bfdbfe 52%, transparent);
+  stroke-width: 1.45;
   stroke-linecap: round;
-  opacity: .28;
-  filter: drop-shadow(0 0 5px color-mix(in srgb, #93c5fd 14%, transparent));
+  opacity: .46;
+  filter:
+    drop-shadow(0 0 1.5px rgba(15, 23, 42, .22))
+    drop-shadow(0 0 6px color-mix(in srgb, #93c5fd 18%, transparent));
   vector-effect: non-scaling-stroke;
   pointer-events: stroke;
   cursor: pointer;
@@ -259,8 +261,8 @@ body:not(.engineer-mode-active) .workspace-engineer-overlay-layer {
 }
 
 .workspace-relationship-path[data-relationship-state="active"] {
-  opacity: .38;
-  stroke-width: 1.5;
+  opacity: .56;
+  stroke-width: 1.65;
 }
 
 .workspace-relationship-path:hover,
@@ -273,27 +275,27 @@ body:not(.engineer-mode-active) .workspace-engineer-overlay-layer {
 }
 
 .workspace-relationship-path[data-relationship-type="context"] {
-  stroke: color-mix(in srgb, #60a5fa 46%, transparent);
+  stroke: color-mix(in srgb, #93c5fd 62%, transparent);
 }
 
 .workspace-relationship-path[data-relationship-type="filter"] {
-  stroke: color-mix(in srgb, #14b8a6 44%, transparent);
+  stroke: color-mix(in srgb, #5eead4 58%, transparent);
 }
 
 .workspace-relationship-path[data-relationship-type="query"] {
-  stroke: color-mix(in srgb, #a78bfa 42%, transparent);
+  stroke: color-mix(in srgb, #c4b5fd 58%, transparent);
 }
 
 .workspace-relationship-path[data-relationship-type="containment"] {
-  stroke: color-mix(in srgb, #f59e0b 42%, transparent);
+  stroke: color-mix(in srgb, #fbbf24 56%, transparent);
 }
 
 .workspace-relationship-path[data-relationship-type="operator"] {
-  stroke: color-mix(in srgb, #f472b6 44%, transparent);
+  stroke: color-mix(in srgb, #f9a8d4 58%, transparent);
 }
 
 .workspace-relationship-path[data-relationship-type="semantic"] {
-  stroke: color-mix(in srgb, #22c55e 42%, transparent);
+  stroke: color-mix(in srgb, #86efac 56%, transparent);
 }
 
 .workspace-wire-nodule {
@@ -363,8 +365,8 @@ body:not(.engineer-mode-active) .workspace-engineer-overlay-layer {
 }
 
 .workspace-relationship-path[data-relationship-highlight="unrelated"] {
-  opacity: .14;
-  filter: none;
+  opacity: .22;
+  filter: drop-shadow(0 0 1px rgba(15, 23, 42, .18));
 }
 
 .workspace-wire-drag-svg {
@@ -1473,7 +1475,14 @@ body.layout-tools-active .widget-card:not(.widget-tools-open):not(:has(> .widget
   transform: none !important;
   box-shadow: 0 26px 58px rgba(15, 23, 42, .20), 0 0 0 1px rgba(37, 99, 235, .16);
   transition: none !important;
-  will-change: width, height;
+  will-change: width, height, transform;
+}
+
+body.resize-auto-zoom-active .dashboard-live-resize,
+body.resize-auto-zoom-active .dashboard-resize-preview,
+body.resize-auto-zoom-active .dashboard-expanded-footprint-ghost {
+  backface-visibility: hidden;
+  transform-box: border-box;
 }
 
 .dashboard-resize-source {

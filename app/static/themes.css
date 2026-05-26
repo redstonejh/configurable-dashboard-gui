@@ -3711,17 +3711,30 @@ body {
 }
 
 .app-nav.workspace-chrome .background-tone-trigger,
-.app-nav.workspace-chrome .composition-undo-button,
-.app-nav.workspace-chrome .composition-add-button {
+.app-nav.workspace-chrome .composition-rocker-control {
+  flex: 0 0 var(--navbar-control-height);
+  inline-size: var(--navbar-control-height);
+  block-size: var(--navbar-control-height);
   width: var(--navbar-control-height);
   min-width: var(--navbar-control-height);
+  max-width: var(--navbar-control-height);
+  height: var(--navbar-control-height);
+  min-height: var(--navbar-control-height);
+  max-height: var(--navbar-control-height);
+  aspect-ratio: 1;
   padding: 0;
   border-radius: 999px;
 }
 
-.app-nav.workspace-chrome .composition-undo-button,
-.app-nav.workspace-chrome .composition-add-button {
+.app-nav.workspace-chrome .composition-rocker-control {
   --rocker-illumination: var(--blue);
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-grow: 0;
+  flex-shrink: 0;
+  line-height: 0;
   border-color: color-mix(in srgb, var(--rocker-illumination) 22%, var(--navbar-control-border));
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--rocker-illumination) 10%, var(--navbar-control-bg)), color-mix(in srgb, var(--rocker-illumination) 6%, var(--navbar-control-bg)));
@@ -3738,17 +3751,44 @@ body {
   --rocker-illumination: var(--red);
 }
 
-.app-nav.workspace-chrome .composition-undo-button::before,
-.app-nav.workspace-chrome .composition-add-button::before {
+.app-nav.workspace-chrome .composition-rocker-control::before {
   content: none;
   display: none;
 }
 
 .app-nav.workspace-chrome .chrome-add-glyph,
 .app-nav.workspace-chrome .chrome-rocker-glyph {
-  display: block;
-  line-height: 1;
-  transform: translateY(-1px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  font-size: 0;
+  font-weight: 400;
+  line-height: 0;
+  text-align: center;
+  transform: none;
+}
+
+.app-nav.workspace-chrome .chrome-add-glyph::before,
+.app-nav.workspace-chrome .chrome-add-glyph::after,
+.app-nav.workspace-chrome .chrome-rocker-glyph::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 13px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+}
+
+.app-nav.workspace-chrome .chrome-add-glyph::after {
+  width: 2px;
+  height: 13px;
 }
 
 .app-nav.workspace-chrome button.dash-switch-hero:hover,
@@ -3785,8 +3825,7 @@ body {
   transform: var(--pressable-focus-transform);
 }
 
-.app-nav.workspace-chrome .composition-undo-button:hover,
-.app-nav.workspace-chrome .composition-add-button:hover {
+.app-nav.workspace-chrome .composition-rocker-control:hover {
   border-color: color-mix(in srgb, var(--rocker-illumination) 34%, color-mix(in srgb, #98a4b2 76%, rgba(255, 255, 255, .40)));
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--rocker-illumination) 12%, var(--navbar-control-hover-bg)), color-mix(in srgb, var(--rocker-illumination) 9%, color-mix(in srgb, var(--navbar-control-hover-bg) 82%, #9ca3af)));
@@ -3798,8 +3837,7 @@ body {
     inset 0 -1px 0 color-mix(in srgb, var(--rocker-illumination) 13%, transparent);
 }
 
-.app-nav.workspace-chrome .composition-undo-button:focus-visible,
-.app-nav.workspace-chrome .composition-add-button:focus-visible {
+.app-nav.workspace-chrome .composition-rocker-control:focus-visible {
   border-color: color-mix(in srgb, var(--rocker-illumination) 36%, var(--line));
   outline-color: color-mix(in srgb, var(--rocker-illumination) 24%, transparent);
   background:
@@ -3827,8 +3865,7 @@ body {
   transform: var(--pressable-active-transform);
 }
 
-.app-nav.workspace-chrome .composition-undo-button:active,
-.app-nav.workspace-chrome .composition-add-button:active {
+.app-nav.workspace-chrome .composition-rocker-control:active {
   border-color: color-mix(in srgb, var(--rocker-illumination) 40%, var(--line));
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--rocker-illumination) 13%, var(--glass-surface-strong)), color-mix(in srgb, var(--rocker-illumination) 10%, var(--navbar-control-hover-bg)));

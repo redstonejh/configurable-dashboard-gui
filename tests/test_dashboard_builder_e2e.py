@@ -190,6 +190,7 @@ def resize_cleanup_state(page: Page) -> dict:
           bodyResize: document.body.classList.contains("panel-resize-active"),
           bodyInteraction: document.body.classList.contains("panel-interaction-active"),
           groupActive: document.body.classList.contains("group-transform-active"),
+          resizeCamera: document.body.classList.contains("resize-auto-zoom-active"),
         })
         """
     )
@@ -204,7 +205,21 @@ def assert_no_resize_artifacts(page: Page) -> None:
         "bodyResize": False,
         "bodyInteraction": False,
         "groupActive": False,
+        "resizeCamera": False,
     }
+
+
+def resize_camera_state(page: Page) -> dict:
+    return page.evaluate(
+        """
+        () => ({
+          active: document.body.classList.contains("resize-auto-zoom-active"),
+          scale: Number(document.body.dataset.resizeCameraScale || getComputedStyle(document.documentElement).getPropertyValue("--resize-camera-scale") || 1),
+          liveTransform: getComputedStyle(document.querySelector(".dashboard-live-resize") || document.body).transform,
+          previewTransform: getComputedStyle(document.querySelector(".dashboard-resize-preview") || document.body).transform,
+        })
+        """
+    )
 
 
 def assert_no_undo_artifacts(page: Page) -> None:
@@ -4238,6 +4253,92 @@ def test_slow_header_drag_can_enter_open_panel_when_no_outside_room(page: Page, 
     assert_clean_browser(page)
 
 
+def test_large_widget_can_enter_open_panel_through_header_chevron(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const grid = document.querySelector(".dashboard-layout-grid");
+          const gap = parseFloat(getComputedStyle(grid).rowGap || "16") || 16;
+          const place = (node, col, row, span, rowSpan = 1) => {
+            node.hidden = false;
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            if (node.classList.contains("db-panel")) {
+              node.classList.remove("db-panel-collapsed");
+              const height = (rowSpan * 81) + (Math.max(0, rowSpan - 1) * gap);
+              node.dataset.savedHeight = String(height);
+              node.style.height = `${height}px`;
+              node.querySelector(".db-panel-hd")?.setAttribute("aria-expanded", "true");
+            } else {
+              const height = (rowSpan * 81) + (Math.max(0, rowSpan - 1) * gap);
+              node.style.height = `${height}px`;
+            }
+          };
+          document.querySelectorAll(".panel-internal-widget-grid").forEach((node) => node.remove());
+          document.querySelector('[data-panel-key="builder-menu"]').hidden = true;
+          document.querySelector('[data-panel-key="builder-notes"]').hidden = true;
+          place(document.querySelector('[data-widget-key="widget-1"]'), 1, 3, 3, 2);
+          place(document.querySelector('[data-panel-key="builder-content"]'), 4, 3, 3, 5);
+        }
+        """
+    )
+
+    widget = page.locator('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="widget-1"]')
+    panel = page.locator('[data-panel-key="builder-content"]')
+    force_open_tools_for_interaction(page, widget)
+    handle_box = widget.locator(".panel-move-handle").bounding_box()
+    header_box = panel.locator(".db-panel-hd").bounding_box()
+    assert handle_box and header_box
+    start_x, start_y = box_center(handle_box)
+    header_x = header_box["x"] + header_box["width"] * 0.18
+    header_y = max(header_box["y"] + 8, min(header_box["y"] + header_box["height"] - 8, start_y + 4))
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(header_x + 10, header_y - 2, steps=18)
+    page.wait_for_timeout(140)
+    page.mouse.move(header_x, header_y + 2, steps=3)
+
+    placeholder = panel.locator(".panel-internal-widget-grid > .widget-placeholder")
+    expect(placeholder).to_be_visible()
+    entry_state = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const placeholder = panel.querySelector(".panel-internal-widget-grid > .widget-placeholder");
+          const widget = document.querySelector('[data-widget-key="widget-1"].widget-dragging');
+          const header = panel.querySelector(".db-panel-hd").getBoundingClientRect();
+          const placeholderRect = placeholder.getBoundingClientRect();
+          return {
+            placeholderSpan: Number(placeholder.dataset.currentSpan),
+            placeholderRows: Number(placeholder.dataset.gridRowSpan),
+            placeholderTopBelowHeader: placeholderRect.top >= header.bottom - 2,
+            panelFeedback: panel.classList.contains("panel-header-entry-accept"),
+            dragging: Boolean(widget),
+          };
+        }
+        """
+    )
+    assert entry_state["placeholderSpan"] >= 3
+    assert entry_state["placeholderRows"] == 2
+    assert entry_state["placeholderTopBelowHeader"] is True
+    assert entry_state["dragging"] is True
+    page.mouse.up()
+
+    child = panel.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="widget-1"]')
+    expect(child).to_be_visible()
+    expect(page.locator('.widget-layout[data-widget-layout-key="builder"]:not(.panel-internal-widget-grid) > .widget-card[data-widget-key="widget-1"]')).to_have_count(0)
+    child_state = grid_item_state(page, '[data-panel-key="builder-content"] .panel-internal-widget-grid > .widget-card[data-widget-key="widget-1"]')
+    assert child_state["span"] >= 3
+    assert child_state["rowSpan"] == 2
+    assert_no_undo_artifacts(page)
+    assert_clean_browser(page)
+
+
 def test_fast_header_pass_through_keeps_workspace_collision(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate(
@@ -4694,9 +4795,20 @@ def test_workspace_chrome_is_spatial_and_modes_still_work(page: Page, app_server
           const add = node.querySelector(".composition-add-button");
           const undoRect = undo.getBoundingClientRect();
           const addRect = add.getBoundingClientRect();
+          const undoGlyph = undo.querySelector(".chrome-rocker-glyph");
+          const addGlyph = add.querySelector(".chrome-add-glyph");
+          const undoGlyphRect = undoGlyph.getBoundingClientRect();
+          const addGlyphRect = addGlyph.getBoundingClientRect();
+          const undoGlyphStyles = getComputedStyle(undoGlyph);
+          const addGlyphStyles = getComputedStyle(addGlyph);
+          const undoGlyphStroke = getComputedStyle(undoGlyph, "::before");
+          const addGlyphHorizontalStroke = getComputedStyle(addGlyph, "::before");
+          const addGlyphVerticalStroke = getComputedStyle(addGlyph, "::after");
           const undoStyles = getComputedStyle(undo);
           const addStyles = getComputedStyle(add);
           return {
+            undoHasSharedClass: undo.classList.contains("composition-rocker-control"),
+            addHasSharedClass: add.classList.contains("composition-rocker-control"),
             undoWidth: undoRect.width,
             addWidth: addRect.width,
             undoHeight: undoRect.height,
@@ -4712,10 +4824,48 @@ def test_workspace_chrome_is_spatial_and_modes_still_work(page: Page, app_server
             undoBackground: `${undoStyles.backgroundColor} ${undoStyles.backgroundImage}`,
             addShadow: addStyles.boxShadow,
             undoShadow: undoStyles.boxShadow,
+            addPaddingLeft: parseFloat(addStyles.paddingLeft),
+            undoPaddingLeft: parseFloat(undoStyles.paddingLeft),
+            addPaddingRight: parseFloat(addStyles.paddingRight),
+            undoPaddingRight: parseFloat(undoStyles.paddingRight),
+            addPaddingTop: parseFloat(addStyles.paddingTop),
+            undoPaddingTop: parseFloat(undoStyles.paddingTop),
+            addPaddingBottom: parseFloat(addStyles.paddingBottom),
+            undoPaddingBottom: parseFloat(undoStyles.paddingBottom),
+            addBorderWidth: parseFloat(addStyles.borderTopWidth),
+            undoBorderWidth: parseFloat(undoStyles.borderTopWidth),
+            addBoxSizing: addStyles.boxSizing,
+            undoBoxSizing: undoStyles.boxSizing,
+            addFlex: `${addStyles.flexGrow} ${addStyles.flexShrink} ${addStyles.flexBasis}`,
+            undoFlex: `${undoStyles.flexGrow} ${undoStyles.flexShrink} ${undoStyles.flexBasis}`,
+            addLineHeight: addStyles.lineHeight,
+            undoLineHeight: undoStyles.lineHeight,
+            addGlyphFont: parseFloat(addGlyphStyles.fontSize),
+            undoGlyphFont: parseFloat(undoGlyphStyles.fontSize),
+            addGlyphWidth: addGlyphRect.width,
+            undoGlyphWidth: undoGlyphRect.width,
+            addGlyphCenterX: addGlyphRect.left + (addGlyphRect.width / 2),
+            undoGlyphCenterX: undoGlyphRect.left + (undoGlyphRect.width / 2),
+            addCenterX: addRect.left + (addRect.width / 2),
+            undoCenterX: undoRect.left + (undoRect.width / 2),
+            addGlyphCenterY: addGlyphRect.top + (addGlyphRect.height / 2),
+            undoGlyphCenterY: undoGlyphRect.top + (undoGlyphRect.height / 2),
+            addCenterY: addRect.top + (addRect.height / 2),
+            undoCenterY: undoRect.top + (undoRect.height / 2),
+            undoStrokeWidth: parseFloat(undoGlyphStroke.width),
+            undoStrokeHeight: parseFloat(undoGlyphStroke.height),
+            addHorizontalStrokeWidth: parseFloat(addGlyphHorizontalStroke.width),
+            addHorizontalStrokeHeight: parseFloat(addGlyphHorizontalStroke.height),
+            addVerticalStrokeWidth: parseFloat(addGlyphVerticalStroke.width),
+            addVerticalStrokeHeight: parseFloat(addGlyphVerticalStroke.height),
+            addGlyphTransform: addGlyphStyles.transform,
+            undoGlyphTransform: undoGlyphStyles.transform,
           };
         }
         """
     )
+    assert rocker_metrics["undoHasSharedClass"] is True
+    assert rocker_metrics["addHasSharedClass"] is True
     assert abs(rocker_metrics["undoWidth"] - rocker_metrics["addWidth"]) <= .5
     assert abs(rocker_metrics["undoHeight"] - rocker_metrics["addHeight"]) <= .5
     assert 4 <= rocker_metrics["gap"] <= 8
@@ -4726,6 +4876,26 @@ def test_workspace_chrome_is_spatial_and_modes_still_work(page: Page, app_server
     assert rocker_metrics["addBackground"] != rocker_metrics["undoBackground"]
     assert "inset" in rocker_metrics["addShadow"]
     assert "inset" in rocker_metrics["undoShadow"]
+    assert rocker_metrics["addPaddingLeft"] == rocker_metrics["undoPaddingLeft"] == 0
+    assert rocker_metrics["addPaddingRight"] == rocker_metrics["undoPaddingRight"] == 0
+    assert rocker_metrics["addPaddingTop"] == rocker_metrics["undoPaddingTop"] == 0
+    assert rocker_metrics["addPaddingBottom"] == rocker_metrics["undoPaddingBottom"] == 0
+    assert rocker_metrics["addBorderWidth"] == rocker_metrics["undoBorderWidth"] == 1
+    assert rocker_metrics["addBoxSizing"] == rocker_metrics["undoBoxSizing"] == "border-box"
+    assert rocker_metrics["addFlex"] == rocker_metrics["undoFlex"]
+    assert rocker_metrics["addLineHeight"] == rocker_metrics["undoLineHeight"]
+    assert abs(rocker_metrics["undoGlyphFont"] - rocker_metrics["addGlyphFont"]) <= .1
+    assert abs(rocker_metrics["undoGlyphWidth"] - rocker_metrics["addGlyphWidth"]) <= .5
+    assert abs(rocker_metrics["addGlyphCenterX"] - rocker_metrics["addCenterX"]) <= .5
+    assert abs(rocker_metrics["undoGlyphCenterX"] - rocker_metrics["undoCenterX"]) <= .5
+    assert abs(rocker_metrics["addGlyphCenterY"] - rocker_metrics["addCenterY"]) <= .5
+    assert abs(rocker_metrics["undoGlyphCenterY"] - rocker_metrics["undoCenterY"]) <= .5
+    assert rocker_metrics["addGlyphTransform"] == "none"
+    assert rocker_metrics["undoGlyphTransform"] == "none"
+    assert abs(rocker_metrics["undoStrokeWidth"] - rocker_metrics["addHorizontalStrokeWidth"]) <= .1
+    assert abs(rocker_metrics["undoStrokeHeight"] - rocker_metrics["addHorizontalStrokeHeight"]) <= .1
+    assert abs(rocker_metrics["addVerticalStrokeHeight"] - rocker_metrics["addHorizontalStrokeWidth"]) <= .1
+    assert abs(rocker_metrics["addVerticalStrokeWidth"] - rocker_metrics["addHorizontalStrokeHeight"]) <= .1
     identity_metrics = page.locator(".dash-switch-hero").evaluate(
         """
         node => {
@@ -6032,6 +6202,106 @@ def test_engineer_mode_relationship_links_and_logic_graph_are_gated_and_persiste
     assert_clean_browser(page)
 
 
+def test_engineer_relationship_wire_routes_follow_natural_direction(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
+    page.evaluate(
+        """
+        () => {
+          window.dashboardRelationshipRuntime.setGraph("builder", {
+            version: 1,
+            links: [],
+            contextLinks: [],
+            styleRules: [],
+            operators: [
+              { id: "route-a", operatorType: "AND", x: 300, y: 220 },
+              { id: "route-b", operatorType: "OR", x: 760, y: 520 },
+              { id: "route-c", operatorType: "AND", x: 760, y: 220 },
+              { id: "route-d", operatorType: "OR", x: 300, y: 220 },
+              { id: "route-e", operatorType: "AND", x: 520, y: 260 },
+              { id: "route-f", operatorType: "OR", x: 568, y: 580 },
+              { id: "route-g", operatorType: "AND", x: 760, y: 340 },
+              { id: "route-h", operatorType: "OR", x: 320, y: 620 }
+            ],
+            relationships: [
+              { id: "route-down-right", sourceId: "route-a", targetId: "route-b", type: "semantic" },
+              { id: "route-right-left", sourceId: "route-c", targetId: "route-d", type: "semantic" },
+              { id: "route-vertical", sourceId: "route-e", targetId: "route-f", type: "semantic" },
+              { id: "route-down-left", sourceId: "route-g", targetId: "route-h", type: "semantic" }
+            ]
+          });
+        }
+        """
+    )
+    page.wait_for_function("() => document.querySelectorAll('.workspace-relationship-path').length === 4")
+
+    routes = page.evaluate(
+        """
+        () => {
+          const parse = (id) => {
+            const path = document.querySelector(`.workspace-relationship-path[data-relationship-id="${id}"]`);
+            const numbers = [...path.getAttribute("d").matchAll(/-?\\d+(?:\\.\\d+)?/g)].map((match) => Number(match[0]));
+            return {
+              sx: numbers[0],
+              sy: numbers[1],
+              c1x: numbers[2],
+              c1y: numbers[3],
+              c2x: numbers[4],
+              c2y: numbers[5],
+              tx: numbers[6],
+              ty: numbers[7],
+              commandCount: (path.getAttribute("d").match(/\\bC\\b/g) || []).length,
+            };
+          };
+          return {
+            downRight: parse("route-down-right"),
+            rightLeft: parse("route-right-left"),
+            vertical: parse("route-vertical"),
+            downLeft: parse("route-down-left"),
+          };
+        }
+        """
+    )
+
+    for route in routes.values():
+        assert route["commandCount"] == 1
+
+    down_right = routes["downRight"]
+    assert down_right["tx"] > down_right["sx"]
+    assert down_right["ty"] > down_right["sy"]
+    assert down_right["sx"] <= down_right["c1x"] <= down_right["tx"]
+    assert down_right["sx"] <= down_right["c2x"] <= down_right["tx"]
+    assert down_right["sy"] <= down_right["c1y"] <= down_right["ty"]
+    assert down_right["sy"] <= down_right["c2y"] <= down_right["ty"]
+
+    right_left = routes["rightLeft"]
+    assert right_left["tx"] < right_left["sx"]
+    assert right_left["tx"] <= right_left["c1x"] <= right_left["sx"]
+    assert right_left["tx"] <= right_left["c2x"] <= right_left["sx"]
+
+    vertical = routes["vertical"]
+    assert abs(vertical["tx"] - vertical["sx"]) <= 1
+    assert vertical["ty"] > vertical["sy"]
+    assert 24 <= vertical["c1x"] - vertical["sx"] <= 90
+    assert 24 <= vertical["c2x"] - vertical["tx"] <= 90
+    assert vertical["sy"] < vertical["c1y"] < vertical["ty"]
+    assert vertical["sy"] < vertical["c2y"] < vertical["ty"]
+
+    down_left = routes["downLeft"]
+    assert down_left["tx"] < down_left["sx"]
+    assert down_left["ty"] > down_left["sy"]
+    assert down_left["tx"] <= down_left["c1x"] <= down_left["sx"]
+    assert down_left["tx"] <= down_left["c2x"] <= down_left["sx"]
+    assert down_left["sy"] <= down_left["c1y"] <= down_left["ty"]
+    assert down_left["sy"] <= down_left["c2y"] <= down_left["ty"]
+    assert_clean_browser(page)
+
+
 def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate("localStorage.clear()")
@@ -6185,6 +6455,22 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
     assert created["graphLinks"][0]["signalType"] == "context"
     assert created["graphLinks"][0]["source"]["role"] == "output"
     assert created["graphLinks"][0]["target"]["role"] == "input"
+    ambient_style = page.evaluate(
+        """
+        () => {
+          const path = document.querySelector('.workspace-relationship-path[data-relationship-type="context"]');
+          const styles = getComputedStyle(path);
+          return {
+            opacity: Number(styles.opacity),
+            strokeWidth: Number.parseFloat(styles.strokeWidth),
+            filter: styles.filter,
+          };
+        }
+        """
+    )
+    assert ambient_style["opacity"] >= 0.45
+    assert ambient_style["strokeWidth"] >= 1.4
+    assert ambient_style["filter"] != "none"
 
     page.evaluate(
         """
@@ -6206,12 +6492,15 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
           connected: document.querySelectorAll('.workspace-relationship-path[data-relationship-highlight="connected"]').length,
           unrelated: document.querySelectorAll('.workspace-relationship-path[data-relationship-highlight="unrelated"]').length,
           connectedStroke: getComputedStyle(document.querySelector('.workspace-relationship-path[data-relationship-highlight="connected"]')).stroke,
+          connectedOpacity: Number(getComputedStyle(document.querySelector('.workspace-relationship-path[data-relationship-highlight="connected"]')).opacity),
         })
         """
     )
     assert hover_trace["connected"] >= 1
     assert hover_trace["unrelated"] >= 1
     assert "239, 68, 68" in hover_trace["connectedStroke"] or "#ef4444" in hover_trace["connectedStroke"].lower()
+    subdued_unrelated = page.evaluate("() => Number(getComputedStyle(document.querySelector('.workspace-relationship-path[data-relationship-highlight=\"unrelated\"]')).opacity)")
+    assert subdued_unrelated < hover_trace["connectedOpacity"]
     page.mouse.move(24, 24)
     page.wait_for_timeout(120)
     assert page.evaluate('() => document.querySelectorAll(".workspace-relationship-path[data-relationship-highlight]").length') == 0
@@ -6387,6 +6676,134 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
         """
     )
     assert reloaded == {"links": [], "deleteControls": 0}
+    assert_clean_browser(page)
+
+
+def test_engineer_port_double_click_deletes_exact_port_connections(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
+    page.wait_for_function(
+        "() => document.querySelector('.workspace-wire-nodule[data-wire-object-id=\"widget-2\"][data-wire-port-role=\"input\"]')"
+    )
+
+    page.evaluate(
+        """
+        () => {
+          const runtime = window.dashboardRelationshipRuntime;
+          const port = (objectId, role) => runtime.portsForObject("builder", objectId).find((entry) => entry.role === role);
+          runtime.addLink("builder", { id: "into-widget-2-a", source: port("widget-1", "output"), target: port("widget-2", "input"), signalType: "query" });
+          runtime.addLink("builder", { id: "into-widget-2-b", source: port("widget-3", "output"), target: port("widget-2", "input"), signalType: "filter" });
+          runtime.addLink("builder", { id: "widget-2-outgoing", source: port("widget-2", "output"), target: port("widget-4", "input"), signalType: "semantic" });
+          runtime.addLink("builder", { id: "widget-1-extra-outgoing", source: port("widget-1", "output"), target: port("widget-4", "input"), signalType: "data" });
+        }
+        """
+    )
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.links('builder').length === 4")
+
+    widget_2_input = page.locator('.workspace-wire-nodule[data-wire-object-id="widget-2"][data-wire-port-role="input"]').first
+    widget_2_input.dblclick()
+    page.wait_for_function(
+        """
+        () => {
+          const ids = window.dashboardRelationshipRuntime.links("builder").map((link) => link.id).sort();
+          return JSON.stringify(ids) === JSON.stringify(["widget-1-extra-outgoing", "widget-2-outgoing"]);
+        }
+        """
+    )
+    assert page.evaluate('() => document.querySelectorAll(".workspace-wire-drag-path").length') == 0
+
+    press_dashboard_undo(page)
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.links('builder').length === 4")
+    press_dashboard_redo(page)
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.links('builder').length === 2")
+
+    page.evaluate(
+        """
+        () => {
+          const runtime = window.dashboardRelationshipRuntime;
+          const port = (objectId, role) => runtime.portsForObject("builder", objectId).find((entry) => entry.role === role);
+          runtime.addLink("builder", { id: "from-widget-1-a", source: port("widget-1", "output"), target: port("widget-2", "input"), signalType: "query" });
+          runtime.addLink("builder", { id: "from-widget-1-b", source: port("widget-1", "output"), target: port("widget-3", "input"), signalType: "filter" });
+        }
+        """
+    )
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.links('builder').length === 4")
+    widget_1_output = page.locator('.workspace-wire-nodule[data-wire-object-id="widget-1"][data-wire-port-role="output"]').first
+    widget_1_output.dblclick()
+    page.wait_for_function(
+        """
+        () => {
+          const ids = window.dashboardRelationshipRuntime.links("builder").map((link) => link.id).sort();
+          return JSON.stringify(ids) === JSON.stringify(["widget-2-outgoing"]);
+        }
+        """
+    )
+
+    press_dashboard_undo(page)
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.links('builder').length === 4")
+    press_dashboard_redo(page)
+    page.wait_for_function(
+        """
+        () => {
+          const ids = window.dashboardRelationshipRuntime.links("builder").map((link) => link.id).sort();
+          return JSON.stringify(ids) === JSON.stringify(["widget-2-outgoing"]);
+        }
+        """
+    )
+
+    page.evaluate(
+        """
+        () => {
+          const runtime = window.dashboardRelationshipRuntime;
+          const port = (objectId, role) => runtime.portsForObject("builder", objectId).find((entry) => entry.role === role);
+          runtime.addContextLink("builder", {
+            id: "port-context-delete",
+            sourceObjectId: "widget-1",
+            targetObjectId: "widget-2",
+            mode: "inherit"
+          }, undefined, {
+            sourcePort: port("widget-1", "output"),
+            targetPort: port("widget-2", "input")
+          });
+        }
+        """
+    )
+    page.wait_for_function(
+        "() => window.dashboardRelationshipRuntime.contextLinks('builder').length === 1 && window.dashboardRelationshipRuntime.links('builder').some((link) => link.metadata.contextLinkId === 'port-context-delete')"
+    )
+    widget_2_input.dblclick()
+    page.wait_for_function(
+        """
+        () => window.dashboardRelationshipRuntime.contextLinks("builder").length === 0 &&
+          window.dashboardRelationshipRuntime.links("builder").map((link) => link.id).join(",") === "widget-2-outgoing"
+        """
+    )
+    press_dashboard_undo(page)
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.contextLinks('builder').length === 1")
+    press_dashboard_redo(page)
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.contextLinks('builder').length === 0")
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    saved = page.evaluate(
+        """
+        () => ({
+          links: window.dashboardRelationshipRuntime.links("builder").map((link) => link.id),
+          contextLinks: window.dashboardRelationshipRuntime.contextLinks("builder").length,
+          nodules: document.querySelectorAll(".workspace-wire-nodule").length,
+        })
+        """
+    )
+    assert saved["links"] == ["widget-2-outgoing"]
+    assert saved["contextLinks"] == 0
+    assert saved["nodules"] == 0
     assert_clean_browser(page)
 
 
@@ -7215,9 +7632,9 @@ def test_timeframe_controls_use_shared_glass_color(page: Page, app_server: str) 
 def test_timeframe_widget_is_createable_and_uses_widget_system(page: Page, app_server: str) -> None:
     goto(page, app_server)
 
-    page.locator(".panel-add-button").click()
-    expect(page.locator('.widget-add-action[data-widget-kind="timeframe"]')).to_have_count(1)
-    page.locator('.widget-add-action[data-widget-kind="timeframe"]').click()
+    controls = open_add_category(page, "controls")
+    expect(controls.locator('.widget-add-action[data-widget-kind="timeframe"]')).to_have_count(1)
+    controls.locator('.widget-add-action[data-widget-kind="timeframe"]').click()
 
     timeframe_widgets = page.locator('.widget-layout > .timeframe-widget[data-widget-type="controls"]')
     expect(timeframe_widgets).to_have_count(2)
@@ -7332,18 +7749,15 @@ def test_timeframe_control_widget_writes_context_time_range_and_persists(page: P
     page.reload(wait_until="networkidle")
     page.wait_for_selector(".page")
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="timeframe"]').click()
+    open_add_category(page, "controls").locator('.widget-add-action[data-widget-kind="timeframe"]').click()
     timeframe = page.locator('.widget-layout > .timeframe-widget[data-widget-definition="timeframe"]').last
     expect(timeframe).to_be_visible()
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="table"]').click()
+    open_add_category(page, "data").locator('.widget-add-action[data-widget-kind="table"]').click()
     table = page.locator('.widget-layout > .widget-card[data-widget-definition="table"]').last
     expect(table).to_be_visible()
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="graph"]').click()
+    open_add_category(page, "visualization", "Charts").locator('.widget-add-action[data-widget-kind="chart-line"]').click()
     chart = page.locator('.widget-layout > .widget-card[data-widget-definition="chart"]').last
     expect(chart).to_be_visible()
 
@@ -7489,6 +7903,99 @@ def test_timeframe_control_widget_writes_context_time_range_and_persists(page: P
     persisted_range = timeframe.evaluate("node => JSON.parse(node.dataset.contextTimeRange || '{}')")
     assert persisted_range["start"] == setup["today"]
     assert persisted_range["end"] == setup["today"]
+    assert_clean_browser(page)
+
+
+def test_timeframe_widget_supports_configurable_filters_and_repeating_intervals(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    open_add_category(page, "controls").locator('.widget-add-action[data-widget-kind="timeframe"]').click()
+    timeframe = page.locator('.widget-layout > .timeframe-widget[data-widget-definition="timeframe"]').last
+    expect(timeframe).to_be_visible()
+
+    resolved = page.evaluate(
+        """
+        () => {
+          const runtime = window.dashboardWidgetRuntime;
+          const now = new Date("2026-05-26T12:00:00");
+          const weekConfig = { weekStartDay: 1 };
+          const repeating = {
+            id: "pay-current",
+            label: "Pay period",
+            type: "custom_repeating",
+            seedStart: "2026-04-27",
+            seedEnd: "2026-05-10",
+            repeatEvery: 2,
+            repeatUnit: "weeks"
+          };
+          return {
+            thisWeek: runtime.resolveTimeframeFilter({ id: "week", label: "This week", type: "this_week" }, weekConfig, {}, now),
+            lastWeek: runtime.resolveTimeframeFilter({ id: "last-week", label: "Last week", type: "last_week" }, weekConfig, {}, now),
+            previousPay: runtime.resolveTimeframeFilter({ ...repeating, occurrence: "previous" }, {}, {}, now),
+            currentPay: runtime.resolveTimeframeFilter({ ...repeating, occurrence: "current" }, {}, {}, now),
+            nextPay: runtime.resolveTimeframeFilter({ ...repeating, occurrence: "next" }, {}, {}, now)
+          };
+        }
+        """
+    )
+    assert resolved["thisWeek"]["start"] == "2026-05-25"
+    assert resolved["thisWeek"]["end"] == "2026-05-31"
+    assert resolved["lastWeek"]["start"] == "2026-05-18"
+    assert resolved["lastWeek"]["end"] == "2026-05-24"
+    assert resolved["previousPay"]["start"] == "2026-05-11"
+    assert resolved["previousPay"]["end"] == "2026-05-24"
+    assert resolved["currentPay"]["start"] == "2026-05-25"
+    assert resolved["currentPay"]["end"] == "2026-06-07"
+    assert resolved["nextPay"]["start"] == "2026-06-08"
+    assert resolved["nextPay"]["end"] == "2026-06-21"
+
+    timeframe.evaluate(
+        """
+        node => node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }))
+        """
+    )
+    workbench = timeframe.locator(".widget-workbench-panel")
+    expect(workbench).to_be_visible()
+    expect(workbench).to_contain_text("Time filter workbench")
+    before_count = timeframe.evaluate("node => JSON.parse(node.dataset.widgetConfig || '{}').filters.length")
+    workbench.locator(".timeframe-add-filter").click()
+    expect(workbench).to_be_visible()
+    assert timeframe.evaluate("node => JSON.parse(node.dataset.widgetConfig || '{}').filters.length") == before_count + 1
+    workbench.locator('[data-timeframe-config-part="weekStartDay"]').select_option("1")
+    expect(workbench).to_be_visible()
+    assert timeframe.evaluate("node => JSON.parse(node.dataset.widgetConfig || '{}').weekStartDay") == "1"
+
+    editor = workbench.locator(".timeframe-filter-editor").last
+    editor.locator('[data-timeframe-filter-part="label"]').fill("Pay period")
+    expect(workbench).to_be_visible()
+    editor.locator('[data-timeframe-filter-part="type"]').select_option("custom_repeating")
+    expect(workbench).to_be_visible()
+    editor = workbench.locator(".timeframe-filter-editor").last
+    editor.locator('[data-timeframe-filter-part="seedStart"]').fill("2026-04-27")
+    editor.locator('[data-timeframe-filter-part="seedEnd"]').fill("2026-05-10")
+    editor.locator('[data-timeframe-filter-part="repeatEvery"]').fill("2")
+    editor.locator('[data-timeframe-filter-part="repeatUnit"]').select_option("weeks")
+    editor.locator('[data-timeframe-filter-part="selected"]').check()
+    expect(workbench).to_be_visible()
+    expect(timeframe.locator(".timeframe-selector")).to_contain_text("Pay period")
+    before_content = timeframe.locator(".timeframe-selector").evaluate("node => getComputedStyle(node, '::before').content")
+    assert before_content in ("none", "normal", '""')
+
+    config = timeframe.evaluate("node => JSON.parse(node.dataset.widgetConfig || '{}')")
+    assert config["selectedFilterId"]
+    assert any(item["label"] == "Pay period" and item["type"] == "custom_repeating" for item in config["filters"])
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    timeframe = page.locator('.widget-layout > .timeframe-widget[data-custom-widget="true"][data-widget-definition="timeframe"]').last
+    expect(timeframe).to_be_visible()
+    saved = timeframe.evaluate("node => JSON.parse(node.dataset.widgetConfig || '{}')")
+    assert any(item["label"] == "Pay period" and item["type"] == "custom_repeating" for item in saved["filters"])
+    assert saved["selectedFilterId"]
     assert_clean_browser(page)
 
 
@@ -8487,6 +8994,391 @@ def test_panel_local_chart_resize_preserves_active_widget_anchor(page: Page, app
     page.wait_for_selector(".page")
     reloaded_chart = grid_item_state(page, '.panel-internal-widget-grid > .chart-widget-card[data-widget-key="panel-local-chart-resize-anchor"]')
     assert grid_state_tuple(reloaded_chart) == grid_state_tuple(after_chart)
+    assert_clean_browser(page)
+
+
+def test_open_panel_expands_to_contain_displaced_panel_child_widgets(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    setup = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const body = panel?.querySelector(":scope > .db-panel-body");
+          if (!panel || !body) return { ready: false };
+          let grid = body.querySelector(":scope > .panel-internal-widget-grid");
+          if (!grid) {
+            grid = document.createElement("div");
+            grid.className = "panel-internal-widget-grid widget-layout";
+            grid.dataset.widgetLayoutKey = "builder:panel:builder-content";
+            grid.dataset.panelContainerKey = "builder-content";
+            body.appendChild(grid);
+          }
+          if (!grid.__initWidget) return { ready: false, hasInit: false };
+          grid.replaceChildren();
+          panel.classList.remove("db-panel-collapsed");
+          panel.dataset.gridCol = "1";
+          panel.dataset.gridRow = "2";
+          panel.dataset.currentSpan = "4";
+          panel.dataset.gridRowSpan = "3";
+          const panelLayout = panel.closest(".panel-layout");
+          const panelStyles = getComputedStyle(panelLayout);
+          const panelGap = parseFloat(panelStyles.rowGap || panelStyles.gap || "16") || 16;
+          const panelRowHeight = parseFloat(panelStyles.getPropertyValue("--dashboard-grid-row-height")) || 81;
+          const initialHeight = (3 * panelRowHeight) + (2 * panelGap);
+          panel.dataset.savedHeight = String(initialHeight);
+          panel.style.gridColumn = "1 / span 4";
+          panel.style.gridRow = "2 / span 3";
+          panel.style.height = `${initialHeight}px`;
+          panel.querySelector(":scope > .db-panel-hd")?.setAttribute("aria-expanded", "true");
+
+          const sources = [...document.querySelectorAll('.widget-layout:not(.panel-internal-widget-grid) > .widget-card:not(.range-bar)')].slice(0, 2);
+          if (sources.length < 2) return { ready: false, sourceCount: sources.length };
+          const resetTransient = (node) => {
+            delete node.dataset.widgetInitialized;
+            node.classList.remove(
+              "widget-tools-open",
+              "widget-settings-schema-open",
+              "widget-workbench-open",
+              "widget-dragging",
+              "dashboard-active-resize",
+              "dashboard-live-resize",
+              "dashboard-resize-source",
+              "group-selected",
+              "group-transform-member",
+              "db-panel-pinned"
+            );
+            node.querySelector(".panel-settings-toggle")?.setAttribute("aria-expanded", "false");
+          };
+          const place = (node, col, row, span, rowSpan) => {
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            const styles = getComputedStyle(grid);
+            const rowHeight = parseFloat(styles.getPropertyValue("--dashboard-grid-row-height")) || 66;
+            const gap = parseFloat(styles.rowGap || styles.gap || "10") || 10;
+            node.style.height = `${(rowSpan * rowHeight) + (Math.max(0, rowSpan - 1) * gap)}px`;
+          };
+          const cloneIntoPanel = (source, key, row) => {
+            const clone = source.cloneNode(true);
+            source.remove();
+            clone.dataset.widgetKey = key;
+            clone.dataset.customWidget = "true";
+            clone.dataset.panelChildWidget = "true";
+            clone.dataset.parentPanelKey = panel.dataset.panelKey || "";
+            resetTransient(clone);
+            grid.appendChild(clone);
+            place(clone, 1, row, 3, 1);
+            grid.__initWidget(clone);
+            return clone;
+          };
+          cloneIntoPanel(sources[0], "panel-child-grow-source", 1);
+          cloneIntoPanel(sources[1], "panel-child-grow-displaced", 2);
+          document.body.classList.remove("group-select-active", "panel-interaction-active", "panel-resize-active");
+          return { ready: true, initialHeight };
+        }
+        """
+    )
+    assert setup["ready"] is True
+
+    panel = page.locator('[data-panel-key="builder-content"]')
+    source = page.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="panel-child-grow-source"]')
+    displaced = page.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="panel-child-grow-displaced"]')
+    expect(source).to_be_visible()
+    expect(displaced).to_be_visible()
+    before = panel.evaluate(
+        """
+        node => ({
+          rows: Number(node.dataset.gridRowSpan || 0),
+          height: node.getBoundingClientRect().height,
+          savedHeight: Number(node.dataset.savedHeight || 0)
+        })
+        """
+    )
+
+    force_open_tools_for_interaction(page, source)
+    drag_by(page, source.locator(".panel-move-handle"), 0, 95, steps=14)
+    page.wait_for_timeout(420)
+
+    state = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const source = panel.querySelector('[data-widget-key="panel-child-grow-source"]');
+          const displaced = panel.querySelector('[data-widget-key="panel-child-grow-displaced"]');
+          const panelRect = panel.getBoundingClientRect();
+          const displacedRect = displaced.getBoundingClientRect();
+          return {
+            panelRows: Number(panel.dataset.gridRowSpan || 0),
+            panelHeight: panelRect.height,
+            savedHeight: Number(panel.dataset.savedHeight || 0),
+            sourceRows: Number(source.dataset.gridRowSpan || 0),
+            sourceRow: Number(source.dataset.gridRow || 0),
+            displacedRow: Number(displaced.dataset.gridRow || 0),
+            maxChildBottom: Math.max(source.getBoundingClientRect().bottom, displacedRect.bottom),
+            panelBottom: panelRect.bottom,
+            childInsidePanel: Math.max(source.getBoundingClientRect().bottom, displacedRect.bottom) <= panelRect.bottom + 2
+          };
+        }
+        """
+    )
+    assert state["sourceRow"] >= 2
+    assert state["displacedRow"] > 2
+    assert state["panelRows"] > before["rows"]
+    assert state["savedHeight"] > before["savedHeight"]
+    assert state["childInsidePanel"] is True
+
+    page.locator('[data-panel-key="builder-content"] > .db-panel-hd').click(position={"x": 40, "y": 40}, force=True)
+    expect(panel).to_have_class(re.compile("db-panel-collapsed"))
+    page.locator('[data-panel-key="builder-content"] > .db-panel-hd').click(position={"x": 40, "y": 40}, force=True)
+    expect(panel).not_to_have_class(re.compile("db-panel-collapsed"))
+    reopened = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const children = [...panel.querySelectorAll('.panel-internal-widget-grid > .widget-card')];
+          const panelRect = panel.getBoundingClientRect();
+          return {
+            rows: Number(panel.dataset.gridRowSpan || 0),
+            maxChildBottom: Math.max(...children.map((child) => child.getBoundingClientRect().bottom)),
+            panelBottom: panelRect.bottom
+          };
+        }
+        """
+    )
+    assert reopened["rows"] == state["panelRows"]
+    assert reopened["maxChildBottom"] <= reopened["panelBottom"] + 2
+
+    force_open_tools_for_interaction(page, source)
+    drag_by(page, source.locator(".panel-resize-handle"), 20, 135, steps=12)
+    page.wait_for_timeout(360)
+    resized = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const children = [...panel.querySelectorAll('.panel-internal-widget-grid > .widget-card')];
+          const panelRect = panel.getBoundingClientRect();
+          return {
+            rows: Number(panel.dataset.gridRowSpan || 0),
+            sourceRows: Number(panel.querySelector('[data-widget-key="panel-child-grow-source"]').dataset.gridRowSpan || 0),
+            maxChildBottom: Math.max(...children.map((child) => child.getBoundingClientRect().bottom)),
+            panelBottom: panelRect.bottom
+          };
+        }
+        """
+    )
+    assert resized["sourceRows"] > state["sourceRows"]
+    assert resized["rows"] >= reopened["rows"]
+    assert resized["maxChildBottom"] <= resized["panelBottom"] + 2
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    reloaded = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const children = [...panel.querySelectorAll('.panel-internal-widget-grid > .widget-card')];
+          const panelRect = panel.getBoundingClientRect();
+          return {
+            rows: Number(panel.dataset.gridRowSpan || 0),
+            savedHeight: Number(panel.dataset.savedHeight || 0),
+            maxChildBottom: Math.max(...children.map((child) => child.getBoundingClientRect().bottom)),
+            panelBottom: panelRect.bottom
+          };
+        }
+        """
+    )
+    assert reloaded["rows"] == resized["rows"]
+    assert reloaded["savedHeight"] >= state["savedHeight"]
+    assert reloaded["maxChildBottom"] <= reloaded["panelBottom"] + 2
+    assert_no_resize_artifacts(page)
+    assert_clean_browser(page)
+
+
+def test_panel_child_widget_sequential_and_group_resize_state_is_preserved(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    setup = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const body = panel?.querySelector(":scope > .db-panel-body");
+          if (!panel || !body) return { ready: false };
+          panel.classList.remove("db-panel-collapsed");
+          panel.dataset.gridCol = "1";
+          panel.dataset.gridRow = "2";
+          panel.dataset.currentSpan = "5";
+          panel.dataset.gridRowSpan = "8";
+          panel.dataset.savedHeight = "750";
+          panel.style.gridColumn = "1 / span 5";
+          panel.style.gridRow = "2 / span 8";
+          panel.style.height = "750px";
+          panel.querySelector(":scope > .db-panel-hd")?.setAttribute("aria-expanded", "true");
+          let grid = body.querySelector(":scope > .panel-internal-widget-grid");
+          if (!grid) {
+            grid = document.createElement("div");
+            grid.className = "panel-internal-widget-grid widget-layout";
+            grid.dataset.widgetLayoutKey = "builder:panel:builder-content";
+            grid.dataset.panelContainerKey = "builder-content";
+            body.appendChild(grid);
+          }
+          grid.replaceChildren();
+          const sources = [...document.querySelectorAll('.widget-layout:not(.panel-internal-widget-grid) > .widget-card:not(.range-bar)')].slice(0, 3);
+          if (sources.length < 3 || !grid.__initWidget) return { ready: false, sourceCount: sources.length, hasInit: Boolean(grid.__initWidget) };
+          const resetTransient = (node) => {
+            delete node.dataset.widgetInitialized;
+            node.classList.remove(
+              "widget-tools-open",
+              "widget-settings-schema-open",
+              "widget-workbench-open",
+              "widget-dragging",
+              "dashboard-active-resize",
+              "dashboard-live-resize",
+              "dashboard-resize-source",
+              "group-selected",
+              "group-transform-member",
+              "db-panel-pinned"
+            );
+            node.querySelector(".panel-settings-toggle")?.setAttribute("aria-expanded", "false");
+          };
+          const place = (node, col, row, span, rowSpan) => {
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            const styles = getComputedStyle(grid);
+            const rowHeight = parseFloat(styles.getPropertyValue("--dashboard-grid-row-height")) || 81;
+            const gap = parseFloat(styles.rowGap || styles.gap || "12") || 12;
+            node.style.height = `${(rowSpan * rowHeight) + (Math.max(0, rowSpan - 1) * gap)}px`;
+          };
+          const keys = ["panel-child-resize-a", "panel-child-resize-b", "panel-child-resize-c"];
+          const placements = [
+            [1, 1, 2, 1],
+            [3, 1, 2, 1],
+            [1, 3, 2, 1],
+          ];
+          sources.forEach((source, index) => {
+            const clone = source.cloneNode(true);
+            source.remove();
+            clone.dataset.widgetKey = keys[index];
+            clone.dataset.customWidget = "true";
+            clone.dataset.panelChildWidget = "true";
+            clone.dataset.parentPanelKey = panel.dataset.panelKey || "";
+            resetTransient(clone);
+            grid.appendChild(clone);
+            place(clone, ...placements[index]);
+            grid.__initWidget(clone);
+          });
+          document.body.classList.remove("group-select-active", "panel-interaction-active", "panel-resize-active");
+          return { ready: true };
+        }
+        """
+    )
+    assert setup["ready"] is True
+
+    selector_a = '.panel-internal-widget-grid > .widget-card[data-widget-key="panel-child-resize-a"]'
+    selector_b = '.panel-internal-widget-grid > .widget-card[data-widget-key="panel-child-resize-b"]'
+    selector_c = '.panel-internal-widget-grid > .widget-card[data-widget-key="panel-child-resize-c"]'
+    child_a = page.locator(selector_a)
+    child_b = page.locator(selector_b)
+    child_c = page.locator(selector_c)
+    expect(child_a).to_be_visible()
+    expect(child_b).to_be_visible()
+    expect(child_c).to_be_visible()
+
+    force_open_tools_for_interaction(page, child_a)
+    drag_by(page, child_a.locator(".panel-resize-handle"), 210, 125, steps=14)
+    page.wait_for_timeout(360)
+    a_after_first_resize = grid_item_state(page, selector_a)
+    b_before_second_resize = grid_item_state(page, selector_b)
+    assert a_after_first_resize["span"] > 2
+    assert a_after_first_resize["rowSpan"] > 1
+
+    force_open_tools_for_interaction(page, child_b)
+    drag_by(page, child_b.locator(".panel-resize-handle"), 0, 125, steps=14)
+    page.wait_for_timeout(360)
+    a_after_second_resize = grid_item_state(page, selector_a)
+    b_after_second_resize = grid_item_state(page, selector_b)
+    assert grid_state_tuple(a_after_second_resize) == grid_state_tuple(a_after_first_resize)
+    assert b_after_second_resize["rowSpan"] > b_before_second_resize["rowSpan"]
+
+    page.locator(".layout-group-button").click()
+    child_a.click(position={"x": 18, "y": 18}, force=True)
+    child_b.click(position={"x": 18, "y": 18}, force=True)
+    expect(page.locator(".panel-internal-widget-grid > .widget-card.group-selected")).to_have_count(2)
+    before_group = {
+        "a": grid_item_state(page, selector_a),
+        "b": grid_item_state(page, selector_b),
+        "c": grid_item_state(page, selector_c),
+    }
+    force_open_tools_for_interaction(page, child_a)
+    drag_by(page, child_a.locator(".panel-resize-handle"), 180, 110, steps=16)
+    page.wait_for_timeout(360)
+    after_group = {
+        "a": grid_item_state(page, selector_a),
+        "b": grid_item_state(page, selector_b),
+        "c": grid_item_state(page, selector_c),
+    }
+    assert after_group["a"]["rowSpan"] >= before_group["a"]["rowSpan"]
+    assert after_group["b"]["rowSpan"] >= before_group["b"]["rowSpan"]
+    assert (after_group["c"]["span"], after_group["c"]["rowSpan"]) == (before_group["c"]["span"], before_group["c"]["rowSpan"])
+
+    page.locator(".layout-group-button").click()
+    expect(page.locator(".panel-internal-widget-grid > .widget-card.group-selected")).to_have_count(0)
+    force_open_tools_for_interaction(page, child_a)
+    drag_by(page, child_a.locator(".panel-resize-handle"), -120, 90, steps=14)
+    page.wait_for_timeout(360)
+    after_individual = {
+        "a": grid_item_state(page, selector_a),
+        "b": grid_item_state(page, selector_b),
+        "c": grid_item_state(page, selector_c),
+    }
+    assert after_individual["a"]["rowSpan"] >= after_group["a"]["rowSpan"]
+    assert grid_state_tuple(after_individual["b"]) == grid_state_tuple(after_group["b"])
+    assert (after_individual["c"]["span"], after_individual["c"]["rowSpan"]) == (after_group["c"]["span"], after_group["c"]["rowSpan"])
+
+    press_dashboard_undo(page)
+    undo_individual = {
+        "a": grid_item_state(page, selector_a),
+        "b": grid_item_state(page, selector_b),
+        "c": grid_item_state(page, selector_c),
+    }
+    assert grid_state_tuple(undo_individual["a"]) == grid_state_tuple(after_group["a"])
+    assert grid_state_tuple(undo_individual["b"]) == grid_state_tuple(after_group["b"])
+    assert (undo_individual["c"]["span"], undo_individual["c"]["rowSpan"]) == (after_group["c"]["span"], after_group["c"]["rowSpan"])
+
+    press_dashboard_redo(page)
+    redo_individual = {
+        "a": grid_item_state(page, selector_a),
+        "b": grid_item_state(page, selector_b),
+        "c": grid_item_state(page, selector_c),
+    }
+    assert grid_state_tuple(redo_individual["a"]) == grid_state_tuple(after_individual["a"])
+    assert grid_state_tuple(redo_individual["b"]) == grid_state_tuple(after_individual["b"])
+    assert (redo_individual["c"]["span"], redo_individual["c"]["rowSpan"]) == (after_individual["c"]["span"], after_individual["c"]["rowSpan"])
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    assert grid_state_tuple(grid_item_state(page, selector_a)) == grid_state_tuple(after_individual["a"])
+    assert grid_state_tuple(grid_item_state(page, selector_b)) == grid_state_tuple(after_individual["b"])
+    reloaded_c = grid_item_state(page, selector_c)
+    assert (reloaded_c["span"], reloaded_c["rowSpan"]) == (after_individual["c"]["span"], after_individual["c"]["rowSpan"])
+    assert_no_resize_artifacts(page)
     assert_clean_browser(page)
 
 
@@ -10750,6 +11642,72 @@ def test_resize_has_live_surface_and_grid_preview(page: Page, app_server: str) -
     expect(widget_preview).to_have_count(0)
     assert grid_alignment_error(page, ".widget-layout > .stat-card.widget-card:not(.range-bar)") <= 3
     assert no_visible_overlaps(page, ".widget-layout > .widget-card") == []
+    assert_clean_browser(page)
+
+
+def test_resize_auto_zoom_camera_tracks_oversized_widget_and_restores(page: Page, app_server: str) -> None:
+    page.set_viewport_size({"width": 1280, "height": 520})
+    goto(page, app_server)
+
+    widget = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)").first
+    force_open_tools_for_interaction(page, widget)
+    start = widget.evaluate(
+        """
+        node => ({
+          key: node.dataset.widgetKey,
+          rows: Number(node.dataset.gridRowSpan || 1),
+          span: Number(node.dataset.currentSpan || node.dataset.defaultSpan || 1),
+        })
+        """
+    )
+    handle_box = widget.locator(".panel-resize-handle").bounding_box()
+    assert handle_box
+    x, y = box_center(handle_box)
+    page.mouse.move(x, y)
+    page.mouse.down()
+
+    page.mouse.move(x + 44, y + 760, steps=18)
+    page.wait_for_function(
+        """
+        () => document.body.classList.contains("resize-auto-zoom-active") &&
+          Number(document.body.dataset.resizeCameraScale || 1) < .985
+        """
+    )
+    zoomed = resize_camera_state(page)
+    assert zoomed["active"] is True
+    assert 0.29 <= zoomed["scale"] < 0.985
+    assert zoomed["liveTransform"] != "none"
+    assert zoomed["previewTransform"] != "none"
+
+    page.mouse.move(x + 52, y + 720, steps=18)
+    page.wait_for_function("() => Number(document.body.dataset.resizeCameraScale || 1) < .985")
+    page.mouse.up()
+    page.wait_for_function('!document.body.classList.contains("resize-auto-zoom-active")')
+    page.wait_for_timeout(260)
+
+    after = widget.evaluate(
+        """
+        node => ({
+          rows: Number(node.dataset.gridRowSpan || 1),
+          span: Number(node.dataset.currentSpan || node.dataset.defaultSpan || 1),
+          cameraScale: document.body.dataset.resizeCameraScale || "",
+          rootScale: getComputedStyle(document.documentElement).getPropertyValue("--resize-camera-scale").trim(),
+        })
+        """
+    )
+    assert after["rows"] > start["rows"]
+    assert after["span"] >= start["span"]
+    assert after["cameraScale"] == ""
+    assert after["rootScale"] == ""
+    assert_no_resize_artifacts(page)
+
+    page.locator(".layout-save-button").click()
+    page.wait_for_timeout(120)
+    page.reload(wait_until="networkidle")
+    reloaded = page.locator(f'.widget-card[data-widget-key="{start["key"]}"]')
+    expect(reloaded).to_be_visible()
+    assert reloaded.evaluate("node => Number(node.dataset.gridRowSpan || 1)") == after["rows"]
+    assert page.evaluate('() => document.body.classList.contains("resize-auto-zoom-active")') is False
     assert_clean_browser(page)
 
 

@@ -934,7 +934,143 @@ document.addEventListener("DOMContentLoaded", () => {
     liveLayoutRedo.delete(key);
     return true;
   };
+  const RESIZE_AUTO_ZOOM_MIN_SCALE = 0.30;
+  const RESIZE_AUTO_ZOOM_MARGIN = 22;
+  const RESIZE_AUTO_ZOOM_EASE = 0.18;
+  const resizeAutoZoomCamera = {
+    active: false,
+    frame: 0,
+    scale: 1,
+    targetScale: 1,
+  };
+  const clampResizeAutoZoomScale = (scale) => Math.max(RESIZE_AUTO_ZOOM_MIN_SCALE, Math.min(1, scale));
+  const resizeAutoZoomViewport = () => {
+    const navRect = document.querySelector(".app-nav")?.getBoundingClientRect?.();
+    const top = Math.max(0, (navRect?.bottom || 0) + 12);
+    const bottom = Math.max(top + 120, window.innerHeight - 18);
+    const centerY = top + ((bottom - top) / 2);
+    return {
+      top,
+      bottom,
+      centerX: window.innerWidth / 2,
+      centerY,
+      height: bottom - top,
+    };
+  };
+  const resizeAutoZoomTargetForBounds = (bounds) => {
+    if (!bounds) return 1;
+    const top = Number(bounds.top);
+    const bottom = Number(bounds.bottom);
+    const height = Number(bounds.height) || (bottom - top);
+    if (!Number.isFinite(top) || !Number.isFinite(bottom) || !Number.isFinite(height) || height <= 0) return 1;
+    const viewport = resizeAutoZoomViewport();
+    const fitsVertically = top >= viewport.top && bottom <= viewport.bottom && height <= viewport.height;
+    if (fitsVertically) return 1;
+    let target = 1;
+    const usableHeight = Math.max(120, viewport.height - (RESIZE_AUTO_ZOOM_MARGIN * 2));
+    if (height > usableHeight) {
+      target = Math.min(target, usableHeight / height);
+    }
+    if (bottom > viewport.bottom && bottom > viewport.centerY) {
+      const denominator = bottom - viewport.centerY;
+      if (denominator > 0) {
+        const bottomFitScale = (viewport.bottom - RESIZE_AUTO_ZOOM_MARGIN - viewport.centerY) / denominator;
+        target = Math.min(target, Math.max(RESIZE_AUTO_ZOOM_MIN_SCALE, bottomFitScale));
+      }
+    }
+    if (top < viewport.top && top < viewport.centerY) {
+      const denominator = viewport.centerY - top;
+      if (denominator > 0) {
+        const topFitScale = (viewport.centerY - viewport.top - RESIZE_AUTO_ZOOM_MARGIN) / denominator;
+        target = Math.min(target, Math.max(RESIZE_AUTO_ZOOM_MIN_SCALE, topFitScale));
+      }
+    }
+    return clampResizeAutoZoomScale(target);
+  };
+  const resizeAutoZoomSurfaces = () => [...document.querySelectorAll(
+    ".dashboard-live-resize, .dashboard-resize-preview, .dashboard-expanded-footprint-ghost"
+  )].filter((surface) => !surface.classList.contains("dashboard-group-resize-footprint"));
+  const applyResizeAutoZoomSurfaceStyles = () => {
+    const scale = Math.max(RESIZE_AUTO_ZOOM_MIN_SCALE, Math.min(1, resizeAutoZoomCamera.scale));
+    const viewport = resizeAutoZoomViewport();
+    document.documentElement.style.setProperty("--resize-camera-scale", scale.toFixed(4));
+    const cameraVisible = scale < 0.999 || resizeAutoZoomCamera.targetScale < 0.999;
+    document.body.classList.toggle("resize-auto-zoom-active", cameraVisible);
+    if (cameraVisible) {
+      document.body.dataset.resizeCameraScale = scale.toFixed(4);
+    } else {
+      delete document.body.dataset.resizeCameraScale;
+    }
+    resizeAutoZoomSurfaces().forEach((surface) => {
+      const left = Number.parseFloat(surface.style.left);
+      const top = Number.parseFloat(surface.style.top);
+      const originX = Number.isFinite(left) ? `${Math.round(viewport.centerX - left)}px` : "50%";
+      const originY = Number.isFinite(top) ? `${Math.round(viewport.centerY - top)}px` : "50%";
+      surface.style.setProperty("transform-origin", `${originX} ${originY}`, "important");
+      surface.style.setProperty("transform", `scale(${scale.toFixed(4)})`, "important");
+    });
+  };
+  const clearResizeAutoZoomSurfaceStyles = () => {
+    resizeAutoZoomSurfaces().forEach((surface) => {
+      surface.style.removeProperty("transform");
+      surface.style.removeProperty("transform-origin");
+    });
+  };
+  const tickResizeAutoZoomCamera = () => {
+    resizeAutoZoomCamera.frame = 0;
+    const delta = resizeAutoZoomCamera.targetScale - resizeAutoZoomCamera.scale;
+    if (Math.abs(delta) < 0.002) {
+      resizeAutoZoomCamera.scale = resizeAutoZoomCamera.targetScale;
+    } else {
+      resizeAutoZoomCamera.scale += delta * RESIZE_AUTO_ZOOM_EASE;
+    }
+    applyResizeAutoZoomSurfaceStyles();
+    const shouldContinue = Math.abs(resizeAutoZoomCamera.targetScale - resizeAutoZoomCamera.scale) > 0.002 ||
+      Math.abs(resizeAutoZoomCamera.scale - 1) > 0.002 ||
+      (resizeAutoZoomCamera.active && resizeAutoZoomCamera.targetScale < 0.999);
+    if (shouldContinue) {
+      resizeAutoZoomCamera.frame = requestAnimationFrame(tickResizeAutoZoomCamera);
+      return;
+    }
+    resizeAutoZoomCamera.scale = 1;
+    resizeAutoZoomCamera.targetScale = 1;
+    document.documentElement.style.removeProperty("--resize-camera-scale");
+    document.body.classList.remove("resize-auto-zoom-active");
+    delete document.body.dataset.resizeCameraScale;
+    clearResizeAutoZoomSurfaceStyles();
+  };
+  const ensureResizeAutoZoomFrame = () => {
+    if (!resizeAutoZoomCamera.frame) {
+      resizeAutoZoomCamera.frame = requestAnimationFrame(tickResizeAutoZoomCamera);
+    }
+  };
+  const beginResizeAutoZoomCamera = () => {
+    resizeAutoZoomCamera.active = true;
+    resizeAutoZoomCamera.targetScale = 1;
+    ensureResizeAutoZoomFrame();
+  };
+  const updateResizeAutoZoomCamera = (bounds) => {
+    resizeAutoZoomCamera.active = true;
+    resizeAutoZoomCamera.targetScale = resizeAutoZoomTargetForBounds(bounds);
+    ensureResizeAutoZoomFrame();
+  };
+  const endResizeAutoZoomCamera = ({ immediate = false } = {}) => {
+    resizeAutoZoomCamera.active = false;
+    resizeAutoZoomCamera.targetScale = 1;
+    if (immediate) {
+      if (resizeAutoZoomCamera.frame) cancelAnimationFrame(resizeAutoZoomCamera.frame);
+      resizeAutoZoomCamera.frame = 0;
+      resizeAutoZoomCamera.scale = 1;
+      document.documentElement.style.removeProperty("--resize-camera-scale");
+      document.body.classList.remove("resize-auto-zoom-active");
+      delete document.body.dataset.resizeCameraScale;
+      clearResizeAutoZoomSurfaceStyles();
+      return;
+    }
+    ensureResizeAutoZoomFrame();
+  };
   const cleanupDashboardUndoArtifacts = () => {
+    endResizeAutoZoomCamera({ immediate: true });
     document.querySelectorAll(
       ".dashboard-live-resize, .dashboard-resize-preview, .dashboard-expanded-footprint-ghost, .dashboard-group-boundary, .dashboard-group-member-preview, .widget-placeholder, .db-panel-placeholder, .workspace-anchor-drag-ghost, .workspace-anchor-rail-placeholder"
     ).forEach((node) => {
@@ -2952,17 +3088,38 @@ document.addEventListener("DOMContentLoaded", () => {
     Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, String(value)));
     return node;
   };
+  const clampWireControl = (value, min, max) => Math.max(min, Math.min(max, value));
   const workspaceWirePath = (source, target) => {
     const sx = Number(source?.x) || 0;
     const sy = Number(source?.y) || 0;
     const tx = Number(target?.x) || 0;
     const ty = Number(target?.y) || 0;
-    const gutterX = Math.min(sx, tx) - Math.max(34, Math.min(96, Math.abs(tx - sx) * .28 + 36));
-    if (Math.abs(ty - sy) < 16 && Math.abs(tx - sx) > 72) {
-      const bendY = Math.min(window.innerHeight - 28, sy + 52);
-      return `M ${sx.toFixed(1)} ${sy.toFixed(1)} C ${gutterX.toFixed(1)} ${sy.toFixed(1)}, ${gutterX.toFixed(1)} ${bendY.toFixed(1)}, ${gutterX.toFixed(1)} ${bendY.toFixed(1)} C ${gutterX.toFixed(1)} ${bendY.toFixed(1)}, ${tx.toFixed(1)} ${bendY.toFixed(1)}, ${tx.toFixed(1)} ${ty.toFixed(1)}`;
+    const dx = tx - sx;
+    const dy = ty - sy;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    const direction = dx === 0 ? 1 : Math.sign(dx);
+    let c1x;
+    let c1y;
+    let c2x;
+    let c2y;
+    if (absDx < 36) {
+      const bow = Math.min(82, Math.max(28, absDy * .18 + 28));
+      const verticalTension = Math.min(96, Math.max(28, absDy * .32));
+      c1x = sx + bow;
+      c2x = tx + bow;
+      c1y = sy + Math.sign(dy || 1) * verticalTension;
+      c2y = ty - Math.sign(dy || 1) * verticalTension;
+    } else {
+      const minX = Math.min(sx, tx);
+      const maxX = Math.max(sx, tx);
+      const offset = Math.min(Math.max(absDx * .42, 42), Math.max(42, absDx * .5));
+      c1x = clampWireControl(sx + (direction * offset), minX, maxX);
+      c2x = clampWireControl(tx - (direction * offset), minX, maxX);
+      c1y = sy + (dy * .08);
+      c2y = ty - (dy * .08);
     }
-    return `M ${sx.toFixed(1)} ${sy.toFixed(1)} C ${gutterX.toFixed(1)} ${sy.toFixed(1)}, ${gutterX.toFixed(1)} ${ty.toFixed(1)}, ${tx.toFixed(1)} ${ty.toFixed(1)}`;
+    return `M ${sx.toFixed(1)} ${sy.toFixed(1)} C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${tx.toFixed(1)} ${ty.toFixed(1)}`;
   };
   let selectedWorkspaceRelationship = null;
   const relationshipStorageRef = (relationship = {}) => {
@@ -3009,6 +3166,38 @@ document.addEventListener("DOMContentLoaded", () => {
     return selectedWorkspaceRelationship.relationshipId === relationship.id &&
       selectedWorkspaceRelationship.storageType === storage.type &&
       selectedWorkspaceRelationship.storageId === storage.id;
+  };
+  const workspaceGraphPortFromHandle = (handle) => ({
+    objectId: handle?.dataset?.wireObjectId || "",
+    portId: handle?.dataset?.wirePortId || graphPortId(handle?.dataset?.wireObjectId || "", handle?.dataset?.wirePortRole || WORKSPACE_PORT_ROLES.output),
+    role: normalizePortRole(handle?.dataset?.wirePortRole || WORKSPACE_PORT_ROLES.output),
+    name: handle?.dataset?.wirePortName || "main",
+  });
+  const deleteWorkspaceConnectionsForPort = (layoutKey = "builder", port = {}, profile = getActivePanelProfile(layoutKey), options = {}) => {
+    if (!logicEditAllowed(options)) return 0;
+    const normalizedPort = normalizePortRef(port, port.role || WORKSPACE_PORT_ROLES.input, port.objectId || "");
+    if (!normalizedPort.objectId || !normalizedPort.portId) return 0;
+    const graph = loadWorkspaceLogicGraph(layoutKey, profile);
+    const isInput = normalizedPort.role === WORKSPACE_PORT_ROLES.input;
+    const removedLinks = graph.links.filter((link) => isInput
+      ? link.target.objectId === normalizedPort.objectId && link.target.portId === normalizedPort.portId
+      : link.source.objectId === normalizedPort.objectId && link.source.portId === normalizedPort.portId);
+    const removedRelationships = graph.relationships.filter((relationship) => isInput
+      ? relationship.targetId === normalizedPort.objectId && relationship.metadata?.targetPortId === normalizedPort.portId
+      : relationship.sourceId === normalizedPort.objectId && relationship.metadata?.sourcePortId === normalizedPort.portId);
+    if (!removedLinks.length && !removedRelationships.length) return 0;
+    const removedContextLinkIds = new Set(removedLinks.map((link) => link.metadata?.contextLinkId).filter(Boolean));
+    const links = graph.links.filter((link) => !removedLinks.some((removed) => removed.id === link.id));
+    const relationships = graph.relationships.filter((relationship) => !removedRelationships.some((removed) => removed.id === relationship.id));
+    const contextLinks = graph.contextLinks.filter((link) => !removedContextLinkIds.has(link.id));
+    saveWorkspaceLogicGraph(layoutKey, { ...graph, links, relationships, contextLinks }, profile, options);
+    if (selectedWorkspaceRelationship) {
+      const selectedStillExists = links.some((link) => selectedWorkspaceRelationship.storageType === "link" && link.id === selectedWorkspaceRelationship.storageId) ||
+        contextLinks.some((link) => selectedWorkspaceRelationship.storageType === "context-link" && link.id === selectedWorkspaceRelationship.storageId) ||
+        relationships.some((relationship) => selectedWorkspaceRelationship.storageType === "relationship" && relationship.id === selectedWorkspaceRelationship.storageId);
+      if (!selectedStillExists) selectedWorkspaceRelationship = null;
+    }
+    return removedLinks.length + removedRelationships.length;
   };
   const renderWorkspaceRelationshipDeleteControl = (layer, relationship, path, layoutKey = "builder") => {
     if (!selectedWorkspaceRelationshipMatches(relationship, layoutKey)) return;
@@ -3245,6 +3434,11 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   const startWorkspaceWireDrag = (event, handle, layoutKey = "builder") => {
     if (!isEngineerMode() || event.button !== 0) return;
+    if (event.detail >= 2) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     const sourceId = handle?.dataset?.wireObjectId || "";
     const sourceRole = normalizePortRole(handle?.dataset?.wirePortRole || WORKSPACE_PORT_ROLES.output);
     const initialSourcePoint = liveWorkspaceWireEndpointPoint(sourceId, layoutKey, handle, sourceRole);
@@ -3362,6 +3556,13 @@ document.addEventListener("DOMContentLoaded", () => {
       event.preventDefault();
       event.stopPropagation();
     };
+    const deleteWireConnectionsFromHandle = (event, handle) => {
+      if (!isEngineerMode()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      cleanupWorkspaceWireDrag();
+      deleteWorkspaceConnectionsForPort(layoutKey, workspaceGraphPortFromHandle(handle), getActivePanelProfile(layoutKey));
+    };
     const setWireHoverTrace = (objectId = "") => {
       document.querySelectorAll(".workspace-relationship-path").forEach((path) => {
         const connected = objectId && (
@@ -3406,6 +3607,7 @@ document.addEventListener("DOMContentLoaded", () => {
         handle.style.top = `${Math.round(point.y)}px`;
         handle.addEventListener("pointerdown", (event) => startWorkspaceWireDrag(event, handle, layoutKey));
         handle.addEventListener("click", isolateWireHandleClick);
+        handle.addEventListener("dblclick", (event) => deleteWireConnectionsFromHandle(event, handle));
         bindWireHoverTrace(handle);
         layer.appendChild(handle);
       });
@@ -3432,6 +3634,7 @@ document.addEventListener("DOMContentLoaded", () => {
         handle.style.top = `${Math.round(point.y)}px`;
         handle.addEventListener("pointerdown", (event) => startWorkspaceWireDrag(event, handle, layoutKey));
         handle.addEventListener("click", isolateWireHandleClick);
+        handle.addEventListener("dblclick", (event) => deleteWireConnectionsFromHandle(event, handle));
         bindWireHoverTrace(handle);
         layer.appendChild(handle);
       });
@@ -3949,12 +4152,19 @@ document.addEventListener("DOMContentLoaded", () => {
     return Math.max(minSpan, Math.min(columnCount, (Math.max(1, width) + gap) / (columnWidth + gap)));
   };
 
+  const resizeAlignmentTargetsForLayout = (layout) => {
+    if (isPanelInternalWidgetLayout(layout)) {
+      return [...layout.querySelectorAll(":scope > .widget-card:not([hidden]), :scope > .widget-placeholder")];
+    }
+    return globalGridItems(layout, { includePlaceholders: true });
+  };
+
   const alignedResizeSpan = ({ layout, item, currentSpan, gap, minSpan, metrics = null }) => {
     const rect = item.getBoundingClientRect();
     const layoutRect = metrics?.rect || gridRectForLayout(layout);
     const tolerance = 18;
     const candidates = [{ edge: layoutRect.right, priority: 1 }];
-    document.querySelectorAll(".widget-layout > .widget-card:not([hidden]), .panel-layout > .db-panel:not([hidden])").forEach((target) => {
+    resizeAlignmentTargetsForLayout(layout).forEach((target) => {
       if (target === item || target.hidden) return;
       const targetRect = target.getBoundingClientRect();
       if (Math.abs(targetRect.top - rect.top) < 8 && Math.abs(targetRect.left - rect.left) < 8) return;
@@ -4841,6 +5051,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "page",
     "promptTemplate",
     "scope",
+    "selectedFilterId",
     "selectedPreset",
     "seriesField",
     "sortBy",
@@ -4850,6 +5061,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "target",
     "timeRange",
     "valueField",
+    "weekStartDay",
     "xField",
     "yField",
   ]);
@@ -5066,6 +5278,80 @@ document.addEventListener("DOMContentLoaded", () => {
       ${(section.fields || []).map((field) => renderWidgetSettingField(widget, field, config, surface)).join("")}
     </fieldset>`).join("") : widgetSchemaEmptyState(definition, surface)}`;
   };
+  const timeframeWorkbenchOptions = (options = [], selected = "") => options.map((option) => {
+    const value = String(option.value ?? option.id ?? "");
+    const label = String(option.label ?? value);
+    return `<option value="${escapeHtml(value)}"${String(selected) === value ? " selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("");
+  const timeframeFilterValue = (filter, key, fallback = "") => String(filter?.[key] ?? fallback ?? "");
+  const renderTimeframeWorkbenchFilterFields = (filter) => {
+    const type = String(filter?.type || "today");
+    const fixedFields = type === "custom_fixed" || type === "custom"
+      ? `<div class="timeframe-workbench-inline">
+          <label>Start<input class="timeframe-filter-config-input" type="date" data-timeframe-filter-id="${escapeHtml(filter.id)}" data-timeframe-filter-part="start" value="${escapeHtml(timeframeFilterValue(filter, "start"))}"></label>
+          <label>End<input class="timeframe-filter-config-input" type="date" data-timeframe-filter-id="${escapeHtml(filter.id)}" data-timeframe-filter-part="end" value="${escapeHtml(timeframeFilterValue(filter, "end"))}"></label>
+        </div>`
+      : "";
+    const repeatingFields = type === "custom_repeating"
+      ? `<div class="timeframe-workbench-inline">
+          <label>Seed start<input class="timeframe-filter-config-input" type="date" data-timeframe-filter-id="${escapeHtml(filter.id)}" data-timeframe-filter-part="seedStart" value="${escapeHtml(timeframeFilterValue(filter, "seedStart"))}"></label>
+          <label>Seed end<input class="timeframe-filter-config-input" type="date" data-timeframe-filter-id="${escapeHtml(filter.id)}" data-timeframe-filter-part="seedEnd" value="${escapeHtml(timeframeFilterValue(filter, "seedEnd"))}"></label>
+        </div>
+        <div class="timeframe-workbench-inline">
+          <label>Repeat every<input class="timeframe-filter-config-input" type="number" min="1" step="1" data-timeframe-filter-id="${escapeHtml(filter.id)}" data-timeframe-filter-part="repeatEvery" value="${escapeHtml(timeframeFilterValue(filter, "repeatEvery", 2))}"></label>
+          <label>Unit<select class="timeframe-filter-config-input" data-timeframe-filter-id="${escapeHtml(filter.id)}" data-timeframe-filter-part="repeatUnit">
+            ${timeframeWorkbenchOptions([{ value: "days", label: "Days" }, { value: "weeks", label: "Weeks" }, { value: "monthly", label: "Monthly" }], filter.repeatUnit || "weeks")}
+          </select></label>
+          <label>Occurrence<select class="timeframe-filter-config-input" data-timeframe-filter-id="${escapeHtml(filter.id)}" data-timeframe-filter-part="occurrence">
+            ${timeframeWorkbenchOptions([{ value: "current", label: "Current" }, { value: "previous", label: "Previous" }, { value: "next", label: "Next" }], filter.occurrence || "current")}
+          </select></label>
+        </div>`
+      : "";
+    return `${fixedFields}${repeatingFields}`;
+  };
+  const renderTimeframeWorkbenchPanel = (widget) => {
+    const runtime = window.dashboardWidgetRuntime;
+    const config = widgetConfigFromElement(widget);
+    const filters = runtime?.normalizeTimeframeFilters?.(config) || [];
+    const selectedFilterId = config.selectedFilterId || "";
+    const filterTypes = runtime?.timeframeFilterTypes?.() || [];
+    const weekOptions = runtime?.weekStartOptions?.() || [];
+    return `<div class="widget-settings-schema-head">
+      <span>Time filter workbench</span>
+    </div>
+    <fieldset class="widget-settings-section timeframe-workbench-section" data-widget-settings-section="timeframe-global" data-widget-settings-surface="logic">
+      <legend>Calendar logic</legend>
+      <label class="widget-setting-field" for="${escapeHtml(widget.dataset.widgetKey || "timeframe")}-week-start">
+        <span>Week starts on</span>
+        <select id="${escapeHtml(widget.dataset.widgetKey || "timeframe")}-week-start" class="timeframe-config-input" data-timeframe-config-part="weekStartDay">
+          ${timeframeWorkbenchOptions(weekOptions, config.weekStartDay ?? 0)}
+        </select>
+      </label>
+    </fieldset>
+    <fieldset class="widget-settings-section timeframe-workbench-section" data-widget-settings-section="timeframe-filters" data-widget-settings-surface="logic">
+      <legend>Filter buttons</legend>
+      <div class="timeframe-filter-editor-list">
+        ${filters.map((filter, index) => `<div class="timeframe-filter-editor" data-timeframe-filter-id="${escapeHtml(filter.id)}">
+          <div class="timeframe-filter-editor-head">
+            <label>Label<input class="timeframe-filter-config-input" type="text" data-timeframe-filter-id="${escapeHtml(filter.id)}" data-timeframe-filter-part="label" value="${escapeHtml(filter.label)}"></label>
+            <button class="timeframe-remove-filter" type="button" data-timeframe-filter-id="${escapeHtml(filter.id)}" aria-label="Remove ${escapeHtml(filter.label)}">Remove</button>
+          </div>
+          <label class="widget-setting-field">
+            <span>Filter type</span>
+            <select class="timeframe-filter-config-input" data-timeframe-filter-id="${escapeHtml(filter.id)}" data-timeframe-filter-part="type">
+              ${timeframeWorkbenchOptions(filterTypes, filter.type)}
+            </select>
+          </label>
+          ${renderTimeframeWorkbenchFilterFields(filter)}
+          <label class="timeframe-filter-selected-row">
+            <input class="timeframe-filter-config-input" type="radio" name="${escapeHtml(widget.dataset.widgetKey || "timeframe")}-selected-filter" data-timeframe-filter-id="${escapeHtml(filter.id)}" data-timeframe-filter-part="selected" value="${escapeHtml(filter.id)}"${filter.id === selectedFilterId ? " checked" : ""}>
+            <span>Use this filter now</span>
+          </label>
+        </div>`).join("")}
+      </div>
+      <button class="timeframe-add-filter" type="button">Add time filter</button>
+    </fieldset>`;
+  };
   const normalizeWidgetMenuFormControls = (panel) => {
     panel?.querySelectorAll?.("button:not([type])").forEach((button) => {
       button.type = "button";
@@ -5103,7 +5389,10 @@ document.addEventListener("DOMContentLoaded", () => {
           <small>${escapeHtml(status)}</small>
         </div>`
       : "";
-    return `${renderWidgetSettingsSchemaPanel(widget, "logic")}${engineerMarkup}`;
+    const logicMarkup = definition.type === "timeframe"
+      ? renderTimeframeWorkbenchPanel(widget)
+      : renderWidgetSettingsSchemaPanel(widget, "logic");
+    return `${logicMarkup}${engineerMarkup}`;
   };
   const ensureWidgetWorkbenchPanel = (widget) => {
     const tools = widget?.querySelector(":scope > .widget-tools");
@@ -5417,6 +5706,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (eventType === "change" || eventType === "focusout") captureRuntimeControlBaselineForWidget(widget);
     setWidgetConfig(widget, {
       ...config,
+      selectedFilterId: "",
       selectedPreset: "custom",
       [part]: input.value,
       activeLabel: "Custom range",
@@ -5480,28 +5770,128 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       return true;
     };
-    const updateTimeframeWidgetConfig = (target) => {
+    const updateTimeframeWidgetConfig = (target, eventType = "input") => {
       if (widget.dataset.widgetDefinition !== "timeframe") return false;
       const presetButton = target?.closest?.("[data-timeframe-preset]");
+      const filterButton = target?.closest?.("[data-timeframe-filter-id].timeframe-filter-button");
       const dateInput = target?.closest?.(".timeframe-custom-date");
+      const globalConfigInput = target?.closest?.(".timeframe-config-input");
+      const filterConfigInput = target?.closest?.(".timeframe-filter-config-input");
+      const addFilterButton = target?.closest?.(".timeframe-add-filter");
+      const removeFilterButton = target?.closest?.(".timeframe-remove-filter");
       const refreshButton = target?.closest?.(".timeframe-refresh");
       const calendarButton = target?.closest?.(".timeframe-calendar");
+      const runtime = window.dashboardWidgetRuntime;
+      const normalizedFilters = (config) => runtime?.normalizeTimeframeFilters?.(config) || [];
+      const setTimeframeConfig = (nextConfig, options = {}) => {
+        setWidgetConfig(widget, nextConfig);
+        renderWidgetRuntimeContent(widget, {
+          resolvedContext: resolveWorkspaceContextForItem(widget),
+          status: widget.dataset.widgetRuntimeStatus || "ready",
+        });
+        syncWidgetContextOutputs(widget);
+        widget.dataset.widgetRuntimeStatus = "ready";
+        if (widget.classList.contains("widget-workbench-open") && options.refreshWorkbench !== false) {
+          ensureWidgetWorkbenchPanel(widget);
+        }
+      };
+      if (addFilterButton && widget.contains(addFilterButton)) {
+        if (addFilterButton.dataset.timeframeAddHandled === "true") return true;
+        addFilterButton.dataset.timeframeAddHandled = "true";
+        const config = widgetConfigFromElement(widget);
+        const filters = normalizedFilters(config);
+        const id = `time-filter-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`;
+        if (eventType !== "input") captureRuntimeControlBaselineForWidget(widget);
+        setTimeframeConfig({
+          ...config,
+          filters: [...filters, { id, label: "New filter", type: "today" }],
+          selectedFilterId: id,
+          selectedPreset: "today",
+          activeLabel: "New filter",
+        });
+        return true;
+      }
+      if (removeFilterButton && widget.contains(removeFilterButton)) {
+        const config = widgetConfigFromElement(widget);
+        const id = removeFilterButton.dataset.timeframeFilterId || "";
+        const filters = normalizedFilters(config).filter((filter) => filter.id !== id);
+        const selectedFilterId = config.selectedFilterId === id ? (filters[0]?.id || "") : config.selectedFilterId;
+        if (eventType !== "input") captureRuntimeControlBaselineForWidget(widget);
+        setTimeframeConfig({
+          ...config,
+          filters,
+          selectedFilterId,
+          selectedPreset: filters.find((filter) => filter.id === selectedFilterId)?.type || "",
+        });
+        return true;
+      }
+      if (globalConfigInput && widget.contains(globalConfigInput)) {
+        const config = widgetConfigFromElement(widget);
+        const part = globalConfigInput.dataset.timeframeConfigPart || "";
+        if (!part) return false;
+        if (eventType !== "input") captureRuntimeControlBaselineForWidget(widget);
+        setTimeframeConfig({
+          ...config,
+          [part]: globalConfigInput.type === "number" ? Number(globalConfigInput.value) : globalConfigInput.value,
+        }, { refreshWorkbench: eventType !== "input" });
+        return true;
+      }
+      if (filterConfigInput && widget.contains(filterConfigInput)) {
+        const config = widgetConfigFromElement(widget);
+        const id = filterConfigInput.dataset.timeframeFilterId || "";
+        const part = filterConfigInput.dataset.timeframeFilterPart || "";
+        if (!id || !part) return false;
+        const filters = normalizedFilters(config);
+        const nextFilters = filters.map((filter) => {
+          if (filter.id !== id) return filter;
+          if (part === "selected") return filter;
+          const value = filterConfigInput.type === "number"
+            ? Math.max(1, Math.round(Number(filterConfigInput.value) || 1))
+            : filterConfigInput.value;
+          return { ...filter, [part]: value };
+        });
+        const selected = part === "selected" ? id : config.selectedFilterId;
+        const selectedFilter = nextFilters.find((filter) => filter.id === selected);
+        captureRuntimeControlBaselineForWidget(widget);
+        setTimeframeConfig({
+          ...config,
+          filters: nextFilters,
+          selectedFilterId: selected || "",
+          selectedPreset: selectedFilter?.type || config.selectedPreset || "",
+          activeLabel: selectedFilter?.label || config.activeLabel || "",
+        }, { refreshWorkbench: eventType !== "input" });
+        return true;
+      }
+      if (filterButton && widget.contains(filterButton)) {
+        const config = widgetConfigFromElement(widget);
+        const filters = normalizedFilters(config);
+        const filterId = filterButton.dataset.timeframeFilterId || "";
+        const selectedFilter = filters.find((filter) => filter.id === filterId);
+        captureRuntimeControlBaselineForWidget(widget);
+        setTimeframeConfig({
+          ...config,
+          selectedFilterId: filterId,
+          selectedPreset: selectedFilter?.type || filterButton.dataset.timeframePreset || "",
+          activeLabel: selectedFilter?.label || config.activeLabel,
+        }, { refreshWorkbench: false });
+        return true;
+      }
       if (presetButton && widget.contains(presetButton)) {
         const preset = presetButton.dataset.timeframePreset || "";
         const config = widgetConfigFromElement(widget);
+        const filters = normalizedFilters(config);
+        const selectedFilter = filters.find((filter) => filter.type === preset || filter.id === presetButton.dataset.timeframeFilterId);
         captureRuntimeControlBaselineForWidget(widget);
-        setWidgetConfig(widget, {
+        setTimeframeConfig({
           ...config,
+          selectedFilterId: selectedFilter?.id || (preset === "custom" ? "" : config.selectedFilterId || ""),
           selectedPreset: preset,
-          activeLabel: preset === "custom" ? "Custom range" : config.activeLabel,
+          activeLabel: selectedFilter?.label || (preset === "custom" ? "Custom range" : config.activeLabel),
         });
-        renderWidgetRuntimeContent(widget);
-        syncWidgetContextOutputs(widget);
-        widget.dataset.widgetRuntimeStatus = "ready";
         return true;
       }
       if (dateInput && widget.contains(dateInput)) {
-        return commitTimeframeDateInput(dateInput, "input");
+        return commitTimeframeDateInput(dateInput, eventType);
       }
       if (refreshButton && widget.contains(refreshButton)) {
         renderWidgetRuntimeContent(widget);
@@ -5534,14 +5924,20 @@ document.addEventListener("DOMContentLoaded", () => {
         event.__widgetRuntimeHandledBy = widget;
         persistRuntimeControlChange({ history: event.type === "change" || event.type === "focusout" });
       }
-      if (updateTimeframeWidgetConfig(event.target)) {
+      if (updateTimeframeWidgetConfig(event.target, event.type)) {
         event.__widgetRuntimeHandledBy = widget;
         persistRuntimeControlChange({ history: event.type === "change" || event.type === "focusout" });
       }
     };
     const handleRuntimeControlClick = (event) => {
-      if (updateTimeframeWidgetConfig(event.target)) {
+      const clickableTimeframeControl = event.target?.closest?.(
+        ".timeframe-add-filter, .timeframe-remove-filter, .timeframe-filter-button, .timeframe-filter-config-input[type='radio'], [data-timeframe-preset], .timeframe-refresh, .timeframe-calendar"
+      );
+      if (!clickableTimeframeControl || !widget.contains(clickableTimeframeControl)) return;
+      if (updateTimeframeWidgetConfig(event.target, event.type)) {
         event.preventDefault();
+        event.stopImmediatePropagation?.();
+        event.stopPropagation();
         persistRuntimeControlChange({ history: true });
       }
     };
@@ -5549,12 +5945,12 @@ document.addEventListener("DOMContentLoaded", () => {
       if (event.__widgetRuntimeHandledBy === widget) return;
       const dateInput = event.target?.closest?.(".timeframe-custom-date");
       if (!dateInput || !widget.contains(dateInput)) return;
-      if (updateTimeframeWidgetConfig(dateInput)) {
+      if (updateTimeframeWidgetConfig(dateInput, event.type)) {
         event.__widgetRuntimeHandledBy = widget;
         persistRuntimeControlChange({ history: event.type === "change" || event.type === "focusout" });
       }
     };
-    widget.addEventListener("click", handleRuntimeControlClick);
+    widget.addEventListener("click", handleRuntimeControlClick, true);
     widget.addEventListener("input", handleTimeframeDateCommit, true);
     widget.addEventListener("change", handleTimeframeDateCommit, true);
     widget.addEventListener("focusout", handleTimeframeDateCommit, true);
@@ -5626,6 +6022,49 @@ document.addEventListener("DOMContentLoaded", () => {
   const panelChildWidgets = (panel) => [
     ...panel.querySelectorAll(":scope > .db-panel-body .panel-internal-widget-grid > .widget-card:not(.workspace-anchor-object):not([hidden])")
   ];
+
+  const panelInternalGridPaddingBlock = (grid) => {
+    const styles = window.getComputedStyle(grid);
+    return (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0);
+  };
+
+  const requiredPanelHeightForInternalGrid = (panel, options = {}) => {
+    const grid = panel?.querySelector?.(":scope > .db-panel-body > .panel-internal-widget-grid");
+    if (!grid || panel.classList.contains("db-panel-collapsed")) return 0;
+    const metrics = createGridMetrics(grid);
+    const selector = options.includePlaceholders === false
+      ? ":scope > .widget-card:not(.workspace-anchor-object):not([hidden])"
+      : ":scope > .widget-card:not(.workspace-anchor-object):not([hidden]), :scope > .widget-placeholder";
+    const maxBottom = [...grid.querySelectorAll(selector)]
+      .filter((item) => !item.classList.contains("widget-dragging"))
+      .reduce((bottom, item) => Math.max(bottom, gridBoundsForItem(item, metrics).bottom), 0);
+    if (!maxBottom) return 0;
+    const headerHeight = Math.ceil(panel.querySelector(":scope > .db-panel-hd")?.getBoundingClientRect().height || 0);
+    const bodyBorder = 1;
+    const contentHeight = panelInternalGridPaddingBlock(grid) + gridHeightForRows(maxBottom, metrics.gap, metrics.rowHeight);
+    return Math.ceil(headerHeight + bodyBorder + contentHeight);
+  };
+
+  const syncOpenPanelHeightToInternalGrid = (panel, options = {}) => {
+    if (!panel?.isConnected || panel.classList.contains("db-panel-collapsed")) return false;
+    if (!workspaceObjectCapabilities(panel).hasPanelContentArea) return false;
+    const requiredHeight = requiredPanelHeightForInternalGrid(panel, options);
+    if (!requiredHeight) return false;
+    const currentHeight = Number(panel.dataset.savedHeight) || panel.getBoundingClientRect().height || 0;
+    const targetHeight = options.allowShrink
+      ? Math.max(getPanelMinimumHeight(panel), requiredHeight)
+      : Math.max(currentHeight, requiredHeight);
+    const layout = panel.closest(".panel-layout");
+    const gap = gridGapForLayout(layout);
+    const targetRows = gridRowsFromHeight(targetHeight, gap, panelMinimumRows(panel));
+    const currentRows = gridItemRowSpan(panel);
+    if (targetRows <= currentRows && Math.abs(targetHeight - currentHeight) < 1) return false;
+    applyPanelHeight(panel, gridHeightForRows(targetRows, gap));
+    if (options.reflow !== false && layout) {
+      applyVerticalPanelExpansion(layout, panel);
+    }
+    return true;
+  };
 
   const sanitizePanelChildWidgetClone = (widget) => {
     const clone = widget.cloneNode(true);
@@ -5702,6 +6141,7 @@ document.addEventListener("DOMContentLoaded", () => {
       grid.appendChild(widget);
     });
     updatePanelChildEmptyState(panel);
+    syncOpenPanelHeightToInternalGrid(panel, { reflow: false });
   };
 
   const anchorLayerForLayoutKey = (layoutKey = "default") =>
@@ -8884,6 +9324,15 @@ document.addEventListener("DOMContentLoaded", () => {
       bottom: rect.bottom + tolerance,
     }
     : null;
+  const PANEL_HEADER_ENTRY_TOLERANCE_PX = 18;
+  const expandPanelEntryHeaderRect = (rect, tolerance = PANEL_HEADER_ENTRY_TOLERANCE_PX) => rect
+    ? {
+      left: rect.left - tolerance,
+      right: rect.right + tolerance,
+      top: rect.top - tolerance,
+      bottom: rect.bottom + tolerance,
+    }
+    : null;
   const clampPointToPanelBodyRect = (panel, clientX, clientY, snapshot = null) => {
     const body = panel?.querySelector?.(":scope > .db-panel-body");
     const rect = body?.getBoundingClientRect?.() || panelBodyRectFromSnapshot(panel, snapshot);
@@ -8917,6 +9366,9 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       if (pointInRect(clientX, clientY, expandPanelEntryBodyRect(rect)) || pointInRect(clientX, clientY, expandPanelEntryBodyRect(snapshotBodyRect))) {
         return { panel, zone: "body-tolerance" };
+      }
+      if (pointInRect(clientX, clientY, expandPanelEntryHeaderRect(headerRect)) || pointInRect(clientX, clientY, expandPanelEntryHeaderRect(snapshotHeaderRect))) {
+        return { panel, zone: "header-tolerance" };
       }
     }
     return null;
@@ -8965,6 +9417,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const target = targetCell || gridCellFromPoint(internalGrid, clone, clientX, clientY, metrics);
     applyWidgetGridPosition(clone, target.col, target.row);
     resolveSparseGridLayout(internalGrid, clone, target, { metrics });
+    syncOpenPanelHeightToInternalGrid(panel);
     initWidgetLayout(internalGrid);
     updatePanelChildEmptyState(panel);
     animateAbsorbedWidgetIntoPanel(clone, fromRect);
@@ -9288,7 +9741,7 @@ document.addEventListener("DOMContentLoaded", () => {
       triggerPanelBoundaryExitFeedback(state.panel);
     };
 
-    const acceptsHeaderPanelEntry = (panel, motion) => {
+    const acceptsHeaderPanelEntry = (panel, motion, options = {}) => {
       if (!motion) return false;
       if (panelEntryIntent.headerPanel !== panel) {
         panelEntryIntent.headerPanel = panel;
@@ -9298,8 +9751,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const clearlyDownward = motion.totalDy > 20 &&
         motion.stepDy >= -1 &&
         motion.totalDy >= Math.abs(motion.totalDx) * .7;
+      const slowIntentionalHeaderEntry = dwell >= 120 && motion.speed <= .42;
       const slowEnough = motion.speed <= .36;
-      return clearlyDownward && (slowEnough || dwell >= 120);
+      const directionalHeaderEntry = !options.requiresSlowIntent &&
+        dwell >= 40 &&
+        clearlyDownward &&
+        (slowEnough || dwell >= 120);
+      return slowIntentionalHeaderEntry || directionalHeaderEntry;
     };
 
     const clearPanelDragPreview = ({ restore = true } = {}) => {
@@ -9309,6 +9767,9 @@ document.addEventListener("DOMContentLoaded", () => {
       state.panel.classList.remove("panel-container-drag-active", "panel-header-entry-accept");
       item.classList.remove("panel-entry-ghost-transition", "panel-exit-ghost-transition");
       if (restore) restoreGridLayoutSnapshot(state.snapshot, { exclude: [state.placeholder] });
+      if (restore && state.panelLayout && state.panelLayoutSnapshot) {
+        restoreGridLayoutSnapshot(state.panelLayoutSnapshot);
+      }
       state.placeholder.remove();
       updatePanelChildEmptyState(state.panel);
       if (placeholder) placeholder.style.visibility = "";
@@ -9341,12 +9802,15 @@ document.addEventListener("DOMContentLoaded", () => {
         placeholder.style.visibility = "hidden";
       }
       const snapshot = snapshotGridLayout(internalGrid);
+      const panelLayout = panel.closest(".panel-layout");
       const panelPlaceholder = createPanelDropPlaceholder();
       internalGrid.appendChild(panelPlaceholder);
       panel.classList.add("panel-container-drag-active");
-      if (options.zone === "header") triggerPanelHeaderEntryFeedback(panel);
+      if (options.zone === "header" || options.zone === "header-tolerance") triggerPanelHeaderEntryFeedback(panel);
       panelDrag = {
         panel,
+        panelLayout,
+        panelLayoutSnapshot: panelLayout ? snapshotGridLayout(panelLayout) : null,
         layout: internalGrid,
         placeholder: panelPlaceholder,
         snapshot,
@@ -9373,24 +9837,31 @@ document.addEventListener("DOMContentLoaded", () => {
         return false;
       }
       if (!panelDrag) {
-        if (candidate.zone === "header") {
-          if (!acceptsHeaderPanelEntry(candidate.panel, motion)) return false;
+        if (candidate.zone === "header" || candidate.zone === "header-tolerance") {
+          if (!acceptsHeaderPanelEntry(candidate.panel, motion, { requiresSlowIntent: candidate.zone === "header-tolerance" })) return false;
         }
       }
       const state = enterPanelDragPreview(candidate.panel, { zone: candidate.zone });
       if (!state) return false;
+      const candidateIsHeaderEntry = candidate.zone === "header" || candidate.zone === "header-tolerance";
+      if (candidateIsHeaderEntry && state.entryZone !== candidate.zone && state.entryZone !== "header") {
+        state.entryZone = candidate.zone;
+        state.entryTransitionPlayed = false;
+        triggerPanelHeaderEntryFeedback(candidate.panel);
+      }
       const metrics = refreshGridMetricsRect(state.metrics);
-      const previewPoint = candidate.zone === "body-tolerance"
+      const previewPoint = candidate.zone === "body-tolerance" || candidate.zone === "header" || candidate.zone === "header-tolerance"
         ? clampPointToPanelBodyRect(candidate.panel, moveEvent.clientX, moveEvent.clientY, startSnapshot)
         : { clientX: moveEvent.clientX, clientY: moveEvent.clientY };
       const nextCell = gridCellFromDragPointer(state.layout, state.placeholder, previewPoint.clientX, previewPoint.clientY, offsetX, offsetY, metrics, rect);
-      const shouldPlayEntryTransition = state.entryZone === "header" && !state.entryTransitionPlayed;
-      if (state.targetCell && state.targetCell.col === nextCell.col && state.targetCell.row === nextCell.row) return true;
+      const shouldPlayEntryTransition = (state.entryZone === "header" || state.entryZone === "header-tolerance") && !state.entryTransitionPlayed;
+      if (state.targetCell && state.targetCell.col === nextCell.col && state.targetCell.row === nextCell.row && !shouldPlayEntryTransition) return true;
       state.targetCell = nextCell;
       animateOrderedGridReflow(state.layout, () => {
         restoreGridLayoutSnapshot(state.snapshot, { exclude: [state.placeholder] });
         resolveSparseGridLayout(state.layout, state.placeholder, nextCell, { afterOnly: true, metrics, items: state.reflowItems });
       }, state.placeholder, { items: state.reflowItems, metrics });
+      syncOpenPanelHeightToInternalGrid(state.panel, { includePlaceholders: true });
       if (shouldPlayEntryTransition) {
         state.entryTransitionPlayed = true;
         animatePanelEntryTransition(state);
@@ -9774,9 +10245,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const layoutRect = metrics?.rect || gridRectForLayout(layout);
     const tolerance = 18;
     const candidates = [{ edge: layoutRect.bottom, priority: 1 }];
-    document.querySelectorAll(".widget-layout > .widget-card:not([hidden]), .panel-layout > .db-panel:not([hidden])").forEach((target) => {
+    resizeAlignmentTargetsForLayout(layout).forEach((target) => {
       if (target === item) return;
-      if (gridHostForLayout(layout) !== layout && isPanelInternalGridItem(target)) return;
       const targetRect = target.getBoundingClientRect();
       candidates.push({ edge: targetRect.bottom, priority: 2 });
       candidates.push({ edge: targetRect.top, priority: 3 });
@@ -10088,6 +10558,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const startX = event.clientX;
     const startY = event.clientY;
     const layoutMetrics = metricsForLayout(layout);
+    const resizeParentPanel = isPanelInternalWidgetLayout(layout) ? panelForInternalWidgetLayout(layout) : null;
+    const resizeParentPanelLayout = resizeParentPanel?.closest?.(".panel-layout") || null;
     const gap = layoutMetrics.gap;
     const startScrollY = window.scrollY || document.documentElement.scrollTop || 0;
     const layoutRect = layoutMetrics.rect;
@@ -10095,6 +10567,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const columnStep = Math.max(1, columnWidth + gap);
     const rowStep = DASHBOARD_GRID_ROW_HEIGHT + gap;
     const resizeStartSnapshot = snapshotGridLayout(layout);
+    const resizeParentPanelLayoutSnapshot = resizeParentPanelLayout ? snapshotGridLayout(resizeParentPanelLayout) : null;
     const startRects = new Map(members.map((member) => [member, member.getBoundingClientRect()]));
     const startBounds = new Map(members.map((member) => [member, gridBoundsForItem(member)]));
     const groupBox = groupGridBox([...startBounds.values()]);
@@ -10243,12 +10716,14 @@ document.addEventListener("DOMContentLoaded", () => {
           exclude: [groupFootprint.footprint],
           items: reflowItems,
         });
+        if (resizeParentPanel) syncOpenPanelHeightToInternalGrid(resizeParentPanel, { includePlaceholders: true });
       }, source, { items: reflowItems, metrics: layoutMetrics });
     };
 
     const finishResize = (upEvent, canceled) => {
       if (canceled) {
         restoreGridLayoutSnapshot(resizeStartSnapshot);
+        if (resizeParentPanelLayoutSnapshot) restoreGridLayoutSnapshot(resizeParentPanelLayoutSnapshot);
       } else {
         animateOrderedGridReflow(layout, () => {
           previewEntries.forEach((entry) => entry.expandedGhost?.remove());
@@ -10274,6 +10749,7 @@ document.addEventListener("DOMContentLoaded", () => {
           previewEntries.forEach((entry) => entry.preview.remove());
           groupFootprint.footprint.remove();
           previewEntries.forEach((entry) => clearLiveResizeSurface(entry.member, entry.live));
+          if (resizeParentPanel) syncOpenPanelHeightToInternalGrid(resizeParentPanel);
         }, source, { items: reflowItems, metrics: layoutMetrics });
         syncCommittedWorkspaceScrollFloor(layout, {
           preserveViewport: document.body.classList.contains("dashboard-interaction-scroll-extended"),
@@ -10311,6 +10787,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const panel = panelForInternalWidgetLayout(layout);
       const panelLayout = panel?.closest?.(".panel-layout");
       if (!panel || !panelLayout) return;
+      syncOpenPanelHeightToInternalGrid(panel);
       updatePanelChildEmptyState(panel);
       savePanelLayouts(panelLayout, getActivePanelProfile(panelLayout.dataset.layoutKey || "default"), options);
       return;
@@ -10902,6 +11379,8 @@ document.addEventListener("DOMContentLoaded", () => {
         closeInactiveDashboardTools(widget);
         window.getSelection?.()?.removeAllRanges();
         const layoutMetrics = createGridMetrics(layout);
+        const resizeParentPanel = isPanelInternalWidgetLayout(layout) ? panelForInternalWidgetLayout(layout) : null;
+        const resizeParentPanelLayout = resizeParentPanel?.closest?.(".panel-layout") || null;
         const layoutWidth = layoutMetrics.width;
         const startSpan = Number(widget.dataset.currentSpan) || 1;
         const startRows = gridItemRowSpan(widget, layoutMetrics);
@@ -10920,6 +11399,12 @@ document.addEventListener("DOMContentLoaded", () => {
           row: Number(resizePreview.dataset.gridRow) || Number(widget.dataset.gridRow) || 1,
         };
         const liveResizePreview = beginLiveResizeSurface(widget, startRect);
+        beginResizeAutoZoomCamera();
+        updateResizeAutoZoomCamera({
+          top: startRect.top,
+          bottom: startRect.bottom,
+          height: startRect.height,
+        });
         const resizePeers = groupPeers(widget, "widget")
           .filter((peer) => !peer.classList.contains("db-panel-pinned") && groupItemLayout(peer) === layout)
           .map((peer) => ({
@@ -10932,6 +11417,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const startY = event.clientY;
         const startScrollY = window.scrollY || document.documentElement.scrollTop || 0;
         const resizeStartSnapshot = snapshotGridLayout(layout);
+        const resizeParentPanelLayoutSnapshot = resizeParentPanelLayout ? snapshotGridLayout(resizeParentPanelLayout) : null;
         let previewSpan = startSpan;
         let previewRows = startRows;
         const applyResize = (nextSpan, nextRows) => {
@@ -10954,6 +11440,7 @@ document.addEventListener("DOMContentLoaded", () => {
             applyWidgetGridPosition(peer, peer.dataset.gridCol, peer.dataset.gridRow, peerStartRows + rowDelta);
           });
           resolveSparseGridLayout(layout, resizePreview, { col: snappedCol, row: previewStartCell.row }, { metrics: layoutMetrics, items: reflowItems });
+          if (resizeParentPanel) syncOpenPanelHeightToInternalGrid(resizeParentPanel, { includePlaceholders: true });
           previewSpan = snappedSpan;
           previewRows = snappedRows;
         };
@@ -10966,7 +11453,13 @@ document.addEventListener("DOMContentLoaded", () => {
           const liveWidth = Math.max(minLiveWidth, Math.min(maxLiveWidth, startRect.width + (resizeEdge === "left" ? -deltaX : deltaX)));
           const liveHeight = Math.max(minLiveHeight, startRect.height + deltaY);
           const liveLeft = resizeEdge === "left" ? startRect.right - liveWidth : startRect.left;
-          updateLiveResizeSurface(liveResizePreview, liveWidth, liveHeight, liveLeft, startRect.top - scrollDeltaY);
+          const liveTop = startRect.top - scrollDeltaY;
+          updateLiveResizeSurface(liveResizePreview, liveWidth, liveHeight, liveLeft, liveTop);
+          updateResizeAutoZoomCamera({
+            top: liveTop,
+            bottom: liveTop + liveHeight,
+            height: liveHeight,
+          });
           const rawSpan = startSpan + ((((resizeEdge === "left" ? -deltaX : deltaX)) / layoutWidth) * 6);
           const nextSpan = Math.max(gridItemMinimumSpan(widget), Math.min(6, Math.round(rawSpan)));
           const rawRows = startRows + (deltaY / layoutMetrics.rowStep);
@@ -10975,8 +11468,10 @@ document.addEventListener("DOMContentLoaded", () => {
           animateOrderedGridReflow(layout, () => applyResize(nextSpan, nextRows), widget, { items: reflowItems, metrics: layoutMetrics });
         };
         const finishWidgetResize = (upEvent, canceled) => {
+          endResizeAutoZoomCamera({ immediate: true });
           if (canceled) {
             restoreGridLayoutSnapshot(resizeStartSnapshot);
+            if (resizeParentPanelLayoutSnapshot) restoreGridLayoutSnapshot(resizeParentPanelLayoutSnapshot);
           } else {
             animateOrderedGridReflow(layout, () => {
               const currentSpan = previewSpan || Number(widget.dataset.currentSpan) || startSpan;
@@ -11014,6 +11509,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 metrics: layoutMetrics,
                 items: reflowItems,
               });
+              if (resizeParentPanel) syncOpenPanelHeightToInternalGrid(resizeParentPanel);
             }, widget, { items: reflowItems, metrics: layoutMetrics });
             saveSharedGridLayouts(layout);
             emitWorkspaceEvent({
@@ -11042,6 +11538,7 @@ document.addEventListener("DOMContentLoaded", () => {
           onMove,
           onEnd: finishWidgetResize,
           onCleanup: () => {
+            endResizeAutoZoomCamera({ immediate: true });
             resizePreview.remove();
             clearLiveResizeSurface(widget, liveResizePreview);
             suppressWidgetClickUntil = performance.now() + 360;
@@ -11192,6 +11689,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!header || !body) return;
       const internalWidgetGrid = capabilities.hasPanelContentArea ? ensurePanelInternalWidgetGrid(panel) : null;
       if (internalWidgetGrid) initWidgetLayout(internalWidgetGrid);
+      if (internalWidgetGrid) syncOpenPanelHeightToInternalGrid(panel, { reflow: false });
       if (internalWidgetGrid && !panel.__panelChildHoverOwnershipBound) {
         panel.__panelChildHoverOwnershipBound = true;
         const childWidgetFromEvent = (event) => {
@@ -11602,6 +12100,12 @@ document.addEventListener("DOMContentLoaded", () => {
           row: Number(resizePreview.dataset.gridRow) || Number(panel.dataset.gridRow) || 1,
         };
         const liveResizePreview = beginLiveResizeSurface(panel, startRect);
+        beginResizeAutoZoomCamera();
+        updateResizeAutoZoomCamera({
+          top: startRect.top,
+          bottom: startRect.bottom,
+          height: startRect.height,
+        });
         const expandedFootprintGhost = createExpandedFootprintGhost(panel, layout, startRect, null, layoutMetrics);
         const resizePeers = groupPeers(panel, "panel")
           .filter((peer) => !peer.classList.contains("db-panel-pinned") && groupItemLayout(peer) === layout)
@@ -11649,11 +12153,20 @@ document.addEventListener("DOMContentLoaded", () => {
           const liveWidth = Math.max(minLiveWidth, Math.min(maxLiveWidth, startRect.width + (resizeEdge === "left" ? -deltaX : deltaX)));
           const liveLeft = resizeEdge === "left" ? startRect.right - liveWidth : startRect.left;
           const liveHeight = collapsedPanelResize ? startRect.height : Math.max(minLiveHeight, startRect.height + (effectiveClientY - startY));
-          updateLiveResizeSurface(liveResizePreview, liveWidth, liveHeight, liveLeft, startRect.top - scrollDeltaY);
+          const liveTop = startRect.top - scrollDeltaY;
+          updateLiveResizeSurface(liveResizePreview, liveWidth, liveHeight, liveLeft, liveTop);
           const rawSpan = startSpan + ((((resizeEdge === "left" ? -deltaX : deltaX)) / layoutWidth) * 6);
           const nextSpan = Math.max(gridItemMinimumSpan(panel), Math.min(6, Math.round(rawSpan)));
           const nextRows = Math.max(panelMinimumRows(panel, layoutMetrics), startRows + Math.round((effectiveClientY - startY) / rowStep));
           const nextHeight = gridHeightForRows(nextRows, gap);
+          const cameraHeight = collapsedPanelResize
+            ? expandedPanelFootprintHeight(panel, layout, nextRows, layoutMetrics)
+            : liveHeight;
+          updateResizeAutoZoomCamera({
+            top: liveTop,
+            bottom: liveTop + cameraHeight,
+            height: cameraHeight,
+          });
           if (collapsedPanelResize) {
             const liveRect = liveResizePreview.getBoundingClientRect();
             updateExpandedFootprintGhost(expandedFootprintGhost, panel, layout, {
@@ -11668,6 +12181,7 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         const finishPanelResize = (upEvent, canceled) => {
+          endResizeAutoZoomCamera({ immediate: true });
           if (canceled) {
             restoreGridLayoutSnapshot(resizeStartSnapshot);
           } else {
@@ -11737,6 +12251,7 @@ document.addEventListener("DOMContentLoaded", () => {
           onMove: onResizeMove,
           onEnd: finishPanelResize,
           onCleanup: () => {
+            endResizeAutoZoomCamera({ immediate: true });
             toolPointerCapture = false;
             resizePreview.remove();
             expandedFootprintGhost?.remove();
@@ -12262,6 +12777,8 @@ document.addEventListener("DOMContentLoaded", () => {
       saveWorkspaceLogicGraph(layoutKey, { ...graph, links, contextLinks }, profile, options);
       return true;
     },
+    removeConnectionsForPort: (layoutKey = "builder", port = {}, profile = getActivePanelProfile(layoutKey), options = {}) =>
+      deleteWorkspaceConnectionsForPort(layoutKey, port, profile, options),
     relationships: (layoutKey = "builder", options = {}) => {
       const graph = loadWorkspaceLogicGraph(layoutKey, options.profile || getActivePanelProfile(layoutKey));
       return options.derived === false ? graph.relationships : deriveWorkspaceRelationships(layoutKey, graph);

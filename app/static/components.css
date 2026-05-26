@@ -507,6 +507,95 @@
   font-weight: 760;
 }
 
+.timeframe-widget .timeframe-selector::before,
+.timeframe-widget .timeframe-selector::after {
+  content: none;
+}
+
+.timeframe-filter-button {
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timeframe-filter-editor-list {
+  display: grid;
+  gap: 10px;
+}
+
+.timeframe-filter-editor {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--panel-accent, var(--blue)) 18%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
+}
+
+.timeframe-filter-editor-head,
+.timeframe-workbench-inline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.timeframe-workbench-inline {
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+}
+
+.timeframe-filter-editor label,
+.timeframe-workbench-section label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: .66rem;
+  font-weight: 760;
+}
+
+.timeframe-filter-editor input,
+.timeframe-filter-editor select,
+.timeframe-workbench-section select {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--panel-accent, var(--blue)) 24%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-raised) 84%, transparent);
+  color: var(--text-strong);
+  font: inherit;
+}
+
+.timeframe-remove-filter,
+.timeframe-add-filter {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--panel-accent, var(--blue)) 22%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-raised) 76%, transparent);
+  color: var(--text-strong);
+  font-size: .68rem;
+  font-weight: 780;
+  cursor: pointer;
+}
+
+.timeframe-add-filter {
+  justify-self: start;
+}
+
+.timeframe-filter-selected-row {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.timeframe-filter-selected-row input {
+  width: 14px;
+  height: 14px;
+}
+
 .timeframe-widget[data-current-span="3"],
 .timeframe-widget[data-default-span="3"]:not([data-current-span]) {
   padding-right: 46px;
