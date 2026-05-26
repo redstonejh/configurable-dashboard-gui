@@ -4853,6 +4853,134 @@ body:not(.engineer-mode-active) .context-inspector-widget-card {
   min-height: 118px;
 }
 
+.runtime-map-widget,
+.runtime-calendar-widget {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.runtime-map-header,
+.runtime-calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.runtime-map-header .stat-lbl,
+.runtime-calendar-header .stat-lbl,
+.runtime-map-meta,
+.runtime-calendar-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-map-meta,
+.runtime-calendar-meta {
+  color: var(--muted-fg);
+  font-size: .72rem;
+}
+
+.runtime-map-stage,
+.runtime-calendar-grid {
+  min-height: 0;
+  border: 1px solid rgba(var(--panel-accent-rgb, 37, 99, 235), .16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .16);
+  overflow: hidden;
+}
+
+.runtime-map-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 68px;
+}
+
+.runtime-map-boundary,
+.runtime-map-gridline {
+  fill: none;
+  stroke: rgba(var(--panel-accent-rgb, 37, 99, 235), .18);
+  stroke-width: .6;
+}
+
+.runtime-map-gridline {
+  opacity: .72;
+}
+
+.runtime-map-point {
+  stroke: rgba(255, 255, 255, .76);
+  stroke-width: .7;
+}
+
+.runtime-map-legend,
+.runtime-calendar-list {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.runtime-map-legend span,
+.runtime-calendar-list span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-fg);
+  font-size: .7rem;
+}
+
+.runtime-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-rows: minmax(22px, 1fr);
+  gap: 1px;
+  padding: 1px;
+}
+
+.runtime-calendar-cell {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  min-width: 0;
+  min-height: 0;
+  padding: 4px;
+  background: rgba(255, 255, 255, .12);
+  color: var(--muted-fg);
+  font-size: .68rem;
+}
+
+.runtime-calendar-cell.has-events {
+  color: var(--fg);
+  background: rgba(var(--panel-accent-rgb, 37, 99, 235), .12);
+}
+
+.runtime-calendar-cell i {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(var(--panel-accent-rgb, 37, 99, 235), .72);
+  box-shadow: 7px 0 0 rgba(var(--panel-accent-rgb, 37, 99, 235), .38);
+}
+
+.runtime-calendar-list b {
+  margin-right: 4px;
+  color: var(--fg);
+  font-weight: 700;
+}
+
 .db-panel-body > .empty-state strong {
   font-size: var(--panel-empty-strong-size);
 }

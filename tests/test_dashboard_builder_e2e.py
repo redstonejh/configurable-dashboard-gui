@@ -1167,8 +1167,7 @@ def test_search_bar_widget_uses_normal_widget_creation_and_controls(page: Page, 
     assert_no_undo_artifacts(page)
     assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
     anchor = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]').last
     expect(anchor).to_be_visible()
     expect(anchor.locator(".workspace-anchor-label")).to_have_text("Top")
@@ -1727,6 +1726,9 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
           capabilities: JSON.parse(node.dataset.widgetCapabilities || "{}"),
           settings: JSON.parse(node.dataset.widgetSupportedSettings || "[]"),
           requirements: JSON.parse(node.dataset.widgetQueryRequirements || "{}"),
+          mode: node.dataset.widgetRuntimeMode || "",
+          status: node.dataset.widgetRuntimeStatus || "",
+          hasRows: Boolean(node.querySelector(".runtime-table")),
           text: node.textContent
         })
         """
@@ -1737,7 +1739,10 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
     assert table_state["capabilities"]["requiresDataSource"] is True
     assert "columns" in table_state["settings"]
     assert table_state["requirements"]["fields"] == "semantic-or-configured"
-    assert "No data source" in table_state["text"]
+    assert table_state["mode"] == "demo"
+    assert table_state["status"] == "ready"
+    assert table_state["hasRows"] is True
+    assert "Work" in table_state["text"] or "Inspection" in table_state["text"] or "Repair" in table_state["text"]
 
     page.evaluate(
         """
@@ -1778,6 +1783,7 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
           objectKind: node.dataset.dashboardObjectKind,
           definition: node.dataset.widgetDefinition,
           requirements: JSON.parse(node.dataset.widgetQueryRequirements || "{}"),
+          mode: node.dataset.widgetRuntimeMode || "",
           hasChartRuntime: Boolean(window.dashboardChartRuntime),
           chartTypes: window.dashboardChartRuntime.listChartDefinitions().map((definition) => definition.chartType),
           renderedChartType: node.querySelector(".runtime-chart-widget")?.dataset.chartType,
@@ -1792,6 +1798,7 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
     assert "bar" in chart_state["chartTypes"]
     assert "heatmap" in chart_state["chartTypes"]
     assert chart_state["requirements"]["fields"] == "chart-definition"
+    assert chart_state["mode"] != "demo"
     assert chart_state["renderedChartType"] == "bar"
 
     open_add_category(page, "visualization", "Geospatial").locator('.widget-add-action[data-widget-kind="map"]').click()
@@ -1817,6 +1824,7 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
             minH: Number(node.dataset.minH || 0),
             capabilities: JSON.parse(node.dataset.widgetCapabilities || "{}"),
             requirements: JSON.parse(node.dataset.widgetQueryRequirements || "{}"),
+            mode: node.dataset.widgetRuntimeMode || "",
             registry: {
               category: definition.category,
               subcategory: definition.subcategory,
@@ -1845,6 +1853,7 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
     assert map_state["requirements"]["fields"] == "geospatial"
     assert {"latitudeField", "longitudeField", "locationField", "layerType", "limit"}.issubset(set(map_state["registry"]["settingsFields"]))
     assert "Needs geospatial data" in map_state["emptyRender"]
+    assert map_state["mode"] != "demo"
     assert "Map Configure location fields" in map_state["text"]
     map_key = map_widget.evaluate("node => node.dataset.widgetKey")
     map_selector = f'.widget-layout > .map-widget-card[data-widget-key="{map_key}"]'
@@ -1894,6 +1903,298 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
     expect(unsupported.locator(".unsupported-widget-state")).to_be_visible()
     expect(unsupported).to_contain_text("Unsupported widget")
     assert unsupported.evaluate("node => node.dataset.widgetDefinition") == "unsupported"
+    assert_clean_browser(page)
+
+
+def test_every_add_menu_widget_entry_creates_registry_backed_runtime_widget(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
+
+    entries = page.evaluate(
+        """
+        () => [...document.querySelectorAll(".panel-add-menu .widget-add-action")].map((button, index) => ({
+          index,
+          text: button.textContent.trim(),
+          widgetKind: button.dataset.widgetKind || "",
+          widgetCreateKind: button.dataset.widgetCreateKind || "",
+          chartType: button.dataset.chartType || "",
+          config: button.dataset.widgetConfig || "",
+        }))
+        """
+    )
+    assert entries
+
+    created_widgets = []
+    for entry in entries:
+        if entry["widgetKind"] == "anchor":
+            before_anchor_count = page.locator(".workspace-anchor-object").count()
+            page.evaluate(
+                "index => document.querySelectorAll('.panel-add-menu .widget-add-action')[index].click()",
+                entry["index"],
+            )
+            expect(page.locator(".workspace-anchor-object")).to_have_count(before_anchor_count + 1)
+            continue
+
+        page.evaluate(
+            "index => document.querySelectorAll('.panel-add-menu .widget-add-action')[index].click()",
+            entry["index"],
+        )
+        created = page.locator(".widget-layout:not(.panel-internal-widget-grid) > .widget-card[data-custom-widget='true']").last
+        expect(created).to_be_visible()
+        state = created.evaluate(
+            """
+            (node, entry) => {
+              const definition = window.dashboardWidgetRuntime.getWidgetDefinition(
+                entry.widgetCreateKind || entry.widgetKind
+              );
+              const config = JSON.parse(node.dataset.widgetConfig || "{}");
+              return {
+                key: node.dataset.widgetKey,
+                entryText: entry.text,
+                runtimeType: node.dataset.widgetRuntimeType,
+                definition: node.dataset.widgetDefinition,
+                objectKind: node.dataset.dashboardObjectKind,
+                widgetLayer: node.dataset.widgetLayer,
+                config,
+                registry: {
+                  type: definition.type,
+                  label: definition.label,
+                  category: definition.category,
+                  defaultSize: definition.defaultSize,
+                  minSize: definition.minSize,
+                  fields: definition.settingsSchema.sections.flatMap(section => section.fields.map(field => field.key)),
+                  hasRender: typeof definition.render === "function",
+                  hasDefaults: typeof definition.getDefaultConfig === "function",
+                },
+                hasRenderedSurface: Boolean(node.querySelector(
+                  ".stat-val, .stat-lbl, input, textarea, select, svg, table, iframe, video, img, .media-widget-state, .text-widget-content, .meta-widget, .data-filter-widget, .shift-widget"
+                )),
+                text: node.textContent.trim().replace(/\\s+/g, " "),
+              };
+            }
+            """,
+            entry,
+        )
+        created_widgets.append(state["key"])
+        assert state["definition"] == state["registry"]["type"]
+        assert state["definition"] != "unsupported"
+        assert state["runtimeType"] == state["definition"]
+        assert state["registry"]["label"]
+        assert state["registry"]["category"] in {
+            "data",
+            "visualization",
+            "controls",
+            "content",
+            "media",
+            "system",
+        }
+        assert state["registry"]["defaultSize"]["cols"] >= state["registry"]["minSize"]["cols"] >= 1
+        assert state["registry"]["defaultSize"]["rows"] >= state["registry"]["minSize"]["rows"] >= 1
+        assert state["registry"]["fields"], state["definition"]
+        assert state["registry"]["hasRender"] is True
+        assert state["registry"]["hasDefaults"] is True
+        assert state["text"] or state["hasRenderedSurface"], state
+        if entry["chartType"]:
+            assert state["definition"] == "chart"
+            assert state["config"]["chartType"] == entry["chartType"]
+        if entry["widgetKind"] == "data-filter":
+            assert state["definition"] == "data-filter"
+            assert state["widgetLayer"] == "backend"
+
+    assert len(created_widgets) == len(set(created_widgets))
+    assert_clean_browser(page)
+
+
+def test_demo_data_runtime_generates_deterministic_transformable_scenarios(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    state = page.evaluate(
+        """
+        () => {
+          const demo = window.dashboardDemoDataRuntime;
+          const transforms = window.dashboardDataTransformRuntime;
+          const first = demo.generateOperationalData({ seed: "repeatable-proof" });
+          const second = demo.generateOperationalData({ seed: "repeatable-proof" });
+          const third = demo.generateOperationalData({ seed: "different-proof" });
+          const rows = first.datasets.financials;
+          const calculated = transforms.queryRows(rows, {
+            calculatedFields: [
+              { name: "margin", expression: "revenue - cost" },
+              { name: "completionRate", expression: "completed / total" },
+            ],
+            equationFilters: [{ expression: "margin > 0" }],
+            thresholds: [{ field: "margin", warning: 18000, critical: 42000, targetField: "marginState" }],
+            groupBy: ["segment"],
+            aggregations: [{ name: "revenueTotal", field: "revenue", op: "sum" }],
+            sort: [{ field: "revenueTotal", direction: "desc" }],
+            limit: 4,
+          }, { semanticMapping: demo.semanticMappingFor("financials") });
+          const bucketed = transforms.queryRows(first.datasets.sensorReadings, {
+            timeBucket: { field: "timestamp", unit: "day", targetField: "day" },
+            calculatedFields: [{ name: "overThreshold", expression: "reading > threshold" }],
+            equationFilters: [{ expression: "overThreshold == true" }],
+            limit: 20,
+          }, { semanticMapping: demo.semanticMappingFor("sensorReadings") });
+          return {
+            deterministic: JSON.stringify(first.datasets.operations.slice(0, 8)) === JSON.stringify(second.datasets.operations.slice(0, 8)),
+            different: JSON.stringify(first.datasets.operations.slice(0, 8)) !== JSON.stringify(third.datasets.operations.slice(0, 8)),
+            datasetCounts: Object.fromEntries(Object.entries(first.datasets).map(([key, value]) => [key, value.length])),
+            matrixKeys: Object.keys(demo.useCaseMatrix()),
+            calculatedRows: calculated.rows,
+            bucketedRows: bucketed.rows,
+            expression: {
+              margin: transforms.evaluateExpression("revenue - cost", rows[0]),
+              openCount: transforms.evaluateExpression('count(status = "Positive")', rows[0], { rows }),
+            },
+          };
+        }
+        """
+    )
+    assert state["deterministic"] is True
+    assert state["different"] is True
+    assert state["datasetCounts"]["operations"] > 250
+    assert state["datasetCounts"]["sensorReadings"] >= 168
+    assert {"stat", "table", "chart", "map", "filter", "timeframe", "calendar", "data-filter", "shift"}.issubset(
+        set(state["matrixKeys"])
+    )
+    assert state["calculatedRows"]
+    assert all("revenueTotal" in row for row in state["calculatedRows"])
+    assert state["bucketedRows"]
+    assert all("day" in row and "overThreshold" in row for row in state["bucketedRows"])
+    assert state["expression"]["margin"] > 0
+    assert state["expression"]["openCount"] >= 0
+    assert_clean_browser(page)
+
+
+def test_demo_workspace_presets_render_visible_data_and_persist_panel_scope(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    executive = page.evaluate(
+        """
+        () => window.dashboardDemoWorkspaceRuntime.applyPreset("executive-overview", { reset: true })
+        """
+    )
+    assert executive["ok"] is True
+    page.wait_for_function(
+        """
+        () => [...document.querySelectorAll('[data-demo-preset-object="true"].widget-card')]
+          .filter((node) => node.dataset.widgetRuntimeStatus === "ready").length >= 5
+        """
+    )
+    executive_visibility = page.evaluate(
+        """
+        () => {
+          const widgets = [...document.querySelectorAll('[data-demo-preset-object="true"].widget-card')];
+          return {
+            count: widgets.length,
+            statValues: widgets.filter((node) => node.dataset.widgetDefinition === "stat")
+              .map((node) => node.querySelector(".stat-val")?.textContent?.trim()).filter(Boolean),
+            chartMarks: widgets.filter((node) => node.dataset.widgetDefinition === "chart")
+              .map((node) => node.querySelectorAll("svg circle, svg rect, svg path, svg line, svg polyline").length),
+            tableRows: widgets.filter((node) => node.dataset.widgetDefinition === "table")
+              .map((node) => node.querySelectorAll("tbody tr").length),
+            mapPoints: widgets.filter((node) => node.dataset.widgetDefinition === "map")
+              .map((node) => node.querySelectorAll(".runtime-map-point").length),
+            emptyText: widgets.map((node) => node.textContent).filter((text) => /No data|Empty|Configure|Unable/.test(text)),
+          };
+        }
+        """
+    )
+    assert executive_visibility["count"] >= 6
+    assert len(executive_visibility["statValues"]) >= 2
+    assert all(count > 0 for count in executive_visibility["chartMarks"])
+    assert all(count > 0 for count in executive_visibility["tableRows"])
+    assert all(count > 0 for count in executive_visibility["mapPoints"])
+    assert executive_visibility["emptyText"] == []
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    page.wait_for_function(
+        """
+        () => [...document.querySelectorAll('.widget-card[data-widget-runtime-status="ready"]')]
+          .filter((node) => (node.dataset.widgetKey || "").startsWith("executive-overview-widget-")).length >= 5
+        """
+    )
+    persisted = page.evaluate(
+        """
+        () => {
+          const snapshot = window.dashboardPersistenceRuntime.snapshot("builder", "1");
+          const validation = window.dashboardPersistenceRuntime.validate("builder", "1");
+          return {
+            ok: validation.ok,
+            dataSources: snapshot.dataSources.map((source) => source.id),
+            widgets: snapshot.widgets.filter((widget) => widget.id.startsWith("executive-overview-widget")).map((widget) => ({
+              id: widget.id,
+              type: widget.type,
+              config: widget.config,
+            })),
+          };
+        }
+        """
+    )
+    assert persisted["ok"] is True
+    assert "demo-source-executive-overview" in persisted["dataSources"]
+    assert {widget["type"] for widget in persisted["widgets"]} >= {"stat", "chart", "table", "map"}
+    assert all("rows" not in widget["config"] for widget in persisted["widgets"])
+
+    panel_preset = page.evaluate(
+        """
+        () => window.dashboardDemoWorkspaceRuntime.applyPreset("panel-containment-stress", { reset: true })
+        """
+    )
+    assert panel_preset["ok"] is True
+    page.wait_for_function(
+        """
+        () => document.querySelectorAll('.panel-internal-widget-grid > [data-demo-preset-object="true"].widget-card[data-widget-runtime-status="ready"]').length >= 3
+        """
+    )
+    panel_state = page.evaluate(
+        """
+        () => {
+          const panels = [...document.querySelectorAll('.panel-layout > .db-panel[data-demo-preset-object="true"]')];
+          return panels.map((panel) => ({
+            key: panel.dataset.panelKey,
+            childCount: panel.querySelectorAll('.panel-internal-widget-grid > .widget-card[data-demo-preset-object="true"]').length,
+            childParents: [...panel.querySelectorAll('.panel-internal-widget-grid > .widget-card[data-demo-preset-object="true"]')]
+              .map((child) => child.dataset.parentPanelKey),
+            visibleContent: [...panel.querySelectorAll('.panel-internal-widget-grid > .widget-card[data-demo-preset-object="true"]')]
+              .every((child) => child.textContent.trim().length > 0),
+          }));
+        }
+        """
+    )
+    assert len(panel_state) == 2
+    assert sum(panel["childCount"] for panel in panel_state) >= 3
+    assert all(parent == panel["key"] for panel in panel_state for parent in panel["childParents"])
+    assert all(panel["visibleContent"] for panel in panel_state)
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    reloaded_panel_state = page.evaluate(
+        """
+        () => [...document.querySelectorAll('.panel-layout > .db-panel')]
+          .filter((panel) => ["demo-panel-a", "demo-panel-b"].includes(panel.dataset.panelKey || ""))
+          .map((panel) => ({
+          key: panel.dataset.panelKey,
+          childCount: panel.querySelectorAll('.panel-internal-widget-grid > .widget-card').length,
+          parentKeys: [...panel.querySelectorAll('.panel-internal-widget-grid > .widget-card')]
+            .map((child) => child.dataset.parentPanelKey),
+        }))
+        """
+    )
+    assert len(reloaded_panel_state) == 2
+    assert sum(panel["childCount"] for panel in reloaded_panel_state) >= 3
+    assert all(parent == panel["key"] for panel in reloaded_panel_state for parent in panel["parentKeys"])
     assert_clean_browser(page)
 
 
@@ -2090,8 +2391,7 @@ def test_persistence_runtime_exports_versioned_snapshot_and_validation(page: Pag
     divider = page.locator('.panel-layout > .db-panel[data-workspace-object-type="divider"]').last
     expect(divider).to_be_visible()
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
     anchor = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]').last
     expect(anchor).to_be_visible()
 
@@ -2223,7 +2523,8 @@ def test_stat_widget_consumes_context_query_and_renders_metric_states(page: Page
 
     stat = page.locator('[data-widget-key="widget-1"]')
     expect(stat).to_be_visible()
-    expect(stat).to_contain_text("Needs data source")
+    expect(stat.locator(".stat-val")).to_have_text("458")
+    expect(stat.locator(".stat-lbl")).to_have_text("Widget")
 
     contract = stat.evaluate(
         """
@@ -2239,7 +2540,7 @@ def test_stat_widget_consumes_context_query_and_renders_metric_states(page: Page
     assert contract["capabilities"]["readsContext"] is True
     assert contract["capabilities"]["supportsTimeRange"] is True
     assert contract["requirements"]["metric"] == ["count", "sum", "avg", "min", "max"]
-    assert contract["status"] == "empty"
+    assert contract["status"] == "ready"
 
     page.evaluate(
         """
@@ -2348,6 +2649,7 @@ def test_stat_widget_consumes_context_query_and_renders_metric_states(page: Page
             metric: "max",
             valueField: "amount"
           });
+          document.activeElement?.blur?.();
           engine.setDataSources("builder", [{ id: "slow-stat-source", name: "Slow Stat Source", kind: "slow-stat", config: {} }]);
           engine.setWorkspaceContexts("builder", [{
             id: "builder:region:root",
@@ -2356,10 +2658,36 @@ def test_stat_widget_consumes_context_query_and_renders_metric_states(page: Page
             semanticMapping: { valueField: "amount" }
           }]);
           engine.refresh("builder");
+          void window.dashboardQueryRuntime.refreshWidget(widget, { force: true });
         }
         """
     )
-    expect(stat).to_contain_text("Loading")
+    slow_debug = page.evaluate(
+        """
+        () => {
+          const engine = window.dashboardContextEngine;
+          const widget = document.querySelector('[data-widget-key="widget-1"]');
+          const definition = window.dashboardWidgetRuntime.getWidgetDefinition("stat");
+          const context = engine.resolveContextForElement(widget);
+          const config = JSON.parse(widget.dataset.widgetConfig || "{}");
+          return {
+            adapters: engine.adapters(),
+            sources: engine.getDataSources("builder"),
+            contexts: engine.getWorkspaceContexts("builder"),
+            context,
+            query: definition.resolveQuery(config, context),
+            activeTag: document.activeElement?.tagName || "",
+            activeInside: widget.contains(document.activeElement),
+            resolvers: window.__slowStatResolvers.length,
+            status: widget.dataset.widgetRuntimeStatus,
+          };
+        }
+        """
+    )
+    assert slow_debug["context"]["dataSourceId"] == "slow-stat-source", slow_debug
+    assert slow_debug["context"]["canQuery"] is True, slow_debug
+    assert slow_debug["query"], slow_debug
+    assert slow_debug["resolvers"] > 0, slow_debug
     page.evaluate(
         """
         () => window.__slowStatResolvers.splice(0).forEach((resolve) => resolve({
@@ -11566,8 +11894,7 @@ def test_smart_delete_confirms_only_meaningful_workspace_objects(page: Page, app
     press_dashboard_undo(page)
     expect(page.locator(f'.workspace-divider[data-panel-key="{renamed_divider_key}"]')).to_be_visible()
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
     default_anchor = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]').last
     default_anchor_key = default_anchor.evaluate("node => node.dataset.anchorKey")
     default_anchor.locator(".anchor-settings-toggle").click(force=True)

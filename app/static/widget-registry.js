@@ -149,6 +149,15 @@
   const tableConfiguredColumns = (config) => Array.isArray(config?.columns)
     ? config.columns.map((field) => String(field || "").trim()).filter(Boolean)
     : [];
+  const queryTransformsFromConfig = (config = {}) => ({
+    calculatedFields: Array.isArray(config.calculatedFields) ? config.calculatedFields : [],
+    equationFilters: Array.isArray(config.equationFilters) ? config.equationFilters : [],
+    thresholds: Array.isArray(config.thresholds) ? config.thresholds : [],
+    unitConversions: Array.isArray(config.unitConversions) ? config.unitConversions : [],
+    staleRules: Array.isArray(config.staleRules) ? config.staleRules : [],
+    aggregations: Array.isArray(config.aggregations) ? config.aggregations : [],
+    timeBucket: config.timeBucket && typeof config.timeBucket === "object" ? config.timeBucket : null,
+  });
   const tableVisibleColumnCount = (cols) => {
     const safeCols = Number(cols) || 2;
     if (safeCols <= 2) return 2;
@@ -1031,6 +1040,72 @@
     if (timeRange.end) return `Until ${timeRange.end}`;
     return "";
   };
+  const cloneJson = (value) => JSON.parse(JSON.stringify(value));
+  const DEMO_SEMANTIC_MAPPING = {
+    dateField: "date",
+    valueField: "value",
+    labelField: "label",
+    categoryField: "category",
+    statusField: "state",
+    ownerField: "owner",
+    locationField: "location",
+    latitudeField: "latitude",
+    longitudeField: "longitude",
+  };
+  const DEMO_SCHEMA_FIELDS = [
+    { name: "date", type: "date" },
+    { name: "label", type: "string" },
+    { name: "category", type: "string" },
+    { name: "state", type: "string" },
+    { name: "owner", type: "string" },
+    { name: "location", type: "string" },
+    { name: "latitude", type: "number" },
+    { name: "longitude", type: "number" },
+    { name: "value", type: "number" },
+    { name: "comparison", type: "number" },
+    { name: "progress", type: "number" },
+    { name: "flag", type: "boolean" },
+  ];
+  const DEMO_ROWS = [
+    { date: "2026-05-01", label: "Alpha", category: "North", state: "normal", owner: "Avery", location: "Point A", latitude: 37.71, longitude: -122.39, value: 42, comparison: 36, progress: 0.61, flag: true },
+    { date: "2026-05-02", label: "Beta", category: "North", state: "positive", owner: "Blair", location: "Point B", latitude: 37.77, longitude: -122.43, value: 55, comparison: 41, progress: 0.74, flag: true },
+    { date: "2026-05-03", label: "Gamma", category: "East", state: "warning", owner: "Casey", location: "Point C", latitude: 37.8, longitude: -122.36, value: 28, comparison: 46, progress: 0.38, flag: false },
+    { date: "2026-05-04", label: "Delta", category: "West", state: "negative", owner: "Devon", location: "Point D", latitude: 37.69, longitude: -122.48, value: 19, comparison: 31, progress: 0.22, flag: false },
+    { date: "2026-05-05", label: "Epsilon", category: "South", state: "stale", owner: "Emery", location: "Point E", latitude: 37.63, longitude: -122.42, value: 34, comparison: 33, progress: 0.47, flag: true },
+    { date: "2026-05-06", label: "Zeta", category: "East", state: "normal", owner: "Finley", location: "Point F", latitude: 37.74, longitude: -122.31, value: 63, comparison: 52, progress: 0.81, flag: true },
+    { date: "2026-05-07", label: "Eta", category: "West", state: "positive", owner: "Gray", location: "Point G", latitude: 37.83, longitude: -122.45, value: 71, comparison: 59, progress: 0.88, flag: true },
+    { date: "2026-05-08", label: "Theta", category: "South", state: "warning", owner: "Harper", location: "Point H", latitude: 37.67, longitude: -122.34, value: 25, comparison: 29, progress: 0.33, flag: false },
+    { date: "2026-05-09", label: "Iota", category: "North", state: "normal", owner: "Indigo", location: "Point I", latitude: 37.9, longitude: -122.4, value: 48, comparison: 43, progress: 0.66, flag: true },
+    { date: "2026-05-10", label: "Kappa", category: "East", state: "negative", owner: "Jules", location: "Point J", latitude: 37.58, longitude: -122.29, value: 16, comparison: 24, progress: 0.19, flag: false },
+    { date: "2026-05-11", label: "Lambda", category: "South", state: "positive", owner: "Kai", location: "Point K", latitude: 37.72, longitude: -122.51, value: 84, comparison: 67, progress: 0.94, flag: true },
+    { date: "2026-05-12", label: "Mu", category: "West", state: "stale", owner: "Lane", location: "Point L", latitude: 37.87, longitude: -122.33, value: 39, comparison: 44, progress: 0.52, flag: false },
+    { date: "2026-05-13", label: "Nu", category: "North", state: "warning", owner: "Morgan", location: "Point M", latitude: 37.6, longitude: -122.45, value: 31, comparison: 35, progress: 0.41, flag: false },
+    { date: "2026-05-14", label: "Xi", category: "East", state: "normal", owner: "Nico", location: "Point N", latitude: 37.78, longitude: -122.27, value: 58, comparison: 53, progress: 0.73, flag: true },
+    { date: "2026-05-15", label: "Omicron", category: "West", state: "positive", owner: "Oak", location: "Point O", latitude: 37.65, longitude: -122.37, value: 76, comparison: 62, progress: 0.9, flag: true },
+    { date: "2026-05-16", label: "Pi", category: "South", state: "negative", owner: "Parker", location: "Point P", latitude: 37.84, longitude: -122.5, value: 22, comparison: 27, progress: 0.29, flag: false },
+    { date: "2026-05-17", label: "Rho", category: "North", state: "normal", owner: "Quinn", location: "Point Q", latitude: 37.7, longitude: -122.25, value: 47, comparison: 45, progress: 0.59, flag: true },
+    { date: "2026-05-18", label: "Sigma", category: "East", state: "warning", owner: "Reese", location: "Point R", latitude: 37.92, longitude: -122.47, value: 36, comparison: 39, progress: 0.44, flag: false },
+    { date: "2026-05-19", label: "Tau", category: "West", state: "positive", owner: "Sage", location: "Point S", latitude: 37.61, longitude: -122.32, value: 69, comparison: 54, progress: 0.82, flag: true },
+    { date: "2026-05-20", label: "Upsilon", category: "South", state: "stale", owner: "Tatum", location: "Point T", latitude: 37.75, longitude: -122.55, value: 33, comparison: 37, progress: 0.49, flag: false },
+    { date: "2026-05-21", label: "Phi", category: "North", state: "normal", owner: "Uma", location: "Point U", latitude: 37.88, longitude: -122.38, value: 52, comparison: 47, progress: 0.67, flag: true },
+    { date: "2026-05-22", label: "Chi", category: "East", state: "negative", owner: "Vale", location: "Point V", latitude: 37.66, longitude: -122.28, value: 18, comparison: 26, progress: 0.24, flag: false },
+    { date: "2026-05-23", label: "Psi", category: "West", state: "warning", owner: "Winter", location: "Point W", latitude: 37.81, longitude: -122.53, value: 29, comparison: 34, progress: 0.36, flag: false },
+    { date: "2026-05-24", label: "Omega", category: "South", state: "positive", owner: "Yael", location: "Point X", latitude: 37.57, longitude: -122.4, value: 88, comparison: 72, progress: 0.97, flag: true },
+  ];
+  const demoDataResult = (overrides = {}) => {
+    const runtime = window.dashboardDemoDataRuntime;
+    if (runtime?.widgetDemoData) {
+      return runtime.widgetDemoData(overrides.widgetType || "stat", overrides.config || {}, overrides);
+    }
+    return {
+      name: "Demo data",
+      sourceId: "__demo-widget-source",
+      sourceName: "Demo data",
+      semanticMapping: { ...DEMO_SEMANTIC_MAPPING, ...(overrides.semanticMapping || {}) },
+      schema: { fields: cloneJson(overrides.schemaFields || DEMO_SCHEMA_FIELDS) },
+      rows: cloneJson(overrides.rows || DEMO_ROWS),
+    };
+  };
 
   const unsupportedDefinition = (type = "unknown") => ({
     type: "unsupported",
@@ -1074,6 +1149,7 @@
       ...definition,
       type,
       displayName: definition.displayName || type,
+      label: definition.label || definition.displayName || type,
       category: definition.category || "data",
       subcategory: definition.subcategory || "",
       layer: normalizeWidgetLayer(definition.layer),
@@ -1098,6 +1174,7 @@
       densityBehavior: definition.densityBehavior || {},
       queryRequirements: definition.queryRequirements || { fields: [] },
       getDefaultConfig,
+      getDemoData: typeof definition.getDemoData === "function" ? definition.getDemoData : null,
       resolveQuery: typeof definition.resolveQuery === "function" ? definition.resolveQuery : () => null,
       render: typeof definition.render === "function"
         ? definition.render
@@ -1194,12 +1271,15 @@
           { key: "label", label: "Label", type: "text", defaultValue: "Widget" },
           { key: "metric", label: "Metric", type: "metricPicker", defaultValue: "count", options: ["count", "sum", "avg", "min", "max"], affectsQuery: true },
           { key: "valueField", label: "Value field", type: "fieldPicker", affectsQuery: true },
+          { key: "calculatedFields", label: "Calculated fields", type: "json", defaultValue: [], affectsQuery: true },
+          { key: "equationFilters", label: "Equation filters", type: "json", defaultValue: [], affectsQuery: true },
           { key: "format", label: "Format", type: "select", defaultValue: "number", options: ["number", "currency", "percent"] },
         ],
       }],
     },
     queryRequirements: { fields: ["semantic"], metric: ["count", "sum", "avg", "min", "max"] },
     getDefaultConfig: () => ({ label: "Widget", title: "Widget", metric: "count", format: "number" }),
+    getDemoData: (config = {}) => demoDataResult({ widgetType: "stat", config }),
     resolveQuery: (config, resolvedContext) => {
       if (!resolvedContext?.dataSourceId || !resolvedContext?.canQuery) return null;
       const mapping = resolvedContext.semanticMapping || {};
@@ -1215,6 +1295,7 @@
         filters: Array.isArray(config.filters) ? config.filters : [],
         timeRange: config.timeRange || null,
         sort: Array.isArray(config.sort) ? config.sort : [],
+        ...queryTransformsFromConfig(config),
       };
     },
     render: ({ instance, resolvedContext, data, status, density = instance.density || "standard" }) => {
@@ -1269,6 +1350,19 @@
       supportsResize: true,
     },
     supportedSettings: ["timeRange", "color", "pin", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "timeframe",
+        label: "Timeframe",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Timeframe" },
+          { key: "weekStartDay", label: "Week starts on", type: "select", defaultValue: 0, options: WEEKDAY_OPTIONS, affectsContext: true },
+          { key: "selectedPreset", label: "Preset", type: "select", defaultValue: "", options: TIMEFRAME_PRESETS.map((preset) => ({ value: preset.id, label: preset.label })), affectsContext: true },
+          { key: "customStart", label: "Custom start", type: "date", affectsContext: true },
+          { key: "customEnd", label: "Custom end", type: "date", affectsContext: true },
+        ],
+      }],
+    },
     queryRequirements: { timeRange: true },
     getDefaultConfig: () => ({
       title: "Timeframe",
@@ -1348,6 +1442,18 @@
       supportsResize: true,
     },
     supportedSettings: ["placeholder", "scope", "color", "pin", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "search",
+        label: "Search",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Search" },
+          { key: "placeholder", label: "Placeholder", type: "text", defaultValue: " " },
+          { key: "field", label: "Search field", type: "fieldPicker", affectsContext: true },
+          { key: "query", label: "Query", type: "text", defaultValue: "", affectsContext: true },
+        ],
+      }],
+    },
     queryRequirements: { filters: true },
     getDefaultConfig: () => ({ title: "Search", query: "", placeholder: " " }),
     resolveQuery: (config) => config.query
@@ -1386,7 +1492,19 @@
       supportsResize: true,
     },
     supportedSettings: ["filters", "scope", "color", "pin", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "filters",
+        label: "Filters",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Filters" },
+          { key: "filters", label: "Filter config", type: "json", defaultValue: [{ id: "search", type: "text", label: "Search", operator: "contains", value: "" }], affectsContext: true },
+          { key: "limit", label: "Option sample", type: "number", defaultValue: 200, min: 1, max: 1000, step: 1, affectsQuery: true },
+        ],
+      }],
+    },
     queryRequirements: { fields: "filter-controls", limit: 200 },
+    getDemoData: (config = {}) => demoDataResult({ widgetType: "filter", config }),
     getDefaultConfig: () => ({
       title: "Filters",
       filters: [{ id: "search", type: "text", label: "Search", operator: "contains", value: "" }],
@@ -1437,6 +1555,17 @@
       supportsResize: true,
     },
     supportedSettings: ["text", "color", "pin", "duplicate", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "note",
+        label: "Note",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Note" },
+          { key: "body", label: "Body", type: "textarea", defaultValue: "" },
+          { key: "placeholder", label: "Placeholder", type: "text", defaultValue: "Write a note" },
+        ],
+      }],
+    },
     queryRequirements: { fields: [] },
     getDefaultConfig: () => ({ title: "Note", body: "", placeholder: "Write a note" }),
     resolveQuery: () => null,
@@ -1481,6 +1610,15 @@
       supportsResize: true,
     },
     supportedSettings: ["title", "color", "pin", "duplicate", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "region",
+        label: "Region",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Region Summary" },
+        ],
+      }],
+    },
     queryRequirements: { region: true },
     getDefaultConfig: () => ({ title: "Region Summary" }),
     resolveQuery: () => null,
@@ -1793,6 +1931,18 @@
       supportsResize: true,
     },
     supportedSettings: ["eventTypes", "scope", "limit", "color", "pin", "duplicate", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "activity",
+        label: "Activity",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Activity Feed" },
+          { key: "scope", label: "Scope", type: "select", defaultValue: "workspace", options: ["workspace", "region", "selection"] },
+          { key: "maxItems", label: "Items", type: "number", defaultValue: 6, min: 1, max: 20, step: 1 },
+          { key: "eventTypes", label: "Event types", type: "textarea", valueType: "array", placeholder: "object-created, layout-save-completed" },
+        ],
+      }],
+    },
     queryRequirements: { activity: true },
     getDefaultConfig: () => ({ title: "Activity Feed", eventTypes: [], maxItems: 6, scope: "workspace" }),
     resolveQuery: () => null,
@@ -1847,6 +1997,17 @@
       supportsResize: true,
     },
     supportedSettings: ["scope", "promptTemplate", "color", "pin", "duplicate", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "assistant",
+        label: "Assistant",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "AI Assistant" },
+          { key: "scope", label: "Scope", type: "select", defaultValue: "region", options: ["workspace", "region", "panel", "selection"], affectsContext: true },
+          { key: "promptTemplate", label: "Prompt template", type: "textarea", defaultValue: "" },
+        ],
+      }],
+    },
     queryRequirements: { assistantScope: true },
     getDefaultConfig: () => ({ title: "AI Assistant", scope: "region", promptTemplate: "" }),
     resolveQuery: () => null,
@@ -1903,6 +2064,19 @@
       supportsResize: true,
     },
     supportedSettings: ["target", "inheritance", "filters", "dataSource", "color", "pin", "duplicate", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "inspector",
+        label: "Inspector",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Context Inspector" },
+          { key: "target", label: "Target", type: "select", defaultValue: "currentRegion", options: ["currentRegion", "selection", "workspace"], affectsContext: true },
+          { key: "showInheritanceTree", label: "Inheritance", type: "toggle", defaultValue: true },
+          { key: "showFilters", label: "Filters", type: "toggle", defaultValue: true },
+          { key: "showDataSource", label: "Data source", type: "toggle", defaultValue: true },
+        ],
+      }],
+    },
     queryRequirements: { engineerMode: true, context: true },
     getDefaultConfig: () => ({
       title: "Context Inspector",
@@ -2002,6 +2176,19 @@
       supportsResize: true,
     },
     supportedSettings: ["source", "fit", "caption", "color", "pin", "duplicate", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "image",
+        label: "Image",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Image" },
+          { key: "src", label: "Source URL", type: "text", defaultValue: "" },
+          { key: "alt", label: "Alt text", type: "text", defaultValue: "" },
+          { key: "fit", label: "Fit", type: "select", defaultValue: "contain", options: ["contain", "cover", "fill", "center"] },
+          { key: "caption", label: "Caption", type: "text", defaultValue: "" },
+        ],
+      }],
+    },
     queryRequirements: { fields: [] },
     getDefaultConfig: () => ({ title: "Image", assetId: "", alt: "", fit: "contain", caption: "" }),
     resolveQuery: () => null,
@@ -2047,6 +2234,20 @@
       supportsResize: true,
     },
     supportedSettings: ["source", "caption", "color", "pin", "duplicate", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "video",
+        label: "Video",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Video" },
+          { key: "src", label: "Source URL", type: "text", defaultValue: "" },
+          { key: "embedType", label: "Embed", type: "select", defaultValue: "url", options: ["url", "youtube", "vimeo"] },
+          { key: "autoplay", label: "Autoplay", type: "toggle", defaultValue: false },
+          { key: "muted", label: "Muted", type: "toggle", defaultValue: true },
+          { key: "caption", label: "Caption", type: "text", defaultValue: "" },
+        ],
+      }],
+    },
     queryRequirements: { fields: [] },
     getDefaultConfig: () => ({ title: "Video", assetId: "", embedType: "url", autoplay: false, muted: true, caption: "" }),
     resolveQuery: () => null,
@@ -2101,6 +2302,20 @@
       supportsResize: true,
     },
     supportedSettings: ["source", "page", "caption", "color", "pin", "duplicate", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "document",
+        label: "Document",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Document" },
+          { key: "src", label: "Source URL", type: "text", defaultValue: "" },
+          { key: "documentType", label: "Type", type: "select", defaultValue: "unknown", options: ["unknown", "pdf", "text", "markdown", "html"] },
+          { key: "currentPage", label: "Page", type: "number", defaultValue: 1, min: 1, max: 999, step: 1 },
+          { key: "content", label: "Text content", type: "textarea", defaultValue: "" },
+          { key: "caption", label: "Caption", type: "text", defaultValue: "" },
+        ],
+      }],
+    },
     queryRequirements: { fields: [] },
     getDefaultConfig: () => ({ title: "Document", assetId: "", documentType: "unknown", currentPage: 1, caption: "", content: "" }),
     resolveQuery: () => null,
@@ -2167,6 +2382,8 @@
         fields: [
           { key: "title", label: "Title", type: "text", defaultValue: "Table" },
           { key: "columns", label: "Columns", type: "textarea", valueType: "array", placeholder: "name, amount, category", affectsQuery: true },
+          { key: "calculatedFields", label: "Calculated fields", type: "json", defaultValue: [], affectsQuery: true },
+          { key: "equationFilters", label: "Equation filters", type: "json", defaultValue: [], affectsQuery: true },
           { key: "limit", label: "Limit", type: "number", defaultValue: 50, min: 1, max: 200, step: 1, affectsQuery: true },
           { key: "sortBy", label: "Sort field", type: "fieldPicker", affectsQuery: true },
           { key: "sortDirection", label: "Sort direction", type: "select", defaultValue: "asc", options: ["asc", "desc"], affectsQuery: true },
@@ -2175,6 +2392,7 @@
     },
     queryRequirements: { fields: "semantic-or-configured", limit: 50, sort: true },
     getDefaultConfig: () => ({ title: "Table", columns: [], limit: 50, sortBy: "", sortDirection: "asc" }),
+    getDemoData: (config = {}) => demoDataResult({ widgetType: "table", config }),
     resolveQuery: (config, resolvedContext) => {
       if (!resolvedContext?.canQuery) return null;
       const columns = tableConfiguredColumns(config);
@@ -2187,6 +2405,7 @@
         timeRange: config.timeRange || null,
         sort: sortBy ? [{ field: sortBy, direction: config.sortDirection === "desc" ? "desc" : "asc" }] : [],
         limit: Number(config.limit) || 50,
+        ...queryTransformsFromConfig(config),
       };
     },
     render: ({ instance, resolvedContext, data, status, density = instance.density || "standard" }) => {
@@ -2260,6 +2479,9 @@
           { key: "yField", label: "Y field", type: "fieldPicker", affectsQuery: true },
           { key: "seriesField", label: "Series field", type: "fieldPicker", affectsQuery: true },
           { key: "aggregation", label: "Aggregation", type: "select", defaultValue: "count", options: CHART_AGGREGATIONS, affectsQuery: true },
+          { key: "calculatedFields", label: "Calculated fields", type: "json", defaultValue: [], affectsQuery: true },
+          { key: "equationFilters", label: "Equation filters", type: "json", defaultValue: [], affectsQuery: true },
+          { key: "timeBucket", label: "Time bucket", type: "json", defaultValue: null, affectsQuery: true },
           { key: "limit", label: "Limit", type: "number", defaultValue: 60, min: 1, max: 200, step: 1, affectsQuery: true },
         ],
       }],
@@ -2285,6 +2507,13 @@
         showLabels: true,
       },
     }),
+    getDemoData: (config = {}) => demoDataResult({
+      widgetType: "chart",
+      config,
+      semanticMapping: ["scatter", "bubble"].includes(config.chartType)
+        ? { dateField: "comparison", valueField: "value" }
+        : {},
+    }),
     resolveQuery: (config, resolvedContext) => {
       if (!resolvedContext?.canQuery) return null;
       const definition = getChartDefinition(config.chartType || "bar");
@@ -2299,6 +2528,7 @@
         groupBy: Array.isArray(config.groupBy) ? config.groupBy : [],
         sort: sortBy ? [{ field: sortBy, direction: config.sortDirection === "desc" ? "desc" : "asc" }] : [],
         limit: chartLimit(config, 60),
+        ...queryTransformsFromConfig(config),
       };
     },
     render: ({ instance, resolvedContext, data, status }) => {
@@ -2374,6 +2604,7 @@
       layerType: "points",
       limit: 250,
     }),
+    getDemoData: (config = {}) => demoDataResult({ widgetType: "map", config }),
     resolveQuery: (config, resolvedContext) => {
       if (!resolvedContext?.canQuery) return null;
       const mapping = resolvedContext.semanticMapping || {};
@@ -2415,7 +2646,42 @@
       if (status === "error") return runtimeState(title, data?.error || "Unable to load map data");
       const rows = Array.isArray(data?.rows) ? data.rows : [];
       if (!rows.length) return runtimeState(title, "No map data");
-      return runtimeState(title, `${rows.length} geospatial row${rows.length === 1 ? "" : "s"}`);
+      const points = rows.map((row) => ({
+        label: String(row?.[locationField] || row?.[mapping.labelField] || row?.label || "Point"),
+        category: String(row?.[mapping.categoryField] || row?.category || ""),
+        latitude: numberValue(row?.[latitudeField]),
+        longitude: numberValue(row?.[longitudeField]),
+        value: numberValue(row?.[mapping.valueField] ?? row?.value),
+      })).filter((point) => point.latitude != null && point.longitude != null).slice(0, Math.max(1, Number(config.limit) || 250));
+      if (!points.length) return runtimeState(title, "No coordinates");
+      const minLat = Math.min(...points.map((point) => point.latitude));
+      const maxLat = Math.max(...points.map((point) => point.latitude), minLat + 0.01);
+      const minLon = Math.min(...points.map((point) => point.longitude));
+      const maxLon = Math.max(...points.map((point) => point.longitude), minLon + 0.01);
+      const maxValue = Math.max(...points.map((point) => point.value || 1), 1);
+      const density = chartVisualDensity(instance.density || "standard");
+      const marks = points.map((point, index) => {
+        const x = 8 + (((point.longitude - minLon) / Math.max(0.01, maxLon - minLon)) * 84);
+        const y = 56 - (((point.latitude - minLat) / Math.max(0.01, maxLat - minLat)) * 48);
+        const r = 1.8 + (((point.value || 1) / maxValue) * 2.8);
+        return `<circle class="runtime-map-point runtime-chart-fill-${CHART_PALETTE[index % CHART_PALETTE.length]}" cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${r.toFixed(2)}"><title>${escapeHtml(point.label)}</title></circle>`;
+      }).join("");
+      const labels = points.slice(0, density === "large" ? 4 : 2).map((point) => `<span>${escapeHtml(point.label)}</span>`).join("");
+      return `
+        <div class="runtime-map-widget runtime-map-density-${escapeHtml(density)}" data-map-layer="${escapeHtml(config.layerType || "points")}" data-map-demo="${data?.demo ? "true" : "false"}">
+          <div class="runtime-map-header">
+            <span class="stat-lbl">${escapeHtml(title)}</span>
+            <span class="runtime-map-meta">${escapeHtml(`${points.length} point${points.length === 1 ? "" : "s"}${data?.demo ? " demo" : ""}`)}</span>
+          </div>
+          <div class="runtime-map-stage">
+            <svg class="runtime-map-svg" viewBox="0 0 100 64" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(title)}">
+              <path class="runtime-map-gridline" d="M 8 16 H 92 M 8 32 H 92 M 8 48 H 92 M 24 8 V 58 M 50 8 V 58 M 76 8 V 58"></path>
+              <rect class="runtime-map-boundary" x="7" y="7" width="86" height="52" rx="4"></rect>
+              ${marks}
+            </svg>
+          </div>
+          <div class="runtime-map-legend">${labels}</div>
+        </div>`;
     },
   });
 
@@ -2449,7 +2715,8 @@
         ],
       }],
     },
-    getDefaultConfig: () => ({ title: "Calendar" }),
+    getDefaultConfig: () => ({ title: "Calendar", dateField: "", labelField: "", limit: 12 }),
+    getDemoData: (config = {}) => demoDataResult({ widgetType: "calendar", config }),
     resolveQuery: (config, resolvedContext) => {
       if (!resolvedContext?.canQuery) return null;
       const mapping = resolvedContext.semanticMapping || {};
@@ -2464,12 +2731,48 @@
     },
     render: ({ instance, resolvedContext, data, status }) => {
       const title = instance.config.title || "Calendar";
+      const config = instance.config || {};
+      const mapping = resolvedContext?.semanticMapping || {};
+      const dateField = String(config.dateField || mapping.dateField || "").trim();
+      const labelField = String(config.labelField || mapping.labelField || "").trim();
       if (!resolvedContext?.dataSourceId) return runtimeState(title, "Configure a data source");
+      if (!dateField) return runtimeState(title, "Configure date field");
       if (status === "loading") return runtimeState(title, "Loading");
       if (status === "error") return runtimeState(title, data?.error || "Unable to load dates");
       const rows = Array.isArray(data?.rows) ? data.rows : [];
       if (!rows.length) return runtimeState(title, "No date rows");
-      return runtimeState(title, `${rows.length} date row${rows.length === 1 ? "" : "s"}`);
+      const events = rows.map((row) => {
+        const timestamp = Date.parse(row?.[dateField]);
+        return Number.isFinite(timestamp)
+          ? { date: new Date(timestamp), label: String(row?.[labelField] || row?.label || "Item"), state: String(row?.[mapping.statusField] || row?.state || "") }
+          : null;
+      }).filter(Boolean).sort((a, b) => a.date - b.date).slice(0, Number(config.limit) || 12);
+      if (!events.length) return runtimeState(title, "No valid dates");
+      const first = events[0].date;
+      const monthStart = new Date(first.getFullYear(), first.getMonth(), 1);
+      const monthName = first.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+      const cells = Array.from({ length: 14 }, (_, index) => {
+        const date = new Date(monthStart);
+        date.setDate(index + 1);
+        const dayEvents = events.filter((event) => event.date.toDateString() === date.toDateString());
+        return { date, dayEvents };
+      });
+      return `
+        <div class="runtime-calendar-widget" data-calendar-demo="${data?.demo ? "true" : "false"}">
+          <div class="runtime-calendar-header">
+            <span class="stat-lbl">${escapeHtml(title)}</span>
+            <span class="runtime-calendar-meta">${escapeHtml(`${monthName}${data?.demo ? " demo" : ""}`)}</span>
+          </div>
+          <div class="runtime-calendar-grid" aria-label="${escapeHtml(monthName)}">
+            ${cells.map(({ date, dayEvents }) => `<div class="runtime-calendar-cell${dayEvents.length ? " has-events" : ""}">
+              <span>${date.getDate()}</span>
+              ${dayEvents.slice(0, 2).map((event) => `<i title="${escapeHtml(event.label)}"></i>`).join("")}
+            </div>`).join("")}
+          </div>
+          <div class="runtime-calendar-list">
+            ${events.slice(0, 3).map((event) => `<span><b>${escapeHtml(String(event.date.getDate()))}</b>${escapeHtml(event.label)}</span>`).join("")}
+          </div>
+        </div>`;
     },
   });
 
@@ -2487,6 +2790,7 @@
     densityTiers: () => [...DENSITY_TIERS],
     listWidgetDefinitions: () => [...definitions.values()].map((definition) => ({
       type: definition.type,
+      label: definition.label || definition.displayName || definition.type,
       displayName: definition.displayName,
       defaultSize: definition.defaultSize,
       minSize: definition.minSize,
@@ -2501,6 +2805,7 @@
       engineerOnly: definition.engineerOnly,
       icon: definition.icon,
       aliases: definition.aliases,
+      hasDemoData: typeof definition.getDemoData === "function",
     })),
     parseConfig,
   };
