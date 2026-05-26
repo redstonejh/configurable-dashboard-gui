@@ -886,6 +886,7 @@ document.addEventListener("DOMContentLoaded", () => {
     target.classList.add("surface-response-active");
     requestAnimationFrame(() => {
       if (!target.isConnected || isDashboardInteractionActive()) return;
+      if (target.dataset.surfacePressed !== "true") return;
       const rect = target.getBoundingClientRect();
       target.dataset.hoverZone = surfaceZoneForPoint(rect, event.clientX, event.clientY);
       target.dataset.surfacePressed = "true";
@@ -9895,6 +9896,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const startY = event.clientY;
     const pointerId = event.pointerId;
     const pointerTarget = event.currentTarget || item;
+    const capturePointer = () => {
+      if (pointerId == null || pointerTarget?.hasPointerCapture?.(pointerId)) return;
+      try {
+        pointerTarget?.setPointerCapture?.(pointerId);
+      } catch {
+        // Document-level listeners still cover browsers that decline capture.
+      }
+    };
     let ended = false;
     let rect = null;
     let offsetX = 0;
@@ -9960,6 +9969,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const startDrag = (sourceEvent = null) => {
       if (dragging) return;
       markInteractionStarted(sourceEvent);
+      if (deferStartEventHandling) capturePointer();
       dragging = true;
       item.dataset.visualLod = "active";
       item.dataset.lod = "active";
@@ -10594,11 +10604,7 @@ document.addEventListener("DOMContentLoaded", () => {
       onUp({ type: "pointercancel" });
     };
 
-    try {
-      if (pointerId != null) pointerTarget?.setPointerCapture?.(pointerId);
-    } catch {
-      // Document-level listeners still cover browsers that decline capture.
-    }
+    if (!deferStartEventHandling) capturePointer();
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
     document.addEventListener("pointercancel", onUp);
