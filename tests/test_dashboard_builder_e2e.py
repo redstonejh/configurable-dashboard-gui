@@ -40,10 +40,32 @@ node => {
   const currentScroll = window.scrollY || document.documentElement.scrollTop || 0;
   const grid = node.closest(".dashboard-layout-grid") || document.querySelector(".dashboard-layout-grid");
   const nav = document.querySelector(".app-nav.workspace-chrome, .app-nav");
-  const navBottom = nav ? Math.max(0, Math.round(nav.getBoundingClientRect().bottom)) : 0;
-  const targetViewportTop = grid
-    ? Math.max(navBottom + 8, Math.round(grid.getBoundingClientRect().top + currentScroll))
-    : navBottom + 8;
+  const navStyles = nav ? getComputedStyle(nav) : null;
+  const stickyTop = Number.parseFloat(navStyles?.top || "");
+  const navBottom = nav
+    ? Math.max(0, Math.round(
+      (navStyles?.position === "sticky" || navStyles?.position === "fixed") && Number.isFinite(stickyTop)
+        ? stickyTop + nav.offsetHeight
+        : nav.getBoundingClientRect().bottom
+    ))
+    : 0;
+  const firstWorkspaceObject = grid
+    ? [...grid.querySelectorAll(".widget-layout > .widget-card:not(.workspace-anchor-object):not([hidden]), .panel-layout > .db-panel:not([hidden])")]
+      .filter((item) => item.offsetParent !== null)
+      .sort((a, b) => {
+        const aTop = a.getBoundingClientRect().top + currentScroll;
+        const bTop = b.getBoundingClientRect().top + currentScroll;
+        return aTop - bTop;
+      })[0]
+    : null;
+  const firstObjectRect = firstWorkspaceObject?.getBoundingClientRect?.();
+  const gridTop = grid ? grid.getBoundingClientRect().top + currentScroll : navBottom + 8;
+  const firstObjectTop = firstObjectRect ? firstObjectRect.top + currentScroll : gridTop;
+  const navMarginBottom = Number.parseFloat(navStyles?.marginBottom || "");
+  const navDocumentBottom = nav ? Math.round(nav.getBoundingClientRect().bottom + currentScroll) : 0;
+  const measuredTopGutter = Math.round(firstObjectTop - navDocumentBottom);
+  const topObjectGutter = Math.max(8, Math.round(Number.isFinite(navMarginBottom) && navMarginBottom > 0 ? navMarginBottom : measuredTopGutter));
+  const targetViewportTop = navBottom + topObjectGutter;
   const targetTop = node.getBoundingClientRect().top + currentScroll;
   const rawTop = Math.max(0, Math.round(targetTop - targetViewportTop));
   const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
@@ -55,6 +77,8 @@ node => {
     targetViewportTop,
     delta: node.getBoundingClientRect().top - targetViewportTop,
     navBottom,
+    topObjectGutter,
+    navObjectGap: node.getBoundingClientRect().top - navBottom,
     maxScroll,
   };
 }
@@ -873,6 +897,17 @@ def test_add_object_menu_uses_categorized_right_expanding_submenus(page: Page, a
         "Gauge",
         "Sparkline",
     ])
+    geospatial = visualization.locator('.object-add-subcategory[data-object-add-subcategory="Geospatial"]')
+    expect(geospatial.locator(".object-add-subcategory-trigger")).to_be_visible()
+    geospatial.locator(".object-add-subcategory-trigger").hover()
+    expect(geospatial.locator('.widget-add-action[data-widget-kind="map"]')).to_have_text("Map")
+    assert menu.evaluate(
+        """
+        node => [...node.querySelectorAll('button, [role="menu"], .object-add-category, .object-add-subcategory')]
+          .filter((item) => item.hasAttribute("title"))
+          .map((item) => item.getAttribute("title"))
+        """
+    ) == []
 
     data = menu.locator('.object-add-category[data-object-menu-category="data"]')
     data.locator(".object-add-category-trigger").hover()
@@ -884,6 +919,13 @@ def test_add_object_menu_uses_categorized_right_expanding_submenus(page: Page, a
     system = page.locator('.object-add-category[data-object-menu-category="system"]')
     system.locator(".object-add-category-trigger").hover()
     expect(system.locator('.widget-add-action[data-widget-kind="context-inspector"]')).to_be_visible()
+    assert page.locator(".panel-add-menu").evaluate(
+        """
+        node => [...node.querySelectorAll('button, [role="menu"], .object-add-category, .object-add-subcategory')]
+          .filter((item) => item.hasAttribute("title"))
+          .map((item) => item.getAttribute("title"))
+        """
+    ) == []
 
     page.locator(".panel-add-button").click()
     visualization = page.locator('.object-add-category[data-object-menu-category="visualization"]')
@@ -1296,7 +1338,8 @@ def test_add_widget_scores_top_default_region_before_first_divider(page: Page, a
     page.reload(wait_until="networkidle")
     page.wait_for_selector(".page")
 
-    open_add_category(page, "dividers").locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    page.locator(".panel-add-button").click()
+    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
     expect(page.locator(".panel-layout[data-layout-key='builder'] > .workspace-divider")).to_have_count(1)
 
     setup = page.evaluate(
@@ -1624,7 +1667,7 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
         })
         """
     )
-    for widget_type in ("stat", "timeframe", "search", "filter", "text", "region-summary", "image", "video", "document", "activity-feed", "ai-assistant", "context-inspector", "table", "chart"):
+    for widget_type in ("stat", "timeframe", "search", "filter", "text", "region-summary", "image", "video", "document", "activity-feed", "ai-assistant", "context-inspector", "table", "chart", "map"):
         assert widget_type in runtime["types"]
     assert runtime["timeframe"] == "timeframe"
     assert runtime["timeframeRuntimeType"] == "timeframe"
@@ -1710,6 +1753,73 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
     assert chart_state["requirements"]["fields"] == "chart-definition"
     assert chart_state["renderedChartType"] == "bar"
 
+    open_add_category(page, "visualization", "Geospatial").locator('.widget-add-action[data-widget-kind="map"]').click()
+    map_widget = page.locator('.widget-layout > .map-widget-card[data-widget-definition="map"]').last
+    expect(map_widget).to_be_visible()
+    map_state = map_widget.evaluate(
+        """
+            node => {
+              const definition = window.dashboardWidgetRuntime.getWidgetDefinition("map");
+              const emptyRender = window.dashboardWidgetRuntime.renderWidget("map", {
+                instance: window.dashboardWidgetRuntime.createWidgetInstance("map", {}),
+                resolvedContext: {},
+                status: "empty"
+              });
+              return {
+            widgetType: node.dataset.widgetType,
+            objectKind: node.dataset.dashboardObjectKind,
+            definition: node.dataset.widgetDefinition,
+            runtimeType: node.dataset.widgetRuntimeType,
+            span: Number(node.dataset.currentSpan || node.dataset.defaultSpan || 0),
+            rows: Number(node.dataset.gridRowSpan || 0),
+            minW: Number(node.dataset.minW || 0),
+            minH: Number(node.dataset.minH || 0),
+            capabilities: JSON.parse(node.dataset.widgetCapabilities || "{}"),
+            requirements: JSON.parse(node.dataset.widgetQueryRequirements || "{}"),
+            registry: {
+              category: definition.category,
+              subcategory: definition.subcategory,
+              defaultSize: definition.defaultSize,
+              minSize: definition.minSize,
+              settingsFields: definition.settingsSchema.sections.flatMap(section => section.fields.map(field => field.key)),
+                },
+                emptyRender,
+                text: node.textContent.trim().replace(/\\s+/g, " ")
+              };
+            }
+        """
+    )
+    assert map_state["widgetType"] == "map"
+    assert map_state["objectKind"] == "map"
+    assert map_state["definition"] == "map"
+    assert map_state["runtimeType"] == "map"
+    assert map_state["span"] == map_state["registry"]["defaultSize"]["cols"] == 3
+    assert map_state["rows"] == map_state["registry"]["defaultSize"]["rows"] == 2
+    assert map_state["minW"] == map_state["registry"]["minSize"]["cols"] == 2
+    assert map_state["minH"] == map_state["registry"]["minSize"]["rows"] == 1
+    assert map_state["registry"]["category"] == "visualization"
+    assert map_state["registry"]["subcategory"] == "Geospatial"
+    assert map_state["capabilities"]["supportsResize"] is True
+    assert map_state["capabilities"]["requiresDataSource"] is True
+    assert map_state["requirements"]["fields"] == "geospatial"
+    assert {"latitudeField", "longitudeField", "locationField", "layerType", "limit"}.issubset(set(map_state["registry"]["settingsFields"]))
+    assert "Needs geospatial data" in map_state["emptyRender"]
+    assert "Map Configure location fields" in map_state["text"]
+    map_key = map_widget.evaluate("node => node.dataset.widgetKey")
+    map_selector = f'.widget-layout > .map-widget-card[data-widget-key="{map_key}"]'
+    before_map_layout = grid_item_state(page, map_selector)
+    force_open_tools_for_interaction(page, map_widget)
+    drag_by(page, map_widget.locator(".panel-resize-handle"), 190, 100, steps=12)
+    page.wait_for_timeout(260)
+    resized_map_layout = grid_item_state(page, map_selector)
+    assert resized_map_layout["span"] > before_map_layout["span"] or resized_map_layout["rowSpan"] > before_map_layout["rowSpan"]
+    assert_no_resize_artifacts(page)
+    force_open_tools_for_interaction(page, map_widget)
+    drag_by(page, map_widget.locator(".panel-move-handle"), 210, 120, steps=12)
+    page.wait_for_timeout(260)
+    moved_map_layout = grid_item_state(page, map_selector)
+    assert (moved_map_layout["col"], moved_map_layout["row"]) != (resized_map_layout["col"], resized_map_layout["row"])
+
     open_add_category(page, "controls").locator('.widget-add-action[data-widget-kind="search"]').click()
     search_widget = page.locator('.widget-layout > .widget-card[data-widget-definition="search"]').last
     search_widget.locator(".search-widget-input").fill("needle")
@@ -1718,6 +1828,10 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
     page.reload(wait_until="networkidle")
     persisted_search = page.locator('.widget-layout > .widget-card[data-widget-definition="search"]').last
     expect(persisted_search.locator(".search-widget-input")).to_have_value("needle")
+    persisted_map = page.locator(map_selector)
+    expect(persisted_map).to_be_visible()
+    expect(persisted_map).to_contain_text("Configure location fields")
+    assert grid_item_state(page, map_selector)["rowSpan"] == moved_map_layout["rowSpan"]
 
     page.evaluate(
         """
@@ -1935,7 +2049,8 @@ def test_persistence_runtime_exports_versioned_snapshot_and_validation(page: Pag
     divider = page.locator('.panel-layout > .db-panel[data-workspace-object-type="divider"]').last
     expect(divider).to_be_visible()
 
-    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    page.locator(".panel-add-button").click()
+    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
     anchor = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]').last
     expect(anchor).to_be_visible()
 
@@ -6132,6 +6247,137 @@ def test_large_workspace_surfaces_use_discrete_hover_zones_without_affecting_con
     expect(page.locator(".surface-response-active")).to_have_count(0)
 
 
+def test_passive_object_hover_reactions_are_suppressed_during_drag_and_resize(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const widgets = [...document.querySelectorAll(".widget-layout[data-widget-layout-key='builder']:not(.panel-internal-widget-grid) > .widget-card")];
+          const place = (node, col, row, span = 1, rowSpan = 1) => {
+            node.hidden = false;
+            node.classList.remove("widget-tools-open", "surface-response-active");
+            node.removeAttribute("data-hover-zone");
+            node.removeAttribute("data-surface-pressed");
+            node.dataset.gridCol = String(col);
+            node.dataset.gridRow = String(row);
+            node.dataset.currentSpan = String(span);
+            node.dataset.defaultSpan = String(span);
+            node.dataset.gridRowSpan = String(rowSpan);
+            node.style.gridColumn = `${col} / span ${span}`;
+            node.style.gridRow = `${row} / span ${rowSpan}`;
+            node.style.height = "";
+            node.querySelector(".panel-settings-toggle")?.setAttribute("aria-expanded", "false");
+          };
+          place(widgets[0], 1, 1);
+          place(widgets[1], 3, 1);
+          document.body.classList.remove("panel-interaction-active", "panel-resize-active", "layout-tools-active");
+        }
+        """
+    )
+
+    source = page.locator('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="widget-1"]').first
+    target = page.locator('.widget-layout[data-widget-layout-key="builder"] > .widget-card[data-widget-key="widget-2"]').first
+    target_settings = target.locator(".panel-settings-toggle")
+    target_settings_box = target_settings.bounding_box()
+    assert target_settings_box
+    target_x, target_y = box_center(target_settings_box)
+
+    target_box = target.bounding_box()
+    assert target_box
+    page.mouse.move(8, 8)
+    page.mouse.move(target_box["x"] + target_box["width"] * 0.5, target_box["y"] + target_box["height"] * 0.5)
+    hovered_state = target.evaluate(
+        """
+        node => {
+          return {
+            surfaceActive: node.classList.contains("surface-response-active"),
+            zone: node.dataset.hoverZone || ""
+          };
+        }
+        """
+    )
+    assert hovered_state["surfaceActive"] is True
+    assert hovered_state["zone"] == "center"
+
+    force_open_tools_for_interaction(page, source)
+    move_handle_box = source.locator(".panel-move-handle").bounding_box()
+    assert move_handle_box
+    start_x, start_y = box_center(move_handle_box)
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(target_x, target_y, steps=12)
+    expect(page.locator(".widget-dragging")).to_have_count(1)
+    drag_state = target.evaluate(
+        """
+        node => {
+          const settings = node.querySelector(".panel-settings-toggle");
+          return {
+            bodyInteraction: document.body.classList.contains("panel-interaction-active"),
+            settingsHover: settings.matches(":hover"),
+            settingsTransform: getComputedStyle(settings).transform,
+            surfaceActive: node.classList.contains("surface-response-active"),
+            zone: node.dataset.hoverZone || "",
+            pointerEvents: getComputedStyle(node).pointerEvents,
+          };
+        }
+        """
+    )
+    assert drag_state["bodyInteraction"] is True
+    assert drag_state["settingsHover"] is False
+    assert drag_state["settingsTransform"] == "none"
+    assert drag_state["surfaceActive"] is False
+    assert drag_state["zone"] == ""
+    assert drag_state["pointerEvents"] == "none"
+    page.keyboard.press("Escape")
+    page.mouse.up()
+    expect(page.locator(".widget-dragging")).to_have_count(0)
+
+    force_open_tools_for_interaction(page, source)
+    resize_handle_box = source.locator(".panel-resize-handle").bounding_box()
+    assert resize_handle_box
+    resize_start_x, resize_start_y = box_center(resize_handle_box)
+    page.mouse.move(resize_start_x, resize_start_y)
+    page.mouse.down()
+    page.mouse.move(target_x, target_y, steps=10)
+    page.wait_for_function("() => document.body.classList.contains('panel-resize-active')")
+    resize_state = target.evaluate(
+        """
+        node => {
+          const settings = node.querySelector(".panel-settings-toggle");
+          return {
+            bodyInteraction: document.body.classList.contains("panel-interaction-active"),
+            bodyResize: document.body.classList.contains("panel-resize-active"),
+            settingsHover: settings.matches(":hover"),
+            settingsTransform: getComputedStyle(settings).transform,
+            surfaceActive: node.classList.contains("surface-response-active"),
+            zone: node.dataset.hoverZone || "",
+            pointerEvents: getComputedStyle(node).pointerEvents,
+          };
+        }
+        """
+    )
+    assert resize_state["bodyInteraction"] is True
+    assert resize_state["bodyResize"] is True
+    assert resize_state["settingsHover"] is False
+    assert resize_state["settingsTransform"] == "none"
+    assert resize_state["surfaceActive"] is False
+    assert resize_state["zone"] == ""
+    assert resize_state["pointerEvents"] == "none"
+    page.keyboard.press("Escape")
+    page.mouse.up()
+    page.wait_for_function("() => !document.body.classList.contains('panel-resize-active')")
+
+    target_box = target.bounding_box()
+    assert target_box
+    page.mouse.move(8, 8)
+    page.mouse.move(target_box["x"] + target_box["width"] * 0.5, target_box["y"] + target_box["height"] * 0.5)
+    expect(target).to_have_class(re.compile(r"surface-response-active"))
+    restored_state = target.evaluate("node => ({ zone: node.dataset.hoverZone || '', pointerEvents: getComputedStyle(node).pointerEvents })")
+    assert restored_state["zone"] == "center"
+    assert restored_state["pointerEvents"] == "auto"
+    assert_clean_browser(page)
+
+
 def test_open_panel_interior_uses_recessed_glass_material_without_covering_children(page: Page, app_server: str) -> None:
     goto(page, app_server)
 
@@ -6480,7 +6726,7 @@ def test_engineer_relationship_wire_routes_follow_natural_direction(page: Page, 
     assert_clean_browser(page)
 
 
-def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_server: str) -> None:
+def test_engineer_wire_nodules_drag_to_create_directional_dataflow_link(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate("localStorage.clear()")
     page.reload(wait_until="networkidle")
@@ -6536,12 +6782,76 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
     assert nodule_state["minimap"] is False
     assert nodule_state["maxSize"] <= 12
 
+    collapsed_child_state = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const body = panel?.querySelector(":scope > .db-panel-body");
+          const grid = body?.querySelector(":scope > .panel-internal-widget-grid");
+          const source = document.querySelector('.widget-layout:not(.panel-internal-widget-grid) > .widget-card[data-widget-key="widget-4"]');
+          if (!panel || !grid || !grid.__initWidget || !source) return { ready: false };
+          const child = source.cloneNode(true);
+          child.dataset.widgetKey = "collapsed-panel-wire-child";
+          child.dataset.customWidget = "true";
+          child.dataset.panelChildWidget = "true";
+          child.dataset.parentPanelKey = panel.dataset.panelKey || "";
+          delete child.dataset.widgetInitialized;
+          child.classList.remove("widget-tools-open", "widget-dragging", "dashboard-active-resize", "dashboard-live-resize", "dashboard-resize-source");
+          child.querySelector(".panel-settings-toggle")?.setAttribute("aria-expanded", "false");
+          child.dataset.gridCol = "1";
+          child.dataset.gridRow = "1";
+          child.dataset.currentSpan = "2";
+          child.dataset.gridRowSpan = "1";
+          child.style.gridColumn = "1 / span 2";
+          child.style.gridRow = "1 / span 1";
+          child.style.removeProperty("height");
+          grid.appendChild(child);
+          grid.__initWidget(child);
+          panel.classList.add("db-panel-collapsed");
+          panel.querySelector(":scope > .db-panel-hd")?.setAttribute("aria-expanded", "false");
+          window.dashboardEngineerMode.refresh();
+          return {
+            ready: true,
+            panelPorts: document.querySelectorAll('.workspace-wire-nodule[data-wire-object-id="builder-content"]').length,
+            childPorts: document.querySelectorAll('.workspace-wire-nodule[data-wire-object-id="collapsed-panel-wire-child"]').length,
+          };
+        }
+        """
+    )
+    assert collapsed_child_state == {"ready": True, "panelPorts": 2, "childPorts": 0}
+    page.wait_for_function(
+        "() => document.querySelector('.workspace-wire-nodule[data-wire-object-id=\"widget-1\"][data-wire-port-role=\"output\"]')?.getBoundingClientRect().width > 0"
+    )
+
     source = page.locator('.workspace-wire-nodule[data-wire-object-id="widget-1"][data-wire-port-role="output"]').first
     source_box = source.bounding_box()
     assert source_box
     source_x, source_y = box_center(source_box)
     page.mouse.move(source_x, source_y)
     page.mouse.down()
+    page.wait_for_function(
+        """
+        () => document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-2"][data-wire-port-role="input"]')?.classList.contains("is-valid-link-target")
+        """
+    )
+    output_target_state = page.evaluate(
+        """
+        () => ({
+          source: document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-1"][data-wire-port-role="output"]')?.classList.contains("is-link-source"),
+          otherInputValid: document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-2"][data-wire-port-role="input"]')?.classList.contains("is-valid-link-target"),
+          otherOutputValid: document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-2"][data-wire-port-role="output"]')?.classList.contains("is-valid-link-target"),
+          otherOutputMuted: document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-2"][data-wire-port-role="output"]')?.classList.contains("is-muted-during-link-drag"),
+          sameObjectInputValid: document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-1"][data-wire-port-role="input"]')?.classList.contains("is-valid-link-target"),
+        })
+        """
+    )
+    assert output_target_state == {
+        "source": True,
+        "otherInputValid": True,
+        "otherOutputValid": False,
+        "otherOutputMuted": True,
+        "sameObjectInputValid": False,
+    }
     page.mouse.move(source_x - 180, source_y + 120, steps=8)
     preview = page.locator(".workspace-wire-drag-path")
     expect(preview).to_be_visible()
@@ -6602,6 +6912,48 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
         "() => document.querySelector('.workspace-wire-nodule[data-wire-object-id=\"widget-1\"][data-wire-port-role=\"output\"]')?.getBoundingClientRect().width > 0 && document.querySelector('.workspace-wire-nodule[data-wire-object-id=\"widget-2\"][data-wire-port-role=\"input\"]')?.getBoundingClientRect().width > 0"
     )
 
+    reverse_source = page.locator('.workspace-wire-nodule[data-wire-object-id="widget-2"][data-wire-port-role="input"]').first
+    reverse_target = page.locator('.workspace-wire-nodule[data-wire-object-id="widget-1"][data-wire-port-role="output"]').first
+    reverse_source_box = reverse_source.bounding_box()
+    reverse_target_box = reverse_target.bounding_box()
+    assert reverse_source_box and reverse_target_box
+    reverse_source_x, reverse_source_y = box_center(reverse_source_box)
+    reverse_target_x, reverse_target_y = box_center(reverse_target_box)
+    page.mouse.move(reverse_source_x, reverse_source_y)
+    page.mouse.down()
+    page.wait_for_function(
+        """
+        () => document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-1"][data-wire-port-role="output"]')?.classList.contains("is-valid-link-target")
+        """
+    )
+    input_origin_state = page.evaluate(
+        """
+        () => ({
+          source: document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-2"][data-wire-port-role="input"]')?.classList.contains("is-link-source"),
+          outputValid: document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-1"][data-wire-port-role="output"]')?.classList.contains("is-valid-link-target"),
+          inputValid: document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-1"][data-wire-port-role="input"]')?.classList.contains("is-valid-link-target"),
+          inputMuted: document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-1"][data-wire-port-role="input"]')?.classList.contains("is-muted-during-link-drag"),
+        })
+        """
+    )
+    assert input_origin_state == {"source": True, "outputValid": True, "inputValid": False, "inputMuted": True}
+    page.mouse.move(reverse_target_x, reverse_target_y, steps=8)
+    expect(page.locator('.workspace-wire-drag-path[data-valid-target="true"]')).to_have_count(1)
+    page.mouse.up()
+    page.wait_for_function(
+        """
+        () => {
+          const link = window.dashboardRelationshipRuntime.links("builder").find((entry) =>
+            entry.source.objectId === "widget-1" && entry.target.objectId === "widget-2");
+          return Boolean(link && link.source.role === "output" && link.target.role === "input" &&
+            link.signalType === "data" && link.metadata.linkKind === "dataflow");
+        }
+        """
+    )
+    assert page.evaluate("() => window.dashboardRelationshipRuntime.contextLinks('builder').length") == 0
+    press_dashboard_undo(page)
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.links('builder').length === 0")
+
     target = page.locator('.workspace-wire-nodule[data-wire-object-id="widget-2"][data-wire-port-role="input"]').first
     target_box = target.bounding_box()
     source_box = source.bounding_box()
@@ -6617,31 +6969,94 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
     page.mouse.up()
     page.wait_for_function(
         """
-        () => window.dashboardRelationshipRuntime.contextLinks("builder").some((link) =>
-          link.sourceObjectId === "widget-1" && link.targetObjectId === "widget-2")
+        () => window.dashboardRelationshipRuntime.links("builder").some((link) =>
+          link.source.objectId === "widget-1" &&
+          link.target.objectId === "widget-2" &&
+          link.source.role === "output" &&
+          link.target.role === "input" &&
+          link.signalType === "data" &&
+          link.metadata.linkKind === "dataflow")
         """
     )
     created = page.evaluate(
         """
         () => ({
-          links: window.dashboardRelationshipRuntime.contextLinks("builder"),
+          links: window.dashboardRelationshipRuntime.dataflowLinks("builder"),
+          contextLinks: window.dashboardRelationshipRuntime.contextLinks("builder"),
           graphLinks: window.dashboardRelationshipRuntime.links("builder"),
           preview: document.querySelectorAll(".workspace-wire-drag-path").length,
-          rendered: document.querySelectorAll('.workspace-relationship-path[data-relationship-type="context"]').length,
+          rendered: document.querySelectorAll('.workspace-relationship-path[data-relationship-type="query"][data-relationship-signal-type="data"]').length,
         })
         """
     )
     assert created["preview"] == 0
     assert created["rendered"] == 1
-    assert created["links"][0]["mode"] == "inherit"
-    assert created["graphLinks"][0]["signalType"] == "context"
+    assert created["contextLinks"] == []
+    assert created["links"][0]["signalType"] == "data"
+    assert created["links"][0]["metadata"]["linkKind"] == "dataflow"
+    assert created["graphLinks"][0]["signalType"] == "data"
     assert created["graphLinks"][0]["source"]["role"] == "output"
     assert created["graphLinks"][0]["target"]["role"] == "input"
+
+    source_box = source.bounding_box()
+    target_box = target.bounding_box()
+    assert source_box and target_box
+    source_x, source_y = box_center(source_box)
+    target_x, target_y = box_center(target_box)
+    page.mouse.move(source_x, source_y)
+    page.mouse.down()
+    page.wait_for_function("() => document.body.classList.contains('workspace-wire-drag-active')")
+    duplicate_target_state = page.evaluate(
+        """
+        () => ({
+          duplicateValid: document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-2"][data-wire-port-role="input"]')?.classList.contains("is-valid-link-target"),
+          duplicateMuted: document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-2"][data-wire-port-role="input"]')?.classList.contains("is-muted-during-link-drag"),
+        })
+        """
+    )
+    assert duplicate_target_state == {"duplicateValid": False, "duplicateMuted": True}
+    page.mouse.move(target_x, target_y, steps=8)
+    expect(page.locator('.workspace-wire-drag-path[data-valid-target="true"]')).to_have_count(0)
+    page.mouse.up()
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.dataflowLinks('builder').length === 1")
+
+    recursive_source = page.locator('.workspace-wire-nodule[data-wire-object-id="widget-2"][data-wire-port-role="output"]').first
+    recursive_target = page.locator('.workspace-wire-nodule[data-wire-object-id="widget-1"][data-wire-port-role="input"]').first
+    recursive_source_box = recursive_source.bounding_box()
+    recursive_target_box = recursive_target.bounding_box()
+    assert recursive_source_box and recursive_target_box
+    recursive_source_x, recursive_source_y = box_center(recursive_source_box)
+    recursive_target_x, recursive_target_y = box_center(recursive_target_box)
+    page.mouse.move(recursive_source_x, recursive_source_y)
+    page.mouse.down()
+    page.wait_for_function(
+        """
+        () => document.querySelector('.workspace-wire-nodule[data-wire-object-id="widget-1"][data-wire-port-role="input"]')?.classList.contains("is-valid-link-target")
+        """
+    )
+    page.mouse.move(recursive_target_x, recursive_target_y, steps=8)
+    expect(page.locator('.workspace-wire-drag-path[data-valid-target="true"]')).to_have_count(1)
+    page.mouse.up()
+    page.wait_for_function(
+        """
+        () => window.dashboardRelationshipRuntime.dataflowLinks("builder").some((link) =>
+          link.source.objectId === "widget-2" &&
+          link.target.objectId === "widget-1" &&
+          link.source.role === "output" &&
+          link.target.role === "input") &&
+          window.dashboardRelationshipRuntime.dataflowLinks("builder").length === 2
+        """
+    )
+    press_dashboard_undo(page)
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.dataflowLinks('builder').length === 1")
+    page.mouse.move(24, 24)
+    page.wait_for_timeout(120)
+
     ambient_style = page.evaluate(
         """
         () => {
-          const path = document.querySelector('.workspace-relationship-path[data-relationship-type="context"]');
-          const underlay = document.querySelector('.workspace-relationship-underlay[data-relationship-type="context"]');
+          const path = document.querySelector('.workspace-relationship-path[data-relationship-type="query"][data-relationship-signal-type="data"]');
+          const underlay = document.querySelector('.workspace-relationship-underlay[data-relationship-type="query"][data-relationship-signal-type="data"]');
           const styles = getComputedStyle(path);
           const underlayStyles = getComputedStyle(underlay);
           return {
@@ -6696,11 +7111,13 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
 
     press_dashboard_undo(page)
     assert page.evaluate('() => window.dashboardRelationshipRuntime.relationships("builder", { derived: false }).length') == 0
-    assert page.evaluate('() => window.dashboardRelationshipRuntime.contextLinks("builder").length') == 1
-    press_dashboard_undo(page)
+    assert page.evaluate('() => window.dashboardRelationshipRuntime.links("builder").length') == 1
     assert page.evaluate('() => window.dashboardRelationshipRuntime.contextLinks("builder").length') == 0
+    press_dashboard_undo(page)
+    assert page.evaluate('() => window.dashboardRelationshipRuntime.links("builder").length') == 0
     press_dashboard_redo(page)
-    assert page.evaluate('() => window.dashboardRelationshipRuntime.contextLinks("builder").length') == 1
+    assert page.evaluate('() => window.dashboardRelationshipRuntime.links("builder").length') == 1
+    assert page.evaluate('() => window.dashboardRelationshipRuntime.contextLinks("builder").length') == 0
 
     assert page.evaluate('() => document.querySelectorAll(".workspace-wire-delete-button").length') == 0
     context_midpoint = page.evaluate(
@@ -6728,7 +7145,7 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
     assert page.evaluate('() => document.querySelectorAll(".workspace-wire-delete-button, .workspace-relationship-path").length') == 0
     page.locator(".engineer-mode-button").click()
     expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
-    page.wait_for_function("() => document.querySelector('.workspace-relationship-path[data-relationship-type=\"context\"]')")
+    page.wait_for_function("() => document.querySelector('.workspace-relationship-path[data-relationship-type=\"query\"][data-relationship-signal-type=\"data\"]')")
     context_midpoint = page.evaluate(
         """
         () => {
@@ -6741,12 +7158,12 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
     page.mouse.click(context_midpoint["x"], context_midpoint["y"])
     expect(page.locator(".workspace-wire-delete-button")).to_be_visible()
     page.locator(".workspace-wire-delete-button").click()
-    page.wait_for_function("() => window.dashboardRelationshipRuntime.contextLinks('builder').length === 0")
-    assert page.evaluate('() => document.querySelectorAll(".workspace-relationship-path[data-relationship-type=\\"context\\"], .workspace-wire-delete-button").length') == 0
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.links('builder').length === 0")
+    assert page.evaluate('() => document.querySelectorAll(".workspace-relationship-path[data-relationship-signal-type=\\"data\\"], .workspace-wire-delete-button").length') == 0
     press_dashboard_undo(page)
-    page.wait_for_function("() => window.dashboardRelationshipRuntime.contextLinks('builder').length === 1 && document.querySelector('.workspace-relationship-path[data-relationship-type=\"context\"]')")
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.links('builder').length === 1 && document.querySelector('.workspace-relationship-path[data-relationship-signal-type=\"data\"]')")
     press_dashboard_redo(page)
-    page.wait_for_function("() => window.dashboardRelationshipRuntime.contextLinks('builder').length === 0")
+    page.wait_for_function("() => window.dashboardRelationshipRuntime.links('builder').length === 0")
 
     page.evaluate(
         """
@@ -6859,12 +7276,13 @@ def test_engineer_wire_nodules_drag_to_create_context_link(page: Page, app_serve
     reloaded = page.evaluate(
         """
         () => ({
-          links: window.dashboardRelationshipRuntime.contextLinks("builder"),
+          links: window.dashboardRelationshipRuntime.links("builder"),
+          contextLinks: window.dashboardRelationshipRuntime.contextLinks("builder"),
           deleteControls: document.querySelectorAll(".workspace-wire-delete-button").length,
         })
         """
     )
-    assert reloaded == {"links": [], "deleteControls": 0}
+    assert reloaded == {"links": [], "contextLinks": [], "deleteControls": 0}
     assert_clean_browser(page)
 
 
@@ -7506,6 +7924,7 @@ def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_s
     anchor.click(position={"x": 24, "y": 24})
     initial_alignment = wait_for_anchor_divider_alignment(page, divider)
     initial_link_scroll = initial_alignment["scrollY"]
+    assert abs(initial_alignment["navObjectGap"] - initial_alignment["topObjectGutter"]) <= 8
 
     page.evaluate("window.scrollTo(0, 0)")
     divider.evaluate(
@@ -7522,6 +7941,7 @@ def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_s
     anchor.click(position={"x": 24, "y": 24})
     moved_alignment = wait_for_anchor_divider_alignment(page, divider)
     assert moved_alignment["scrollTarget"] > initial_link_scroll + 300
+    assert abs(moved_alignment["navObjectGap"] - moved_alignment["topObjectGutter"]) <= 8
 
     page.locator(".layout-save-button").click()
     expect(page.locator(".toast", has_text="saved")).to_be_visible()
@@ -7559,13 +7979,11 @@ def test_anchor_links_to_divider_or_workspace_top_and_persists(page: Page, app_s
 def test_object_capabilities_gate_panel_previews_and_affordances(page: Page, app_server: str) -> None:
     goto(page, app_server)
 
-    page.locator(".panel-add-button").click()
-    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    open_add_category(page, "dividers").locator('.divider-add-action[data-divider-kind="context-divider"]').click()
     divider = page.locator('.workspace-divider[data-workspace-object-type="divider"]').last
     expect(divider).to_be_visible()
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
     anchor = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]').last
     expect(anchor).to_be_visible()
 
@@ -8188,6 +8606,36 @@ def test_timeframe_widget_supports_configurable_filters_and_repeating_intervals(
     workbench = timeframe.locator(".widget-workbench-panel")
     expect(workbench).to_be_visible()
     expect(workbench).to_contain_text("Time filter workbench")
+    workbench_material = page.evaluate(
+        """
+        () => {
+          const workbench = document.querySelector(".timeframe-widget.widget-workbench-open .widget-workbench-panel");
+          const addMenu = document.querySelector(".app-nav.workspace-chrome .panel-add-menu");
+          const remove = workbench?.querySelector(".timeframe-remove-filter");
+          const input = workbench?.querySelector(".timeframe-filter-config-input");
+          const workbenchStyle = getComputedStyle(workbench);
+          const addMenuStyle = getComputedStyle(addMenu);
+          const removeStyle = getComputedStyle(remove);
+          const inputStyle = getComputedStyle(input);
+          return {
+            workbenchRadius: workbenchStyle.borderRadius,
+            addMenuRadius: addMenuStyle.borderRadius,
+            workbenchBackdrop: workbenchStyle.backdropFilter || workbenchStyle.webkitBackdropFilter,
+            addMenuBackdrop: addMenuStyle.backdropFilter || addMenuStyle.webkitBackdropFilter,
+            workbenchShadow: workbenchStyle.boxShadow,
+            addMenuShadow: addMenuStyle.boxShadow,
+            removeBackground: removeStyle.backgroundColor,
+            removeRadius: removeStyle.borderRadius,
+            inputRadius: inputStyle.borderRadius
+          };
+        }
+        """
+    )
+    assert workbench_material["workbenchRadius"] == workbench_material["addMenuRadius"]
+    assert workbench_material["workbenchBackdrop"] == workbench_material["addMenuBackdrop"]
+    assert workbench_material["workbenchShadow"] == workbench_material["addMenuShadow"]
+    assert "37, 99, 235" not in workbench_material["removeBackground"]
+    assert workbench_material["removeRadius"] == workbench_material["inputRadius"]
     before_count = timeframe.evaluate("node => JSON.parse(node.dataset.widgetConfig || '{}').filters.length")
     workbench.locator(".timeframe-add-filter").click()
     expect(workbench).to_be_visible()
@@ -9341,6 +9789,10 @@ def test_open_panel_expands_to_contain_displaced_panel_child_widgets(page: Page,
           const displaced = panel.querySelector('[data-widget-key="panel-child-grow-displaced"]');
           const panelRect = panel.getBoundingClientRect();
           const displacedRect = displaced.getBoundingClientRect();
+          const grid = panel.querySelector(".panel-internal-widget-grid");
+          const gridStyles = getComputedStyle(grid);
+          const bottomGutter = (parseFloat(gridStyles.paddingBottom) || 0) + (parseFloat(gridStyles.rowGap || gridStyles.gap) || 0);
+          const maxChildBottom = Math.max(source.getBoundingClientRect().bottom, displacedRect.bottom);
           return {
             panelRows: Number(panel.dataset.gridRowSpan || 0),
             panelHeight: panelRect.height,
@@ -9348,9 +9800,11 @@ def test_open_panel_expands_to_contain_displaced_panel_child_widgets(page: Page,
             sourceRows: Number(source.dataset.gridRowSpan || 0),
             sourceRow: Number(source.dataset.gridRow || 0),
             displacedRow: Number(displaced.dataset.gridRow || 0),
-            maxChildBottom: Math.max(source.getBoundingClientRect().bottom, displacedRect.bottom),
+            maxChildBottom,
             panelBottom: panelRect.bottom,
-            childInsidePanel: Math.max(source.getBoundingClientRect().bottom, displacedRect.bottom) <= panelRect.bottom + 2
+            bottomGap: panelRect.bottom - maxChildBottom,
+            bottomGutter,
+            childInsidePanel: maxChildBottom <= panelRect.bottom + 2
           };
         }
         """
@@ -9360,6 +9814,7 @@ def test_open_panel_expands_to_contain_displaced_panel_child_widgets(page: Page,
     assert state["panelRows"] > before["rows"]
     assert state["savedHeight"] > before["savedHeight"]
     assert state["childInsidePanel"] is True
+    assert state["bottomGap"] >= state["bottomGutter"] - 2
 
     page.locator('[data-panel-key="builder-content"] > .db-panel-hd').click(position={"x": 40, "y": 40}, force=True)
     expect(panel).to_have_class(re.compile("db-panel-collapsed"))
@@ -9371,16 +9826,23 @@ def test_open_panel_expands_to_contain_displaced_panel_child_widgets(page: Page,
           const panel = document.querySelector('[data-panel-key="builder-content"]');
           const children = [...panel.querySelectorAll('.panel-internal-widget-grid > .widget-card')];
           const panelRect = panel.getBoundingClientRect();
+          const grid = panel.querySelector(".panel-internal-widget-grid");
+          const gridStyles = getComputedStyle(grid);
+          const bottomGutter = (parseFloat(gridStyles.paddingBottom) || 0) + (parseFloat(gridStyles.rowGap || gridStyles.gap) || 0);
+          const maxChildBottom = Math.max(...children.map((child) => child.getBoundingClientRect().bottom));
           return {
             rows: Number(panel.dataset.gridRowSpan || 0),
-            maxChildBottom: Math.max(...children.map((child) => child.getBoundingClientRect().bottom)),
-            panelBottom: panelRect.bottom
+            maxChildBottom,
+            panelBottom: panelRect.bottom,
+            bottomGap: panelRect.bottom - maxChildBottom,
+            bottomGutter
           };
         }
         """
     )
     assert reopened["rows"] == state["panelRows"]
     assert reopened["maxChildBottom"] <= reopened["panelBottom"] + 2
+    assert reopened["bottomGap"] >= reopened["bottomGutter"] - 2
 
     force_open_tools_for_interaction(page, source)
     drag_by(page, source.locator(".panel-resize-handle"), 20, 135, steps=12)
@@ -9391,11 +9853,17 @@ def test_open_panel_expands_to_contain_displaced_panel_child_widgets(page: Page,
           const panel = document.querySelector('[data-panel-key="builder-content"]');
           const children = [...panel.querySelectorAll('.panel-internal-widget-grid > .widget-card')];
           const panelRect = panel.getBoundingClientRect();
+          const grid = panel.querySelector(".panel-internal-widget-grid");
+          const gridStyles = getComputedStyle(grid);
+          const bottomGutter = (parseFloat(gridStyles.paddingBottom) || 0) + (parseFloat(gridStyles.rowGap || gridStyles.gap) || 0);
+          const maxChildBottom = Math.max(...children.map((child) => child.getBoundingClientRect().bottom));
           return {
             rows: Number(panel.dataset.gridRowSpan || 0),
             sourceRows: Number(panel.querySelector('[data-widget-key="panel-child-grow-source"]').dataset.gridRowSpan || 0),
-            maxChildBottom: Math.max(...children.map((child) => child.getBoundingClientRect().bottom)),
-            panelBottom: panelRect.bottom
+            maxChildBottom,
+            panelBottom: panelRect.bottom,
+            bottomGap: panelRect.bottom - maxChildBottom,
+            bottomGutter
           };
         }
         """
@@ -9403,6 +9871,7 @@ def test_open_panel_expands_to_contain_displaced_panel_child_widgets(page: Page,
     assert resized["sourceRows"] > state["sourceRows"]
     assert resized["rows"] >= reopened["rows"]
     assert resized["maxChildBottom"] <= resized["panelBottom"] + 2
+    assert resized["bottomGap"] >= resized["bottomGutter"] - 2
 
     page.locator(".layout-save-button").click()
     expect(page.locator(".toast", has_text="saved")).to_be_visible()
@@ -9414,11 +9883,17 @@ def test_open_panel_expands_to_contain_displaced_panel_child_widgets(page: Page,
           const panel = document.querySelector('[data-panel-key="builder-content"]');
           const children = [...panel.querySelectorAll('.panel-internal-widget-grid > .widget-card')];
           const panelRect = panel.getBoundingClientRect();
+          const grid = panel.querySelector(".panel-internal-widget-grid");
+          const gridStyles = getComputedStyle(grid);
+          const bottomGutter = (parseFloat(gridStyles.paddingBottom) || 0) + (parseFloat(gridStyles.rowGap || gridStyles.gap) || 0);
+          const maxChildBottom = Math.max(...children.map((child) => child.getBoundingClientRect().bottom));
           return {
             rows: Number(panel.dataset.gridRowSpan || 0),
             savedHeight: Number(panel.dataset.savedHeight || 0),
-            maxChildBottom: Math.max(...children.map((child) => child.getBoundingClientRect().bottom)),
-            panelBottom: panelRect.bottom
+            maxChildBottom,
+            panelBottom: panelRect.bottom,
+            bottomGap: panelRect.bottom - maxChildBottom,
+            bottomGutter
           };
         }
         """
@@ -9426,7 +9901,185 @@ def test_open_panel_expands_to_contain_displaced_panel_child_widgets(page: Page,
     assert reloaded["rows"] == resized["rows"]
     assert reloaded["savedHeight"] >= state["savedHeight"]
     assert reloaded["maxChildBottom"] <= reloaded["panelBottom"] + 2
+    assert reloaded["bottomGap"] >= reloaded["bottomGutter"] - 2
     assert_no_resize_artifacts(page)
+    assert_clean_browser(page)
+
+
+def test_panel_resize_preserves_child_widget_ownership_after_child_click(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    setup = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const body = panel?.querySelector(":scope > .db-panel-body");
+          if (!panel || !body) return { ready: false };
+          panel.classList.remove("db-panel-collapsed");
+          panel.dataset.gridCol = "1";
+          panel.dataset.gridRow = "2";
+          panel.dataset.currentSpan = "4";
+          panel.dataset.gridRowSpan = "5";
+          panel.dataset.savedHeight = "477";
+          panel.style.gridColumn = "1 / span 4";
+          panel.style.gridRow = "2 / span 5";
+          panel.style.height = "477px";
+          panel.querySelector(":scope > .db-panel-hd")?.setAttribute("aria-expanded", "true");
+          let grid = body.querySelector(":scope > .panel-internal-widget-grid");
+          if (!grid) {
+            grid = document.createElement("div");
+            grid.className = "panel-internal-widget-grid widget-layout";
+            grid.dataset.widgetLayoutKey = "builder:panel:builder-content";
+            grid.dataset.panelContainerKey = "builder-content";
+            body.appendChild(grid);
+          }
+          if (!grid.__initWidget) return { ready: false, hasInit: false };
+          grid.replaceChildren();
+          body.querySelector(":scope > .panel-empty-state")?.setAttribute("hidden", "");
+
+          const sources = [...document.querySelectorAll('.widget-layout:not(.panel-internal-widget-grid) > .widget-card:not(.range-bar)')].slice(0, 3);
+          if (sources.length < 3) return { ready: false, sourceCount: sources.length };
+          const place = (node, key, col, row, span = 2) => {
+            const clone = node.cloneNode(true);
+            node.remove();
+            delete clone.dataset.widgetInitialized;
+            clone.classList.remove(
+              "widget-tools-open",
+              "widget-settings-schema-open",
+              "widget-workbench-open",
+              "widget-dragging",
+              "dashboard-active-resize",
+              "dashboard-live-resize",
+              "dashboard-resize-source",
+              "group-selected",
+              "group-transform-member",
+              "db-panel-pinned"
+            );
+            clone.dataset.widgetKey = key;
+            clone.dataset.customWidget = "true";
+            clone.dataset.panelChildWidget = "true";
+            clone.dataset.parentPanelKey = panel.dataset.panelKey || "";
+            clone.dataset.gridCol = String(col);
+            clone.dataset.gridRow = String(row);
+            clone.dataset.currentSpan = String(span);
+            clone.dataset.gridRowSpan = "1";
+            clone.style.gridColumn = `${col} / span ${span}`;
+            clone.style.gridRow = `${row} / span 1`;
+            grid.appendChild(clone);
+            grid.__initWidget(clone);
+          };
+          place(sources[0], "panel-resize-owned-a", 1, 1, 2);
+          place(sources[1], "panel-resize-owned-b", 3, 1, 2);
+          place(sources[2], "panel-resize-owned-c", 1, 2, 3);
+          document.body.classList.remove("group-select-active", "panel-interaction-active", "panel-resize-active");
+          return { ready: true };
+        }
+        """
+    )
+    assert setup["ready"] is True
+
+    panel = page.locator('[data-panel-key="builder-content"]')
+    child = page.locator('.panel-internal-widget-grid > .widget-card[data-widget-key="panel-resize-owned-c"]')
+    expect(child).to_be_visible()
+    before = page.evaluate(
+        """
+        () => ({
+          panelChildren: [...document.querySelectorAll('[data-panel-key="builder-content"] .panel-internal-widget-grid > .widget-card')]
+            .map((node) => ({
+              key: node.dataset.widgetKey,
+              parent: node.dataset.parentPanelKey,
+              panelChild: node.dataset.panelChildWidget,
+              col: node.dataset.gridCol,
+              row: node.dataset.gridRow,
+              span: node.dataset.currentSpan,
+              rows: node.dataset.gridRowSpan,
+            })),
+          globalDuplicates: [...document.querySelectorAll('.widget-layout:not(.panel-internal-widget-grid) > .widget-card')]
+            .filter((node) => node.dataset.widgetKey?.startsWith('panel-resize-owned-')).length,
+        })
+        """
+    )
+    assert len(before["panelChildren"]) == 3
+    assert before["globalDuplicates"] == 0
+
+    panel.evaluate(
+        """
+        node => {
+          node.classList.add("db-panel-tools-open");
+          node.querySelector(":scope > .db-panel-hd .panel-settings-toggle")?.setAttribute("aria-expanded", "true");
+          document.body.classList.add("layout-tools-active");
+        }
+        """
+    )
+    expect(panel.locator(":scope > .db-panel-hd .panel-tool-drawer")).to_be_visible()
+    drag_by(page, panel.locator(":scope > .db-panel-hd .panel-resize-handle"), 92, 78, steps=14)
+    page.wait_for_timeout(360)
+    assert_no_resize_artifacts(page)
+
+    child.click(position={"x": 42, "y": 32}, force=True)
+    page.wait_for_timeout(260)
+    after_click = page.evaluate(
+        """
+        () => {
+          const panel = document.querySelector('[data-panel-key="builder-content"]');
+          const children = [...panel.querySelectorAll('.panel-internal-widget-grid > .widget-card')];
+          return {
+            panelChildren: children.map((node) => ({
+              key: node.dataset.widgetKey,
+              parent: node.dataset.parentPanelKey,
+              panelChild: node.dataset.panelChildWidget,
+              col: node.dataset.gridCol,
+              row: node.dataset.gridRow,
+              span: node.dataset.currentSpan,
+              rows: node.dataset.gridRowSpan,
+              insidePanel: node.closest(".db-panel") === panel,
+              domain: node.closest(".panel-internal-widget-grid") ? "panel" : "global",
+            })),
+            globalDuplicates: [...document.querySelectorAll('.widget-layout:not(.panel-internal-widget-grid) > .widget-card')]
+              .filter((node) => node.dataset.widgetKey?.startsWith('panel-resize-owned-')).length,
+            workbenchOpenInsidePanel: Boolean(panel.querySelector('.panel-internal-widget-grid > .widget-card.widget-workbench-open')),
+          };
+        }
+        """
+    )
+    assert after_click["globalDuplicates"] == 0
+    assert after_click["workbenchOpenInsidePanel"] is True
+    assert [child["key"] for child in after_click["panelChildren"]] == [child["key"] for child in before["panelChildren"]]
+    for before_child, after_child in zip(before["panelChildren"], after_click["panelChildren"]):
+        assert after_child["insidePanel"] is True
+        assert after_child["domain"] == "panel"
+        assert after_child["parent"] == "builder-content"
+        assert after_child["panelChild"] == "true"
+        assert {key: after_child[key] for key in ("col", "row", "span", "rows")} == {
+            key: before_child[key] for key in ("col", "row", "span", "rows")
+        }
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    loaded = page.evaluate(
+        """
+        () => ({
+          panelChildren: [...document.querySelectorAll('[data-panel-key="builder-content"] .panel-internal-widget-grid > .widget-card')]
+            .map((node) => ({
+              key: node.dataset.widgetKey,
+              parent: node.dataset.parentPanelKey,
+              panelChild: node.dataset.panelChildWidget,
+              col: node.dataset.gridCol,
+              row: node.dataset.gridRow,
+            })),
+          globalDuplicates: [...document.querySelectorAll('.widget-layout:not(.panel-internal-widget-grid) > .widget-card')]
+            .filter((node) => node.dataset.widgetKey?.startsWith('panel-resize-owned-')).length,
+        })
+        """
+    )
+    assert loaded["globalDuplicates"] == 0
+    assert [child["key"] for child in loaded["panelChildren"]] == [child["key"] for child in before["panelChildren"]]
+    assert all(child["parent"] == "builder-content" and child["panelChild"] == "true" for child in loaded["panelChildren"])
     assert_clean_browser(page)
 
 
@@ -9979,8 +10632,7 @@ def test_anchors_join_layout_history_and_saved_layout_state(page: Page, app_serv
             """
         )
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
     anchors = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]')
     expect(anchors).to_have_count(1)
     linked_anchor = anchors.first
@@ -9993,8 +10645,7 @@ def test_anchors_join_layout_history_and_saved_layout_state(page: Page, app_serv
     linked_anchor = page.locator(f'.workspace-anchor-object[data-anchor-key="{linked_key}"]')
     expect(linked_anchor).to_be_visible()
 
-    page.locator(".panel-add-button").click()
-    page.locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    open_add_category(page, "dividers").locator('.divider-add-action[data-divider-kind="context-divider"]').click()
     divider = page.locator('.workspace-divider[data-workspace-object-type="divider"]').last
     expect(divider).to_be_visible()
     divider.evaluate(
@@ -10036,8 +10687,7 @@ def test_anchors_join_layout_history_and_saved_layout_state(page: Page, app_serv
     press_dashboard_redo(page)
     assert linked_anchor.evaluate("node => node.dataset.panelColor") == changed_color
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
     expect(anchors).to_have_count(2)
     second_anchor = anchors.nth(1)
     second_key = second_anchor.evaluate("node => node.dataset.anchorKey")
@@ -14149,8 +14799,7 @@ def test_widget_surface_controls_use_translucent_widget_glass(page: Page, app_se
     widget = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)").first
     timeframe = page.locator(".timeframe-widget")
     panel = page.locator(".panel-layout > .db-panel").first
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
     anchor = page.locator('.workspace-anchor-object[data-workspace-object-type="anchor"]').last
     expect(anchor).to_be_visible()
 
@@ -14213,6 +14862,7 @@ def test_widget_surface_controls_use_translucent_widget_glass(page: Page, app_se
                 settingsShadow: settingsStyles.boxShadow,
                 iconColor: iconStyles.backgroundColor,
                 iconOpacity: Number(iconStyles.opacity || "1"),
+                iconMask: iconStyles.maskImage || iconStyles.webkitMaskImage,
               };
             }
             """
@@ -14244,14 +14894,15 @@ def test_widget_surface_controls_use_translucent_widget_glass(page: Page, app_se
         assert state["settingsBorder"] != "rgb(255, 255, 255)"
         assert state["buttonBorder"] != "rgb(255, 255, 255)"
         assert "0px 0px 22px" not in state["settingsShadow"]
-        assert state["iconColor"] != "rgba(0, 0, 0, 0)"
-        assert state["iconOpacity"] >= .9
+        assert state["iconColor"] == "rgba(0, 0, 0, 0)"
+        assert state["iconOpacity"] == 0
+        assert state["iconMask"] == "none"
 
-    assert max(widget_default["drawerAlphas"]) >= max(panel_default["drawerAlphas"]) - .08
-    assert widget_default["settingsAlpha"] >= panel_default["settingsAlpha"] - .08
-    assert widget_default["buttonAlpha"] >= panel_default["buttonAlpha"] - .08
-    assert max(timeframe_default["drawerAlphas"]) >= max(panel_default["drawerAlphas"]) - .08
-    assert max(anchor_default["drawerAlphas"]) >= max(panel_default["drawerAlphas"]) - .08
+    assert max(widget_default["drawerAlphas"]) >= max(panel_default["drawerAlphas"]) - .10
+    assert widget_default["settingsAlpha"] >= panel_default["settingsAlpha"] - .10
+    assert widget_default["buttonAlpha"] >= panel_default["buttonAlpha"] - .10
+    assert max(timeframe_default["drawerAlphas"]) >= max(panel_default["drawerAlphas"]) - .10
+    assert max(anchor_default["drawerAlphas"]) >= max(panel_default["drawerAlphas"]) - .10
     assert_clean_browser(page)
 
 
@@ -14301,7 +14952,7 @@ def test_navbar_dropdowns_layer_above_object_controls(page: Page, app_server: st
     assert_clean_browser(page)
 
 
-def test_widget_menu_icons_align_like_panel_icons(page: Page, app_server: str) -> None:
+def test_object_settings_control_nodes_preserve_shell_without_gear_glyph(page: Page, app_server: str) -> None:
     goto(page, app_server)
     panel = page.locator(".panel-layout > .db-panel").first
     widget = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)").first
@@ -14315,9 +14966,15 @@ def test_widget_menu_icons_align_like_panel_icons(page: Page, app_server: str) -
             const icon = button.querySelector(".settings-icon");
             const buttonRect = button.getBoundingClientRect();
             const iconRect = icon.getBoundingClientRect();
+            const iconStyles = getComputedStyle(icon);
             return {
               x: Math.abs((buttonRect.left + buttonRect.width / 2) - (iconRect.left + iconRect.width / 2)),
               y: Math.abs((buttonRect.top + buttonRect.height / 2) - (iconRect.top + iconRect.height / 2)),
+              iconWidth: iconRect.width,
+              iconHeight: iconRect.height,
+              iconBackground: iconStyles.backgroundColor,
+              iconOpacity: Number(iconStyles.opacity || "1"),
+              iconMask: iconStyles.maskImage || iconStyles.webkitMaskImage,
             };
           };
           const sideCenterDelta = (item, button) => {
@@ -14353,6 +15010,12 @@ def test_widget_menu_icons_align_like_panel_icons(page: Page, app_server: str) -
     assert delta["widget"]["y"] <= 1
     assert abs(delta["widget"]["x"] - delta["panel"]["x"]) <= 1
     assert abs(delta["widget"]["y"] - delta["panel"]["y"]) <= 1
+    assert delta["panel"]["iconWidth"] == delta["widget"]["iconWidth"] == 16
+    assert delta["panel"]["iconHeight"] == delta["widget"]["iconHeight"] == 16
+    for key in ("panel", "widget"):
+        assert delta[key]["iconBackground"] == "rgba(0, 0, 0, 0)"
+        assert delta[key]["iconOpacity"] == 0
+        assert delta[key]["iconMask"] == "none"
     assert delta["widgetSideCenter"] <= 1
     assert abs(delta["widgetRightInset"] - delta["panelRightInset"]) <= 1
     assert abs(delta["timeframeRightInset"] - delta["panelRightInset"]) <= 1

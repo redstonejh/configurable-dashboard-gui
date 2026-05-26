@@ -2035,6 +2035,99 @@
   });
 
   registerWidgetDefinition({
+    type: "map",
+    displayName: "Map",
+    category: "visualization",
+    subcategory: "Geospatial",
+    aliases: ["geospatial-map", "geo-map"],
+    defaultSize: { cols: 3, rows: 2 },
+    minSize: { cols: 2, rows: 1 },
+    widgetType: "map",
+    dashboardObjectKind: "map",
+    contextRole: "content",
+    htmlTag: "div",
+    className: "stat-card widget-card widget-card-custom map-widget-card",
+    capabilities: {
+      readsContext: true,
+      requiresDataSource: true,
+      supportsFilters: true,
+      supportsTimeRange: true,
+      supportsResize: true,
+    },
+    supportedSettings: ["location", "layerType", "limit", "color", "pin", "duplicate", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "map",
+        label: "Geospatial",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Map" },
+          { key: "latitudeField", label: "Latitude field", type: "fieldPicker", affectsQuery: true },
+          { key: "longitudeField", label: "Longitude field", type: "fieldPicker", affectsQuery: true },
+          { key: "locationField", label: "Location field", type: "fieldPicker", affectsQuery: true },
+          { key: "layerType", label: "Layer", type: "select", defaultValue: "points", options: ["points", "regions", "routes", "heatmap"], affectsQuery: true },
+          { key: "limit", label: "Limit", type: "number", defaultValue: 250, min: 1, max: 1000, step: 1, affectsQuery: true },
+        ],
+      }],
+    },
+    queryRequirements: {
+      fields: "geospatial",
+      geometry: ["latitude-longitude", "location", "region", "route"],
+      limit: 250,
+    },
+    getDefaultConfig: () => ({
+      title: "Map",
+      latitudeField: "",
+      longitudeField: "",
+      locationField: "",
+      layerType: "points",
+      limit: 250,
+    }),
+    resolveQuery: (config, resolvedContext) => {
+      if (!resolvedContext?.canQuery) return null;
+      const mapping = resolvedContext.semanticMapping || {};
+      const latitudeField = String(config.latitudeField || mapping.latitudeField || "").trim();
+      const longitudeField = String(config.longitudeField || mapping.longitudeField || "").trim();
+      const locationField = String(config.locationField || mapping.locationField || "").trim();
+      const fields = unique([
+        latitudeField,
+        longitudeField,
+        locationField,
+        mapping.labelField,
+        mapping.categoryField,
+        mapping.statusField,
+      ]);
+      if ((!latitudeField || !longitudeField) && !locationField) return null;
+      return {
+        fields,
+        filters: Array.isArray(config.filters) ? config.filters : [],
+        timeRange: config.timeRange || null,
+        limit: Number(config.limit) || 250,
+        geospatial: {
+          layerType: config.layerType || "points",
+          latitudeField,
+          longitudeField,
+          locationField,
+        },
+      };
+    },
+    render: ({ instance, resolvedContext, data, status }) => {
+      const config = instance.config || {};
+      const title = config.title || "Map";
+      const mapping = resolvedContext?.semanticMapping || {};
+      const latitudeField = String(config.latitudeField || mapping.latitudeField || "").trim();
+      const longitudeField = String(config.longitudeField || mapping.longitudeField || "").trim();
+      const locationField = String(config.locationField || mapping.locationField || "").trim();
+      if (!resolvedContext?.dataSourceId) return runtimeState(title, "Needs geospatial data");
+      if ((!latitudeField || !longitudeField) && !locationField) return runtimeState(title, "Configure location fields");
+      if (status === "loading") return runtimeState(title, "Loading");
+      if (status === "error") return runtimeState(title, data?.error || "Unable to load map data");
+      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      if (!rows.length) return runtimeState(title, "No map data");
+      return runtimeState(title, `${rows.length} geospatial row${rows.length === 1 ? "" : "s"}`);
+    },
+  });
+
+  registerWidgetDefinition({
     type: "stat-filter",
     displayName: "Stat + Filter",
     category: "controls",

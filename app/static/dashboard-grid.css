@@ -544,7 +544,9 @@ body:not(.engineer-mode-active) .workspace-engineer-overlay-layer {
 .workspace-wire-nodule:hover,
 .workspace-wire-nodule:focus-visible,
 .workspace-wire-nodule-source,
-.workspace-wire-nodule-target {
+.workspace-wire-nodule-target,
+.workspace-wire-nodule.is-link-source,
+.workspace-wire-nodule.is-valid-link-target {
   opacity: 1;
   border-color: color-mix(in srgb, #ef4444 72%, var(--line));
   box-shadow:
@@ -552,6 +554,41 @@ body:not(.engineer-mode-active) .workspace-engineer-overlay-layer {
     0 0 0 2px color-mix(in srgb, #ef4444 10%, transparent),
     inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 64%, transparent);
   transform: scale(1.12);
+}
+
+.workspace-wire-nodule.is-valid-link-target {
+  border-color: color-mix(in srgb, #93c5fd 74%, var(--line));
+  box-shadow:
+    0 4px 10px rgba(15, 23, 42, .16),
+    0 0 0 2px color-mix(in srgb, #93c5fd 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 64%, transparent);
+}
+
+.workspace-wire-nodule.is-link-source,
+.workspace-wire-nodule.workspace-wire-nodule-target {
+  border-color: color-mix(in srgb, #ef4444 74%, var(--line));
+}
+
+body.workspace-wire-drag-active .workspace-wire-nodule.is-invalid-link-target,
+body.workspace-wire-drag-active .workspace-wire-nodule.is-muted-during-link-drag {
+  opacity: .2;
+  border-color: color-mix(in srgb, #64748b 24%, var(--line));
+  box-shadow:
+    0 2px 6px rgba(15, 23, 42, .1),
+    inset 0 1px 0 color-mix(in srgb, var(--glass-highlight) 34%, transparent);
+  transform: scale(.88);
+}
+
+body.workspace-wire-drag-active .workspace-wire-nodule.is-invalid-link-target::after,
+body.workspace-wire-drag-active .workspace-wire-nodule.is-muted-during-link-drag::after {
+  background: color-mix(in srgb, #64748b 48%, var(--surface-raised));
+  box-shadow: none;
+}
+
+body.workspace-wire-drag-active .workspace-wire-nodule.is-valid-link-target:hover,
+body.workspace-wire-drag-active .workspace-wire-nodule.workspace-wire-nodule-target {
+  opacity: 1;
+  transform: scale(1.16);
 }
 
 .workspace-relationship-path[data-relationship-highlight="connected"] {
@@ -1606,11 +1643,12 @@ body.layout-tools-active .widget-card:not(.widget-tools-open):not(:has(> .widget
   --dashboard-grid-row-height: 66px;
   --panel-internal-grid-inset-block: 12px;
   --panel-internal-grid-inset-inline: 12px;
+  --panel-internal-grid-gap: 10px;
   display: grid;
   box-sizing: border-box;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   grid-auto-rows: var(--dashboard-grid-row-height);
-  gap: 10px;
+  gap: var(--panel-internal-grid-gap);
   width: 100%;
   min-height: 100%;
   padding: var(--panel-internal-grid-inset-block) var(--panel-internal-grid-inset-inline);
@@ -2623,14 +2661,25 @@ body.panel-interaction-active .db-panel:has(.panel-internal-widget-grid > .widge
   will-change: auto;
 }
 
-body.panel-interaction-active .widget-card:not(.widget-dragging):not(.dashboard-active-resize),
-body.panel-interaction-active .db-panel:not(.db-panel-dragging):not(.dashboard-active-resize) {
+body.panel-interaction-active .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member),
+body.panel-interaction-active .db-panel:not(.db-panel-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member),
+body.panel-interaction-active .workspace-anchor-object:not(.anchor-dragging):not(.anchor-rail-source),
+body.panel-resize-active .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member),
+body.panel-resize-active .db-panel:not(.db-panel-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member),
+body.panel-resize-active .workspace-anchor-object:not(.anchor-dragging):not(.anchor-rail-source) {
   pointer-events: none;
 }
 
 body.panel-interaction-active .widget-dragging,
 body.panel-interaction-active .db-panel-dragging,
-body.panel-interaction-active .dashboard-active-resize {
+body.panel-interaction-active .dashboard-active-resize,
+body.panel-interaction-active .dashboard-resize-source,
+body.panel-interaction-active .group-transform-member,
+body.panel-resize-active .widget-dragging,
+body.panel-resize-active .db-panel-dragging,
+body.panel-resize-active .dashboard-active-resize,
+body.panel-resize-active .dashboard-resize-source,
+body.panel-resize-active .group-transform-member {
   pointer-events: auto;
 }
 
@@ -2646,6 +2695,45 @@ body.panel-resize-active .surface-response-active:not(.widget-dragging):not(.db-
 body.workspace-wire-drag-active .surface-response-active:not(.widget-dragging):not(.db-panel-dragging):not(.dashboard-active-resize),
 body.anchor-rail-drag-active .surface-response-active:not(.widget-dragging):not(.db-panel-dragging):not(.dashboard-active-resize) {
   transform: none !important;
+}
+
+body.panel-interaction-active .widget-layout > .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member):hover,
+body.panel-interaction-active .widget-layout > .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member):focus-visible,
+body.panel-interaction-active .panel-internal-widget-grid > .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member):hover,
+body.panel-interaction-active .panel-internal-widget-grid > .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member):focus-visible,
+body.panel-resize-active .widget-layout > .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member):hover,
+body.panel-resize-active .widget-layout > .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member):focus-visible,
+body.panel-resize-active .panel-internal-widget-grid > .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member):hover,
+body.panel-resize-active .panel-internal-widget-grid > .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member):focus-visible {
+  transform: none !important;
+  background: var(--surface) !important;
+  border-color: var(--line) !important;
+  box-shadow: var(--shadow-soft) !important;
+}
+
+body.panel-interaction-active .db-panel:not(.db-panel-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member):hover,
+body.panel-interaction-active .db-panel:not(.db-panel-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member):focus-within,
+body.panel-resize-active .db-panel:not(.db-panel-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member):hover,
+body.panel-resize-active .db-panel:not(.db-panel-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member):focus-within {
+  transform: none !important;
+  background: var(--surface) !important;
+  border-color: var(--line) !important;
+  box-shadow: var(--shadow-card) !important;
+}
+
+body.panel-interaction-active .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member) .panel-settings-toggle:hover,
+body.panel-interaction-active .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member) .panel-settings-toggle:focus-visible,
+body.panel-interaction-active .db-panel:not(.db-panel-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member) .panel-settings-toggle:hover,
+body.panel-interaction-active .db-panel:not(.db-panel-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member) .panel-settings-toggle:focus-visible,
+body.panel-resize-active .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member) .panel-settings-toggle:hover,
+body.panel-resize-active .widget-card:not(.widget-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member) .panel-settings-toggle:focus-visible,
+body.panel-resize-active .db-panel:not(.db-panel-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member) .panel-settings-toggle:hover,
+body.panel-resize-active .db-panel:not(.db-panel-dragging):not(.dashboard-active-resize):not(.dashboard-resize-source):not(.group-transform-member) .panel-settings-toggle:focus-visible {
+  transform: none !important;
+  background: var(--panel-lock-bg) !important;
+  border-color: var(--panel-lock-border) !important;
+  box-shadow: var(--panel-control-rest-shadow) !important;
+  outline: none !important;
 }
 
 body.panel-interaction-active .db-panel.panel-header-entry-accept {
@@ -3043,6 +3131,10 @@ body.layout-tools-active .db-panel:not(.db-panel-tools-open):not(:has(.panel-too
 .panel-settings-toggle .settings-icon {
   width: 16px;
   height: 16px;
+  background: transparent;
+  opacity: 0;
+  mask-image: none;
+  -webkit-mask-image: none;
 }
 
 .move-icon {
