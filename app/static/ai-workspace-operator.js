@@ -141,6 +141,68 @@
       },
     },
   });
+  const originIdForPlan = (plan) => `${plan.id}-origin`;
+  const datasetIdForPlan = (plan, dataset = {}) => plan?.availableData?.datasetId || dataset?.id || "";
+  const derivedScenarioDatasetIdForPlan = (plan) => `${plan.id}-derived-scenario`;
+  const createDatasetOriginStep = (plan, dataset, col = 5, row = 14, cols = 2, rows = 2, options = {}) => ({
+    type: "createDatasetOrigin",
+    id: originIdForPlan(plan),
+    title: "Dataset Origin",
+    col,
+    row,
+    cols,
+    rows,
+    layer: "backend",
+    config: {
+      title: "Dataset Origin",
+      datasetIds: Array.isArray(options.datasetIds) && options.datasetIds.length
+        ? options.datasetIds
+        : (datasetIdForPlan(plan, dataset) ? [datasetIdForPlan(plan, dataset)] : []),
+      exposeAllDatasets: !(Array.isArray(options.datasetIds) && options.datasetIds.length) && !datasetIdForPlan(plan, dataset),
+      showSchema: true,
+      showSamples: true,
+    },
+  });
+  const originOutputPortForPlan = (plan, dataset = {}, options = {}) => {
+    const datasetId = options.datasetId || datasetIdForPlan(plan, dataset);
+    return {
+      objectId: originIdForPlan(plan),
+      role: "output",
+      name: datasetId || "dataset",
+      metadata: {
+        objectType: "dataset-origin",
+        streamType: "dataset",
+        datasetId,
+        datasetName: options.datasetName || plan?.availableData?.datasetName || dataset?.name || "",
+        rowCount: options.rowCount || plan?.availableData?.rowCount || dataset?.rowCount || 0,
+      },
+    };
+  };
+  const inputPortForObject = (objectId) => ({
+    objectId,
+    role: "input",
+    name: "main",
+  });
+  const createOriginLinkStep = (plan, dataset, targetId, label = "Dataset -> widget", options = {}) => ({
+    type: "createDataflowLink",
+    id: options.id || `${originIdForPlan(plan)}-to-${String(targetId || "target").replace(`${plan.id}-`, "")}`,
+    source: originOutputPortForPlan(plan, dataset, options),
+    target: inputPortForObject(targetId),
+    label,
+    signalType: "data",
+  });
+  const createDerivedDatasetStep = (plan, dataset, config = {}) => ({
+    type: "createDerivedDataset",
+    id: config.id || derivedScenarioDatasetIdForPlan(plan),
+    name: config.name || "AI Derived Scenario Dataset",
+    sourceId: datasetIdForPlan(plan, dataset),
+    transform: config.transform || {},
+    semanticMapping: dataset?.semanticMapping || {},
+    metadata: {
+      purpose: config.purpose || plan.intent || "analysis",
+      scenarioId: plan.scenario?.id || "",
+    },
+  });
 
   const intentForQuestion = (question = "") => {
     const text = normalizeText(question);
@@ -221,7 +283,17 @@
     plan.explanation.summary = `Created a reversible derived scenario using ${baselineField}; original rows are left unchanged.`;
     plan.explanation.uncertainty.push("This is arithmetic scenario modeling, not a forecast.");
     plan.explanation.nextSteps.push("Inspect the projected table and scenario assumptions.");
+    const derivedDatasetId = derivedScenarioDatasetIdForPlan(plan);
     plan.steps = [
+      createDerivedDatasetStep(plan, dataset, {
+        id: derivedDatasetId,
+        name: "AI What-If Derived Dataset",
+        purpose: "what-if scenario",
+        transform: { calculatedFields },
+      }),
+      createDatasetOriginStep(plan, dataset, 3, 14, 2, 2, {
+        datasetIds: [datasetIdForPlan(plan, dataset), derivedDatasetId].filter(Boolean),
+      }),
       { type: "createPanel", id: `${plan.id}-panel`, title: "AI What-If Scenario", col: 1, row: 8, cols: 6, rows: 5 },
       {
         type: "createStat",
@@ -286,6 +358,22 @@
         scenarioId: plan.scenario.id,
         config: { title: "Scenario Formula", operator: "AND", expression: `${baselineField} > ${adjustedField}`, calculatedFields },
       },
+      createOriginLinkStep(plan, dataset, `${plan.id}-equation-filter`, "Dataset -> formula"),
+      createOriginLinkStep(plan, dataset, `${plan.id}-savings`, "Derived scenario -> savings", {
+        id: `${originIdForPlan(plan)}-derived-to-savings`,
+        datasetId: derivedDatasetId,
+        datasetName: "AI What-If Derived Dataset",
+      }),
+      createOriginLinkStep(plan, dataset, `${plan.id}-scenario-chart`, "Derived scenario -> chart", {
+        id: `${originIdForPlan(plan)}-derived-to-chart`,
+        datasetId: derivedDatasetId,
+        datasetName: "AI What-If Derived Dataset",
+      }),
+      createOriginLinkStep(plan, dataset, `${plan.id}-scenario-table`, "Derived scenario -> table", {
+        id: `${originIdForPlan(plan)}-derived-to-table`,
+        datasetId: derivedDatasetId,
+        datasetName: "AI What-If Derived Dataset",
+      }),
       {
         type: "createDataflowLink",
         id: `${plan.id}-formula-to-savings`,
@@ -330,7 +418,16 @@
     plan.assumptions.push(safeAssumption("Summary widgets use the currently resolved workspace dataset and context filters."));
     plan.explanation.summary = "Built a calm overview with summary metrics, trend, status breakdown, location view when available, and an explanatory note.";
     plan.explanation.nextSteps.push("Use filters or timeframe controls to narrow the overview.");
+    const visualTargets = [
+      `${plan.id}-total`,
+      `${plan.id}-average`,
+      `${plan.id}-trend`,
+      `${plan.id}-mix`,
+      `${plan.id}-table`,
+      ...(profile.latitudeField && profile.longitudeField ? [`${plan.id}-map`] : []),
+    ];
     plan.steps = [
+      createDatasetOriginStep(plan, dataset, 5, 15, 2, 2),
       { type: "createPanel", id: `${plan.id}-panel`, title: "AI Executive Overview", col: 1, row: 8, cols: 6, rows: 6 },
       { type: "createStat", id: `${plan.id}-total`, title: "Total Value", panelId: `${plan.id}-panel`, col: 1, row: 1, cols: 2, rows: 1, config: { title: "Total Value", label: "Total Value", metric: "sum", valueField: profile.revenueField || profile.valueField, format: profile.revenueField ? "currency" : "number" } },
       { type: "createStat", id: `${plan.id}-average`, title: "Average", panelId: `${plan.id}-panel`, col: 3, row: 1, cols: 2, rows: 1, config: { title: "Average", label: "Average", metric: "avg", valueField: profile.valueField || profile.revenueField } },
@@ -338,6 +435,7 @@
       { type: "createChart", id: `${plan.id}-mix`, title: "Status Mix", panelId: `${plan.id}-panel`, col: 4, row: 2, cols: 2, rows: 2, config: { title: "Status Mix", chartType: "donut", xField: profile.statusField || profile.categoryField, yField: profile.valueField || profile.revenueField, aggregation: "count", limit: 12 } },
       { type: "createTable", id: `${plan.id}-table`, title: "Records to Inspect", panelId: `${plan.id}-panel`, col: 1, row: 4, cols: 3, rows: 2, config: { title: "Records to Inspect", columns: [profile.labelField, profile.categoryField, profile.statusField, profile.valueField || profile.revenueField].filter(Boolean), sortBy: profile.valueField || profile.revenueField, sortDirection: "desc", limit: 24 } },
       ...(profile.latitudeField && profile.longitudeField ? [{ type: "createMap", id: `${plan.id}-map`, title: "Location View", panelId: `${plan.id}-panel`, col: 4, row: 4, cols: 2, rows: 2, config: { title: "Location View", latitudeField: profile.latitudeField, longitudeField: profile.longitudeField, locationField: profile.locationField, limit: 120 } }] : []),
+      ...visualTargets.map((targetId) => createOriginLinkStep(plan, dataset, targetId, "Dataset -> visual")),
       createExplanationStep(plan, 1, 16, 5, 2),
     ];
     return plan;
@@ -357,10 +455,14 @@
     plan.requiredData = [profile.dateField, profile.valueField || profile.revenueField].filter(Boolean);
     plan.explanation.summary = "Created a time-oriented view with a primary trend and supporting table of recent records.";
     plan.steps = [
+      createDatasetOriginStep(plan, dataset, 5, 14, 2, 2),
       { type: "createPanel", id: `${plan.id}-panel`, title: "AI Trend Analysis", col: 1, row: 8, cols: 6, rows: 5 },
       { type: "createChart", id: `${plan.id}-trend`, title: "Trend Over Time", panelId: `${plan.id}-panel`, col: 1, row: 1, cols: 4, rows: 2, config: { title: "Trend Over Time", chartType: profile.dateField ? "area" : "bar", xField: profile.dateField || profile.categoryField || profile.labelField, yField: profile.valueField || profile.revenueField, aggregation: "avg", timeBucket: profile.dateField ? { field: profile.dateField, unit: "day", targetField: "day" } : null, limit: 80 } },
       { type: "createStat", id: `${plan.id}-avg`, title: "Average", panelId: `${plan.id}-panel`, col: 5, row: 1, cols: 2, rows: 1, config: { title: "Average", label: "Average", metric: "avg", valueField: profile.valueField || profile.revenueField } },
       { type: "createTable", id: `${plan.id}-table`, title: "Recent Records", panelId: `${plan.id}-panel`, col: 1, row: 3, cols: 4, rows: 2, config: { title: "Recent Records", columns: [profile.labelField, profile.dateField, profile.categoryField, profile.valueField || profile.revenueField].filter(Boolean), sortBy: profile.dateField, sortDirection: "desc", limit: 24 } },
+      createOriginLinkStep(plan, dataset, `${plan.id}-trend`, "Dataset -> trend"),
+      createOriginLinkStep(plan, dataset, `${plan.id}-avg`, "Dataset -> stat"),
+      createOriginLinkStep(plan, dataset, `${plan.id}-table`, "Dataset -> table"),
       createExplanationStep(plan, 1, 15, 5, 2),
     ];
     return plan;
@@ -376,11 +478,18 @@
     plan.requiredData = [profile.labelField, profile.valueField || profile.revenueField, profile.statusField].filter(Boolean);
     plan.explanation.summary = "Created a ranked table and comparison chart so the user can inspect the records needing attention.";
     plan.explanation.uncertainty.push("Ranking direction is inferred from the question; inspect the table before acting.");
+    const visualTargets = [
+      `${plan.id}-table`,
+      `${plan.id}-chart`,
+      ...(profile.latitudeField && profile.longitudeField ? [`${plan.id}-map`] : []),
+    ];
     plan.steps = [
+      createDatasetOriginStep(plan, dataset, 5, 14, 2, 2),
       { type: "createPanel", id: `${plan.id}-panel`, title: "AI Attention View", col: 1, row: 8, cols: 6, rows: 5 },
       { type: "createTable", id: `${plan.id}-table`, title: "Ranked Records", panelId: `${plan.id}-panel`, col: 1, row: 1, cols: 3, rows: 3, config: { title: "Ranked Records", columns: [profile.labelField, profile.categoryField, profile.statusField, profile.valueField || profile.revenueField].filter(Boolean), sortBy: profile.valueField || profile.revenueField, sortDirection: /worst|underperform|risk/i.test(question) ? "asc" : "desc", limit: 20 } },
       { type: "createChart", id: `${plan.id}-chart`, title: "Comparison", panelId: `${plan.id}-panel`, col: 4, row: 1, cols: 2, rows: 2, config: { title: "Comparison", chartType: "bar", xField: profile.categoryField || profile.labelField, yField: profile.valueField || profile.revenueField, aggregation: "avg", limit: 12 } },
       ...(profile.latitudeField && profile.longitudeField ? [{ type: "createMap", id: `${plan.id}-map`, title: "Where to Look", panelId: `${plan.id}-panel`, col: 4, row: 3, cols: 2, rows: 2, config: { title: "Where to Look", latitudeField: profile.latitudeField, longitudeField: profile.longitudeField, locationField: profile.locationField, limit: 120 } }] : []),
+      ...visualTargets.map((targetId) => createOriginLinkStep(plan, dataset, targetId, "Dataset -> visual")),
       createExplanationStep(plan, 1, 15, 5, 2),
     ];
     return plan;
@@ -392,9 +501,12 @@
     plan.requiredData = [profile.labelField, profile.valueField, profile.categoryField].filter(Boolean);
     plan.explanation.summary = "Built a general inspectable workspace because the question did not map to a more specific analytical pattern.";
     plan.steps = [
+      createDatasetOriginStep(plan, dataset, 5, 13, 2, 2),
       { type: "createPanel", id: `${plan.id}-panel`, title: "AI Workspace Answer", col: 1, row: 8, cols: 6, rows: 4 },
       { type: "createStat", id: `${plan.id}-count`, title: "Records", panelId: `${plan.id}-panel`, col: 1, row: 1, cols: 2, rows: 1, config: { title: "Records", label: "Records", metric: "count" } },
       { type: "createTable", id: `${plan.id}-table`, title: "Workspace Rows", panelId: `${plan.id}-panel`, col: 1, row: 2, cols: 4, rows: 2, config: { title: "Workspace Rows", columns: [profile.labelField, profile.categoryField, profile.statusField, profile.valueField].filter(Boolean), limit: 24 } },
+      createOriginLinkStep(plan, dataset, `${plan.id}-count`, "Dataset -> stat"),
+      createOriginLinkStep(plan, dataset, `${plan.id}-table`, "Dataset -> table"),
       createExplanationStep(plan, 1, 14, 5, 2),
     ];
     return plan;

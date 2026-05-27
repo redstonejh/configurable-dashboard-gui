@@ -2112,6 +2112,35 @@ document.addEventListener("DOMContentLoaded", () => {
    * WorkspaceContext: { id, name, dataSourceId?, semanticMapping?, filters?, timeRange?, tags?, visualSettings? }
    */
   const dataSourceAdapters = new Map();
+  const dataOriginDefinitions = new Map();
+  const registerDataOriginDefinition = (definition = {}) => {
+    const kind = String(definition.kind || "").trim();
+    if (!kind) return false;
+    dataOriginDefinitions.set(kind, {
+      kind,
+      label: String(definition.label || kind),
+      category: String(definition.category || "dataset"),
+      description: String(definition.description || ""),
+      durable: definition.durable !== false,
+      realtime: Boolean(definition.realtime),
+      derived: Boolean(definition.derived),
+      implemented: definition.implemented !== false,
+    });
+    return true;
+  };
+  [
+    { kind: "manual", label: "Dataset Origin", category: "local", description: "Normalized in-workspace rows." },
+    { kind: "json", label: "Uploaded JSON Origin", category: "file", description: "Uploaded or pasted JSON rows." },
+    { kind: "csv", label: "Uploaded CSV Origin", category: "file", description: "Uploaded CSV rows normalized into records." },
+    { kind: "sql", label: "SQL Origin", category: "external", description: "Future normalized SQL query output." },
+    { kind: "api", label: "API Origin", category: "external", description: "Future normalized API response rows." },
+    { kind: "uploaded-file", label: "Uploaded File Origin", category: "file", description: "Future file-backed normalized data." },
+    { kind: "scenario", label: "Scenario Origin", category: "scenario", description: "Scenario branch rows derived without mutating base data." },
+    { kind: "derived", label: "Derived Dataset Origin", category: "derived", description: "Reusable transformed dataset stream.", derived: true },
+    { kind: "ai-generated", label: "AI Generated Dataset Origin", category: "derived", description: "AI-created normalized dataset that remains inspectable.", derived: true },
+    { kind: "realtime-stream", label: "Real-time Stream Origin", category: "stream", description: "Future streaming records cache.", realtime: true },
+    { kind: "cached-query", label: "Cached Query Origin", category: "cache", description: "Cached query result promoted to substrate." },
+  ].forEach(registerDataOriginDefinition);
   const normalizeFieldType = (value) => {
     if (value instanceof Date) return "date";
     if (typeof value === "number") return "number";
@@ -2194,6 +2223,26 @@ document.addEventListener("DOMContentLoaded", () => {
     if (Array.isArray(config.values)) return config.values;
     return [];
   };
+  const dataSubstrateRowsForSource = (source, layoutKey = "builder", profile = getActivePanelProfile(layoutKey), stack = new Set()) => {
+    if (!source?.id) return [];
+    if (source.kind !== "derived") return sourceRows(source);
+    if (stack.has(source.id)) return [];
+    const sourceId = source.config?.sourceId || source.config?.baseSourceId || "";
+    const base = dataSourceById(layoutKey, profile, sourceId);
+    if (!base) return sourceRows(source);
+    const baseRows = dataSubstrateRowsForSource(base, layoutKey, profile, new Set([...stack, source.id]));
+    const transformRuntime = window.dashboardDataTransformRuntime;
+    if (!transformRuntime?.queryRows) return baseRows;
+    try {
+      const transformed = transformRuntime.queryRows(baseRows, source.config?.transform || {}, {
+        semanticMapping: source.config?.semanticMapping || {},
+        now: transformRuntime.demoNow,
+      });
+      return transformed.rows || [];
+    } catch {
+      return [];
+    }
+  };
   const comparableFilterValue = (value) => {
     const numeric = Number(value);
     if (Number.isFinite(numeric)) return numeric;
@@ -2248,10 +2297,21 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   const createRecordAdapter = (kind) => ({
     kind,
-    introspect: async (source) => inferDataSchema(sourceRows(source), source?.config?.schema || source?.config?.fields || []),
+    introspect: async (source) => inferDataSchema(
+      dataSubstrateRowsForSource(
+        source,
+        source?.config?.layoutKey || "builder",
+        source?.config?.profile || getActivePanelProfile(source?.config?.layoutKey || "builder")
+      ),
+      source?.config?.schema || source?.config?.fields || []
+    ),
     query: async (source, request = {}) => {
       const mapping = request.semanticMapping || {};
-      const baseRows = sourceRows(source);
+      const baseRows = dataSubstrateRowsForSource(
+        source,
+        request.layoutKey || "builder",
+        request.profile || getActivePanelProfile(request.layoutKey || "builder")
+      );
       const filters = [...(request.filters || [])];
       const transformRuntime = window.dashboardDataTransformRuntime;
       if (transformRuntime?.queryRows) {
@@ -2304,6 +2364,14 @@ document.addEventListener("DOMContentLoaded", () => {
   registerDataSourceAdapter(createRecordAdapter("manual"));
   registerDataSourceAdapter(createRecordAdapter("json"));
   registerDataSourceAdapter(createRecordAdapter("csv"));
+  registerDataSourceAdapter(createRecordAdapter("sql"));
+  registerDataSourceAdapter(createRecordAdapter("api"));
+  registerDataSourceAdapter(createRecordAdapter("uploaded-file"));
+  registerDataSourceAdapter(createRecordAdapter("scenario"));
+  registerDataSourceAdapter(createRecordAdapter("derived"));
+  registerDataSourceAdapter(createRecordAdapter("ai-generated"));
+  registerDataSourceAdapter(createRecordAdapter("realtime-stream"));
+  registerDataSourceAdapter(createRecordAdapter("cached-query"));
 
   const normalizeDataSource = (source) => ({
     id: String(source?.id || "").trim(),
@@ -2596,6 +2664,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     return adapter.query(source, {
       ...request,
+      layoutKey: resolvedContext.layoutKey,
+      profile: resolvedContext.profile,
       filters: [...(resolvedContext.filters || []), ...(request.filters || [])],
       timeRange: request.timeRange || resolvedContext.timeRange,
       semanticMapping: resolvedContext.semanticMapping || {},
@@ -3156,8 +3226,202 @@ document.addEventListener("DOMContentLoaded", () => {
       role,
       side: WORKSPACE_PORT_SIDES[role],
       name,
-      signalTypes: [WORKSPACE_SIGNAL_TYPES.data],
+      signalTypes: Array.isArray(ref.signalTypes) && ref.signalTypes.length
+        ? ref.signalTypes.map(normalizeSignalType)
+        : [WORKSPACE_SIGNAL_TYPES.data],
+      metadata: ref.metadata && typeof ref.metadata === "object" ? { ...ref.metadata } : {},
     };
+  };
+  const dataSubstrateSampleRows = (rows = [], count = 3) => rows.slice(0, count).map((row) => ({ ...(row || {}) }));
+  const dataSubstrateFreshness = (rows = [], schema = { fields: [] }, source = {}) => {
+    const configured = source?.config?.metadata?.freshness || source?.config?.freshness || source?.config?.lastUpdated || source?.lastUpdated;
+    if (configured) return String(configured);
+    const timeFields = (schema.fields || [])
+      .filter((field) => field.type === "date" || /date|time|updated|at$/i.test(field.name))
+      .map((field) => field.name);
+    const latest = rows.reduce((current, row) => {
+      for (const field of timeFields) {
+        const value = Date.parse(row?.[field]);
+        if (Number.isFinite(value) && value > current) current = value;
+      }
+      return current;
+    }, 0);
+    return latest ? new Date(latest).toISOString() : "unknown";
+  };
+  const inspectDataSubstrateSource = (source, layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+    const rows = dataSubstrateRowsForSource(source, layoutKey, profile);
+    const schema = inferDataSchema(rows, source?.config?.schema || source?.config?.fields || []);
+    const originDefinition = dataOriginDefinitions.get(source.kind) || dataOriginDefinitions.get("manual");
+    const lineage = source.kind === "derived"
+      ? {
+        kind: "derived",
+        sourceId: source.config?.sourceId || source.config?.baseSourceId || "",
+        transform: source.config?.transform || {},
+        createdBy: source.config?.createdBy || source.config?.lineage?.createdBy || "",
+      }
+      : (source.config?.lineage && typeof source.config.lineage === "object" ? { ...source.config.lineage } : null);
+    const fields = (schema.fields || []).map((field) => {
+      const missingCount = rows.reduce((count, row) => count + (row?.[field.name] == null ? 1 : 0), 0);
+      return {
+        name: field.name,
+        type: field.type || "unknown",
+        nullable: Boolean(field.nullable) || missingCount > 0,
+        sampleValues: Array.isArray(field.sampleValues) ? field.sampleValues.slice(0, 4) : [],
+        missingCount,
+      };
+    });
+    const numericFields = fields.filter((field) => field.type === "number").map((field) => field.name);
+    const categoricalFields = fields.filter((field) => field.type === "string").map((field) => field.name);
+    const timeFields = fields.filter((field) => field.type === "date" || /date|time|at$/i.test(field.name)).map((field) => field.name);
+    const geospatialFields = fields.filter((field) => /lat|lon|lng|location|geo/i.test(field.name)).map((field) => field.name);
+    const missingFields = fields.filter((field) => field.missingCount > 0).map((field) => field.name);
+    return {
+      id: source.id,
+      name: source.name,
+      kind: source.kind,
+      originType: originDefinition?.kind || source.kind,
+      originLabel: originDefinition?.label || source.kind,
+      sourceType: originDefinition?.label || source.kind,
+      sourceKind: source.kind,
+      rowCount: rows.length,
+      fields,
+      schema: { fields },
+      semanticMapping: source.config?.semanticMapping || suggestSemanticMappingFromSchema({ fields }),
+      numericFields,
+      categoricalFields,
+      timeFields,
+      geospatialFields,
+      relationships: Array.isArray(source.config?.relationships) ? source.config.relationships : [],
+      lineage,
+      metadata: source.config?.metadata && typeof source.config.metadata === "object" ? { ...source.config.metadata } : {},
+      freshness: dataSubstrateFreshness(rows, { fields }, source),
+      qualityWarnings: [
+        ...(missingFields.length ? [`Missing values in ${missingFields.slice(0, 5).join(", ")}`] : []),
+        ...(rows.length === 0 ? ["Dataset is empty"] : []),
+      ],
+      sampleRows: dataSubstrateSampleRows(rows),
+    };
+  };
+  const inspectDataSubstrate = (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) =>
+    loadDataSources(layoutKey, profile).map((source) => inspectDataSubstrateSource(source, layoutKey, profile));
+  const datasetOriginConfigIds = (config = {}) => {
+    const configured = Array.isArray(config.datasetIds)
+      ? config.datasetIds
+      : String(config.datasetIds || config.datasetId || "")
+        .split(",")
+        .map((entry) => entry.trim());
+    return configured.filter(Boolean);
+  };
+  const datasetOriginConfigOriginTypes = (config = {}) => {
+    const configured = Array.isArray(config.originTypes)
+      ? config.originTypes
+      : String(config.originTypes || config.originType || "")
+        .split(",")
+        .map((entry) => entry.trim());
+    return configured.filter(Boolean);
+  };
+  const datasetOriginExposedDatasets = (config = {}, layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+    let datasets = inspectDataSubstrate(layoutKey, profile);
+    const originTypes = datasetOriginConfigOriginTypes(config);
+    if (originTypes.length) {
+      const selectedOriginTypes = new Set(originTypes);
+      datasets = datasets.filter((dataset) => selectedOriginTypes.has(dataset.originType || dataset.sourceKind || dataset.kind));
+    }
+    const ids = datasetOriginConfigIds(config);
+    if (config.exposeAllDatasets !== false && !ids.length) return datasets;
+    const selected = new Set(ids);
+    return datasets.filter((dataset) => selected.has(dataset.id));
+  };
+  const datasetOriginConfigFromElement = (item) => parseJsonRecord(item?.dataset?.widgetConfig, {}) || {};
+  const datasetOriginPortsForElement = (item, layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+    const objectId = workspaceObjectKey(item);
+    if (!objectId) return [];
+    return datasetOriginExposedDatasets(datasetOriginConfigFromElement(item), layoutKey, profile).map((dataset) => normalizePortRef({
+      objectId,
+      role: WORKSPACE_PORT_ROLES.output,
+      name: dataset.id,
+      signalTypes: [WORKSPACE_SIGNAL_TYPES.data],
+      metadata: {
+        objectType: "dataset-origin",
+        streamType: "dataset",
+        datasetId: dataset.id,
+        datasetName: dataset.name,
+        originType: dataset.originType || dataset.sourceKind || dataset.kind,
+        originLabel: dataset.originLabel || dataset.sourceType,
+        sourceType: dataset.sourceType,
+        sourceKind: dataset.sourceKind || dataset.kind,
+        rowCount: dataset.rowCount,
+        fieldCount: dataset.fields.length,
+        fields: dataset.fields.map((field) => ({ name: field.name, type: field.type })),
+        lineage: dataset.lineage || null,
+      },
+    }, WORKSPACE_PORT_ROLES.output, objectId));
+  };
+  window.dashboardDataSubstrateRuntime = {
+    originTypes: () => [...dataOriginDefinitions.values()].map((definition) => ({ ...definition })),
+    registerOriginType: registerDataOriginDefinition,
+    inspectDatasets: (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => inspectDataSubstrate(layoutKey, profile),
+    inspectDataset: (datasetId = "", layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) =>
+      inspectDataSubstrate(layoutKey, profile).find((dataset) => dataset.id === datasetId) || null,
+    sourceRows: (datasetId = "", layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+      const source = dataSourceById(layoutKey, profile, datasetId);
+      const rows = source ? dataSubstrateRowsForSource(source, layoutKey, profile) : [];
+      return dataSubstrateSampleRows(rows, rows.length);
+    },
+    queryDataset: async (datasetId = "", request = {}, layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+      const source = dataSourceById(layoutKey, profile, datasetId);
+      const adapter = source ? dataSourceAdapters.get(source.kind) : null;
+      if (!source || !adapter) return { schema: { fields: [] }, rows: [], total: 0, error: "Dataset not found." };
+      return adapter.query(source, { ...request, layoutKey, profile });
+    },
+    originDatasetsForConfig: (config = {}, layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) =>
+      datasetOriginExposedDatasets(config, layoutKey, profile),
+    portsForOrigin: (widget, layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+      const node = typeof widget === "string" ? document.querySelector(widget) : widget;
+      return datasetOriginPortsForElement(node, layoutKey, profile);
+    },
+    registerDerivedDataset: (layoutKey = "builder", definition = {}, profile = getActivePanelProfile(layoutKey)) => {
+      const sourceId = String(definition.sourceId || definition.baseSourceId || "").trim();
+      const id = String(definition.id || `derived-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`).trim();
+      if (!id || !sourceId) return null;
+      const source = normalizeDataSource({
+        id,
+        name: definition.name || definition.label || "Derived Dataset",
+        kind: "derived",
+        config: {
+          sourceId,
+          transform: definition.transform || {},
+          semanticMapping: definition.semanticMapping || {},
+          relationships: Array.isArray(definition.relationships) ? definition.relationships : [],
+          metadata: {
+            ...(definition.metadata || {}),
+            originType: "derived",
+            freshness: definition.freshness || new Date().toISOString(),
+          },
+          lineage: {
+            kind: "derived",
+            sourceId,
+            transform: definition.transform || {},
+            createdBy: definition.createdBy || "workspace-runtime",
+          },
+        },
+      });
+      const sources = loadDataSources(layoutKey, profile).filter((entry) => entry.id !== id);
+      saveDataSources(layoutKey, profile, [...sources, source]);
+      invalidateManagedWidgetQueriesForLayout(layoutKey);
+      refreshResolvedContextDebug(layoutKey, profile);
+      return inspectDataSubstrateSource(source, layoutKey, profile);
+    },
+    datasetLineage: (datasetId = "", layoutKey = "builder", profile = getActivePanelProfile(layoutKey), stack = []) => {
+      const source = dataSourceById(layoutKey, profile, datasetId);
+      if (!source || stack.includes(datasetId)) return null;
+      const inspected = inspectDataSubstrateSource(source, layoutKey, profile);
+      const parentId = inspected.lineage?.sourceId || "";
+      return {
+        dataset: inspected,
+        parent: parentId ? window.dashboardDataSubstrateRuntime.datasetLineage(parentId, layoutKey, profile, [...stack, datasetId]) : null,
+      };
+    },
   };
   const normalizeWorkspaceLink = (link = {}) => {
     const legacySource = String(link.sourceId || link.sourceObjectId || "");
@@ -3549,6 +3813,8 @@ document.addEventListener("DOMContentLoaded", () => {
     portId: handle?.dataset?.wirePortId || graphPortId(handle?.dataset?.wireObjectId || "", handle?.dataset?.wirePortRole || WORKSPACE_PORT_ROLES.output),
     role: normalizePortRole(handle?.dataset?.wirePortRole || WORKSPACE_PORT_ROLES.output),
     name: handle?.dataset?.wirePortName || "main",
+    signalTypes: String(handle?.dataset?.wireSignalTypes || WORKSPACE_SIGNAL_TYPES.data).split(",").map((entry) => entry.trim()).filter(Boolean),
+    metadata: parseJsonRecord(handle?.dataset?.wirePortMetadata, {}) || {},
   });
   const normalizedWorkspaceWireConnection = (sourcePort = {}, targetPort = {}) => {
     const source = normalizePortRef(sourcePort, sourcePort.role || WORKSPACE_PORT_ROLES.output, sourcePort.objectId || "");
@@ -4021,25 +4287,40 @@ document.addEventListener("DOMContentLoaded", () => {
     connectableWorkspaceElements(layoutKey).forEach((item) => {
       const objectId = graphIdForWorkspaceElement(item);
       if (!objectId) return;
-      [WORKSPACE_PORT_ROLES.output, WORKSPACE_PORT_ROLES.input].forEach((role) => {
+      const ports = graphPortsForObject(layoutKey, objectId);
+      const portsByRole = ports.reduce((groups, port) => {
+        const role = normalizePortRole(port.role);
+        groups[role] = groups[role] || [];
+        groups[role].push(port);
+        return groups;
+      }, {});
+      ports.forEach((port) => {
+        const role = normalizePortRole(port.role);
         const point = nodulePointForElement(item, role);
         if (!point) return;
         if (point.rect.bottom < -40 || point.rect.top > window.innerHeight + 40) return;
+        const rolePorts = portsByRole[role] || [port];
+        const roleIndex = rolePorts.indexOf(port);
+        const offsetY = rolePorts.length > 1
+          ? point.rect.top + (point.rect.height * ((roleIndex + 1) / (rolePorts.length + 1)))
+          : point.y;
         const handle = document.createElement("button");
         handle.type = "button";
         handle.className = `workspace-wire-nodule workspace-wire-nodule-${role}`;
         handle.dataset.wireObjectId = objectId;
         handle.dataset.wireObjectType = workspaceObjectType(item);
-        handle.dataset.wirePortId = graphPortId(objectId, role);
+        handle.dataset.wirePortId = port.portId || graphPortId(objectId, role, port.name || "main");
         handle.dataset.wirePortRole = role;
         handle.dataset.wirePortSide = WORKSPACE_PORT_SIDES[role];
-        handle.dataset.wirePortName = "main";
+        handle.dataset.wirePortName = port.name || "main";
+        handle.dataset.wireSignalTypes = (port.signalTypes || [WORKSPACE_SIGNAL_TYPES.data]).join(",");
+        handle.dataset.wirePortMetadata = JSON.stringify(port.metadata || {});
         handle.dataset.wireX = String(point.x);
-        handle.dataset.wireY = String(point.y);
-        handle.setAttribute("aria-label", `${role === WORKSPACE_PORT_ROLES.output ? "Output" : "Input"} port for ${objectId}`);
-        handle.title = role === WORKSPACE_PORT_ROLES.output ? "Output port" : "Input port";
+        handle.dataset.wireY = String(offsetY);
+        handle.setAttribute("aria-label", `${role === WORKSPACE_PORT_ROLES.output ? "Output" : "Input"} port ${port.name || "main"} for ${objectId}`);
+        handle.title = role === WORKSPACE_PORT_ROLES.output ? `Output port: ${port.name || "main"}` : `Input port: ${port.name || "main"}`;
         handle.style.left = `${Math.round(point.x)}px`;
-        handle.style.top = `${Math.round(point.y)}px`;
+        handle.style.top = `${Math.round(offsetY)}px`;
         handle.addEventListener("pointerdown", (event) => startWorkspaceWireDrag(event, handle, layoutKey));
         handle.addEventListener("click", isolateWireHandleClick);
         handle.addEventListener("dblclick", (event) => deleteWireConnectionsFromHandle(event, handle));
@@ -13465,6 +13746,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const element = workspaceElementByGraphId(id, layoutKey);
     const objectType = element ? workspaceObjectType(element) : "external";
     if (!element) return [];
+    if ((element.dataset.widgetDefinition || element.dataset.widgetRuntimeType) === "dataset-origin") {
+      return datasetOriginPortsForElement(element, layoutKey, profile);
+    }
     return [WORKSPACE_PORT_ROLES.input, WORKSPACE_PORT_ROLES.output].map((role) => normalizePortRef({
       objectId: id,
       role,
@@ -13475,6 +13759,60 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   const allGraphPorts = (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
     return connectableWorkspaceElements(layoutKey).flatMap((item) => graphPortsForObject(layoutKey, graphIdForWorkspaceElement(item), profile));
+  };
+  const lineageForWorkspaceObject = (layoutKey = "builder", objectId = "", profile = getActivePanelProfile(layoutKey), stack = []) => {
+    const id = String(objectId || "");
+    if (!id) return null;
+    if (stack.includes(id)) return { objectId: id, cycle: true, upstream: [], originStreams: [], derivedStreams: [] };
+    const element = workspaceElementByGraphId(id, layoutKey);
+    const definition = element?.dataset?.widgetDefinition || element?.dataset?.widgetRuntimeType || workspaceObjectType(element) || "unknown";
+    const graph = loadWorkspaceLogicGraph(layoutKey, profile);
+    const inbound = (graph.links || []).filter((link) => link.target?.objectId === id && link.enabled !== false);
+    const transformConfig = definition === "data-filter" ? widgetConfigFromElement(element) : null;
+    const ownOriginStreams = definition === "dataset-origin"
+      ? datasetOriginPortsForElement(element, layoutKey, profile).map((port) => {
+        const datasetId = port.metadata?.datasetId || "";
+        return {
+          port,
+          datasetId,
+          lineage: datasetId ? window.dashboardDataSubstrateRuntime?.datasetLineage?.(datasetId, layoutKey, profile) : null,
+        };
+      })
+      : [];
+    const upstream = inbound.map((link) => {
+      const sourceId = link.source?.objectId || "";
+      const sourceElement = workspaceElementByGraphId(sourceId, layoutKey);
+      const sourceDefinition = sourceElement?.dataset?.widgetDefinition || sourceElement?.dataset?.widgetRuntimeType || workspaceObjectType(sourceElement) || "unknown";
+      const sourceLineage = lineageForWorkspaceObject(layoutKey, sourceId, profile, [...stack, id]);
+      const sourcePort = sourceDefinition === "dataset-origin"
+        ? datasetOriginPortsForElement(sourceElement, layoutKey, profile).find((port) => port.portId === link.source?.portId || port.name === link.source?.name) || null
+        : null;
+      return {
+        linkId: link.id,
+        sourceObjectId: sourceId,
+        sourceDefinition,
+        sourcePort,
+        sourceLineage,
+      };
+    });
+    const originStreams = [
+      ...ownOriginStreams,
+      ...upstream.flatMap((entry) => entry.sourceLineage?.originStreams || []),
+    ];
+    const derivedStreams = originStreams
+      .filter((entry) => entry?.lineage?.dataset?.originType === "derived" || entry?.lineage?.dataset?.lineage)
+      .map((entry) => entry.lineage?.dataset)
+      .filter(Boolean);
+    return {
+      objectId: id,
+      definition,
+      transformConfig,
+      inboundLinkIds: inbound.map((link) => link.id),
+      upstream,
+      originStreams,
+      derivedStreams,
+      traceable: originStreams.length > 0,
+    };
   };
   const normalizedOperatorCondition = (operator) => ({
     id: operator.id,
@@ -13495,6 +13833,8 @@ document.addEventListener("DOMContentLoaded", () => {
     ports: (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => allGraphPorts(layoutKey, profile),
     portsForObject: (layoutKey = "builder", objectId = "", profile = getActivePanelProfile(layoutKey)) =>
       graphPortsForObject(layoutKey, objectId, profile),
+    lineageForObject: (layoutKey = "builder", objectId = "", profile = getActivePanelProfile(layoutKey)) =>
+      lineageForWorkspaceObject(layoutKey, objectId, profile),
     links: (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) =>
       loadWorkspaceLogicGraph(layoutKey, profile).links,
     dataflowLinks: (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) =>
@@ -14097,6 +14437,9 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   const createDemoPresetWidget = (entry, presetId, index, layoutKey = "builder") => {
     const runtimeDefinition = widgetDefinitionFor(entry.type || "stat");
+    const widgetColor = runtimeDefinition.type === "dataset-origin"
+      ? "#64748b"
+      : panelThemePresets[index % panelThemePresets.length];
     const config = {
       ...(typeof runtimeDefinition.getDefaultConfig === "function" ? runtimeDefinition.getDefaultConfig() : {}),
       ...(entry.config || {}),
@@ -14105,6 +14448,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const widget = createCustomWidget({
       key: `${presetId}-widget-${index + 1}`,
       title: config.title,
+      color: widgetColor,
       span: entry.cols || runtimeDefinition.defaultSize?.cols || 1,
       rowSpan: entry.rows || runtimeDefinition.defaultSize?.rows || 1,
       gridCol: entry.col || 1,
@@ -14121,7 +14465,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     widget.dataset.demoPresetObject = "true";
     widget.dataset.demoLayoutKey = layoutKey;
-    ensureWidgetTools(widget, panelThemePresets[index % panelThemePresets.length]);
+    ensureWidgetTools(widget, widgetColor);
     applyWidgetSpan(widget, entry.cols || runtimeDefinition.defaultSize?.cols || 1);
     applyWidgetGridPosition(widget, entry.col || 1, entry.row || 1, entry.rows || runtimeDefinition.defaultSize?.rows || 1);
     return widget;
@@ -14220,7 +14564,9 @@ document.addEventListener("DOMContentLoaded", () => {
     "inspectSchema",
     "inspectWidgetRegistry",
     "createDataStore",
+    "createDerivedDataset",
     "createWidget",
+    "createDatasetOrigin",
     "createPanel",
     "createDivider",
     "createFilter",
@@ -14259,6 +14605,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (action.type === "createChart") return "chart";
     if (action.type === "createTable") return "table";
     if (action.type === "createMap") return "map";
+    if (action.type === "createDatasetOrigin") return "dataset-origin";
     if (action.type === "createFilter") return "filter";
     if (action.type === "createNote") return "text";
     if (action.type === "createEquationFilter") return "data-filter";
@@ -14331,11 +14678,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (action.type === "createStat") config.label = config.label || action.title || config.title;
     if (action.type === "createTable") config.columns = visibleFieldsForAiWidget(config, action.columns || []);
     const colorIndex = targetLayout.querySelectorAll(":scope > .widget-card").length;
+    const widgetColor = runtimeDefinition.type === "dataset-origin"
+      ? "#64748b"
+      : panelThemePresets[colorIndex % panelThemePresets.length];
     const definition = {
       key: action.id || action.key || nextAiObjectId("ai-widget"),
       title: config.title || runtimeDefinition.displayName || "Widget",
       value: config.value,
-      color: action.color || panelThemePresets[colorIndex % panelThemePresets.length],
+      color: action.color || widgetColor,
       span: Number(action.cols) || Number(action.span) || runtimeDefinition.defaultSize?.cols || 1,
       rowSpan: Number(action.rows) || Number(action.rowSpan) || runtimeDefinition.defaultSize?.rows || 1,
       gridCol: Number(action.col) || Number(action.x) || 1,
@@ -14441,39 +14791,27 @@ document.addEventListener("DOMContentLoaded", () => {
     }, profile, { history: options.history !== false, source: "ai-operator" });
     return rule ? { ok: true, id: rule.id, type: "applyConditionalStyle", rule } : { ok: false, error: "Style rule was rejected.", action };
   };
-  const inspectDatasetsForAction = async (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
-    const sources = loadDataSources(layoutKey, profile);
-    const inspections = await Promise.all(sources.map(async (source) => {
-      const adapter = dataSourceAdapters.get(source.kind);
-      const schema = adapter ? await adapter.introspect(source) : inferDataSchema(sourceRows(source));
-      const rows = sourceRows(source);
-      const missing = (schema.fields || []).filter((field) => rows.some((row) => row?.[field.name] == null)).map((field) => field.name);
-      const numericFields = (schema.fields || []).filter((field) => field.type === "number").map((field) => field.name);
-      const categoricalFields = (schema.fields || []).filter((field) => field.type === "string").map((field) => field.name);
-      const timeFields = (schema.fields || []).filter((field) => field.type === "date" || /date|time|at$/i.test(field.name)).map((field) => field.name);
-      const geospatialFields = (schema.fields || []).filter((field) => /lat|lon|lng|location|geo/i.test(field.name)).map((field) => field.name);
-      return {
-        id: source.id,
-        name: source.name,
-        kind: source.kind,
-        rowCount: rows.length,
-        fields: schema.fields || [],
-        semanticMapping: source.config?.semanticMapping || {},
-        numericFields,
-        categoricalFields,
-        timeFields,
-        geospatialFields,
-        qualityWarnings: [
-          ...(missing.length ? [`Missing values in ${missing.slice(0, 5).join(", ")}`] : []),
-          ...(rows.length === 0 ? ["Dataset is empty"] : []),
-        ],
-        sampleRows: rows.slice(0, 3),
-      };
-    }));
-    return inspections;
+  const createDerivedDatasetFromAction = (action = {}, options = {}) => {
+    const layoutKey = options.layoutKey || action.layoutKey || "builder";
+    const profile = options.profile || getActivePanelProfile(layoutKey);
+    const derived = window.dashboardDataSubstrateRuntime?.registerDerivedDataset?.(layoutKey, {
+      id: action.id || action.datasetId,
+      name: action.name || action.title || "Derived Dataset",
+      sourceId: action.sourceId || action.baseSourceId,
+      transform: action.transform || action.config?.transform || {},
+      semanticMapping: action.semanticMapping || action.config?.semanticMapping || {},
+      metadata: {
+        ...(action.metadata || {}),
+        planId: options.planId || action.planId || "",
+      },
+      createdBy: action.createdBy || "ai-operator",
+    }, profile);
+    return derived ? { ok: true, id: derived.id, type: "createDerivedDataset", dataset: derived } : { ok: false, error: "Derived dataset could not be registered.", action };
   };
+  const inspectDatasetsForAction = async (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) =>
+    inspectDataSubstrate(layoutKey, profile);
   const AI_METADATA_ACTION_TYPES = new Set(["inspectDatasets", "inspectSchema", "inspectWidgetRegistry", "createScenario", "createCalculatedField", "explainCalculation", "summarizeWorkspace", "explainWorkspace", "arrangeObjects", "validateWorkspaceAnswer"]);
-  const AI_VISUAL_WIDGET_ACTION_TYPES = new Set(["createWidget", "createStat", "createChart", "createTable", "createMap", "createFilter", "createNote", "createEquationFilter", "createLogicGate", "createBoolean", "createTypeConverter"]);
+  const AI_VISUAL_WIDGET_ACTION_TYPES = new Set(["createWidget", "createDatasetOrigin", "createStat", "createChart", "createTable", "createMap", "createFilter", "createNote", "createEquationFilter", "createLogicGate", "createBoolean", "createTypeConverter"]);
   const elementVisiblyRendered = (node) => {
     if (!node || node.hidden || !node.isConnected) return false;
     const style = getComputedStyle(node);
@@ -14502,8 +14840,10 @@ document.addEventListener("DOMContentLoaded", () => {
       actionCount: Array.isArray(plan.steps) ? plan.steps.length : 0,
       visualWidgetIds: [],
       backendWidgetIds: [],
+      originWidgetIds: [],
       dataflowLinkIds: [],
       formulaFields: [],
+      lineageByWidget: {},
       capabilityGaps: plan.capabilityGaps || [],
     };
     const addError = (code, message, detail = {}) => errors.push({ code, message, ...detail });
@@ -14527,8 +14867,38 @@ document.addEventListener("DOMContentLoaded", () => {
     const panels = [...document.querySelectorAll(`.db-panel[data-ai-plan-id="${CSS.escape(String(plan.id || ""))}"]`)];
     const visualWidgets = widgets.filter((widget) => widget.dataset.widgetLayer !== "backend");
     const backendWidgets = widgets.filter((widget) => widget.dataset.widgetLayer === "backend" || widget.dataset.engineerOnly === "true");
+    const originWidgets = backendWidgets.filter((widget) => widget.dataset.widgetDefinition === "dataset-origin");
     proof.visualWidgetIds = visualWidgets.map((widget) => widget.dataset.widgetKey || "");
     proof.backendWidgetIds = backendWidgets.map((widget) => widget.dataset.widgetKey || "");
+    proof.originWidgetIds = originWidgets.map((widget) => widget.dataset.widgetKey || "");
+    const links = window.dashboardRelationshipRuntime?.dataflowLinks?.(layoutKey, profile) || [];
+    const originIds = new Set(originWidgets.map((widget) => widget.dataset.widgetKey || "").filter(Boolean));
+    const aiWidgetIds = new Set(widgets.map((widget) => widget.dataset.widgetKey || "").filter(Boolean));
+    const originProofLinks = links.filter((link) => originIds.has(link.source?.objectId) && aiWidgetIds.has(link.target?.objectId));
+    proof.dataflowLinkIds = originProofLinks.map((link) => link.id);
+    if (plan.availableData && visualWidgets.length && !originWidgets.length) {
+      addError("ai-missing-dataset-origin", "AI-created data-backed workspaces must expose substrate access through a Dataset Origin node.");
+    }
+    const traceableVisualTypes = new Set(["stat", "chart", "table", "map"]);
+    if (plan.availableData) {
+      visualWidgets
+        .filter((widget) => traceableVisualTypes.has(widget.dataset.widgetDefinition || widget.dataset.widgetRuntimeType || ""))
+        .forEach((widget) => {
+          const lineage = lineageForWorkspaceObject(layoutKey, widget.dataset.widgetKey || "", profile);
+          proof.lineageByWidget[widget.dataset.widgetKey || ""] = {
+            traceable: Boolean(lineage?.traceable),
+            inboundLinkIds: lineage?.inboundLinkIds || [],
+            originDatasetIds: (lineage?.originStreams || []).map((entry) => entry?.datasetId).filter(Boolean),
+            derivedDatasetIds: (lineage?.derivedStreams || []).map((entry) => entry?.id).filter(Boolean),
+          };
+          if (!lineage?.traceable) {
+            addError("ai-visual-lineage-missing", "AI-created visual output is not traceable back to a Dataset Origin.", {
+              id: widget.dataset.widgetKey || "",
+              definition: widget.dataset.widgetDefinition || "",
+            });
+          }
+        });
+    }
     if (!widgets.length && plan.status !== "blocked") addError("ai-no-created-widgets", "AI plan did not create inspectable workspace widgets.");
     widgets.forEach((widget) => {
       const definition = widget.dataset.widgetDefinition || widget.dataset.widgetRuntimeType || "";
@@ -14571,11 +14941,13 @@ document.addEventListener("DOMContentLoaded", () => {
           });
         });
       }
-      const links = window.dashboardRelationshipRuntime?.dataflowLinks?.(layoutKey, profile) || [];
+      if (!originWidgets.length) {
+        addError("ai-missing-dataset-origin", "AI-created analytical workspace must expose substrate access through a Dataset Origin node.");
+      }
       const backendIds = new Set(backendFormulaWidgets.map((widget) => widget.dataset.widgetKey));
       const formulaVisualIds = new Set(visualFormulaWidgets.map((widget) => widget.dataset.widgetKey));
       const proofLinks = links.filter((link) => backendIds.has(link.source?.objectId) && formulaVisualIds.has(link.target?.objectId));
-      proof.dataflowLinkIds = proofLinks.map((link) => link.id);
+      proof.dataflowLinkIds = [...new Set([...proof.dataflowLinkIds, ...proofLinks.map((link) => link.id)])];
       formulaVisualIds.forEach((targetId) => {
         if (!proofLinks.some((link) => link.target?.objectId === targetId)) {
           addError("ai-missing-dataflow-proof", "Calculated visual output is not wired to its Engineer Mode formula block.", { targetId });
@@ -14636,13 +15008,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (type === "inspectDatasets" || type === "inspectSchema") return { ok: true, type, datasets: await inspectDatasetsForAction(layoutKey, profile) };
     if (type === "inspectWidgetRegistry") return { ok: true, type, widgets: window.dashboardWidgetRuntime?.listWidgetDefinitions?.() || [] };
     if (type === "createPanel") return createWorkspacePanelFromAction(action, options);
-    if (type === "createWidget" || type === "createStat" || type === "createChart" || type === "createTable" || type === "createMap" || type === "createFilter" || type === "createNote" || type === "createEquationFilter" || type === "createLogicGate" || type === "createBoolean" || type === "createTypeConverter") {
+    if (type === "createWidget" || type === "createDatasetOrigin" || type === "createStat" || type === "createChart" || type === "createTable" || type === "createMap" || type === "createFilter" || type === "createNote" || type === "createEquationFilter" || type === "createLogicGate" || type === "createBoolean" || type === "createTypeConverter") {
       return createWorkspaceWidgetFromAction(action, options);
     }
     if (type === "createDivider") return createWorkspacePanelFromAction({ ...action, dashboardObjectKind: "divider", title: action.title || "AI Divider" }, options);
     if (type === "moveObject") return moveWorkspaceObjectFromAction(action, options);
     if (type === "resizeObject") return resizeWorkspaceObjectFromAction(action, options);
     if (type === "createDataflowLink") return createDataflowLinkFromAction(action, options);
+    if (type === "createDerivedDataset") return createDerivedDatasetFromAction(action, options);
     if (type === "applyConditionalStyle" || type === "createConditionalStyle") return applyConditionalStyleFromAction(action, options);
     if (type === "validateWorkspaceAnswer") return { ok: true, type, validation: validateAiWorkspaceAnswer(action.plan || {}, action.execution || {}, { layoutKey, profile }) };
     if (type === "createDataStore") return { ok: false, type, error: "Data store creation is not implemented as a workspace primitive yet.", action };
@@ -15080,6 +15453,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const objectAddItems = [
     { category: "data", displayName: "Stat", actionClass: "widget-add-action", dataset: { widgetKind: "stat" } },
     { category: "data", displayName: "Table", actionClass: "widget-add-action", dataset: { widgetKind: "table" } },
+    { category: "data", subcategory: "Dataset Origin", displayName: "Dataset Origin", actionClass: "widget-add-action", engineerOnly: true, dataset: { widgetKind: "dataset-origin" } },
     { category: "data", subcategory: "Data Filter", displayName: "AND", actionClass: "widget-add-action", engineerOnly: true, dataset: { widgetKind: "data-filter", widgetConfig: JSON.stringify({ title: "Data Filter", operator: "AND" }) } },
     { category: "data", subcategory: "Data Filter", displayName: "OR", actionClass: "widget-add-action", engineerOnly: true, dataset: { widgetKind: "data-filter", widgetConfig: JSON.stringify({ title: "Data Filter", operator: "OR" }) } },
     { category: "data", subcategory: "Data Filter", displayName: "NOT", actionClass: "widget-add-action", engineerOnly: true, dataset: { widgetKind: "data-filter", widgetConfig: JSON.stringify({ title: "Data Filter", operator: "NOT" }) } },
@@ -15481,12 +15855,15 @@ document.addEventListener("DOMContentLoaded", () => {
           .filter(Boolean)
           .map((color) => color.toLowerCase())
       );
-      const customCount = layout.querySelectorAll(':scope > .widget-card[data-custom-widget="true"]').length;
-      const nextColor =
-        panelThemePresets.find((color) => !used.has(color.toLowerCase())) ||
-        panelThemePresets[customCount % panelThemePresets.length];
       const key = `widget-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
       const runtimeDefinition = widgetDefinitionFor(kind);
+      const customCount = layout.querySelectorAll(':scope > .widget-card[data-custom-widget="true"]').length;
+      const nextColor = runtimeDefinition.type === "dataset-origin"
+        ? "#64748b"
+        : (
+          panelThemePresets.find((color) => !used.has(color.toLowerCase())) ||
+          panelThemePresets[customCount % panelThemePresets.length]
+        );
       const runtimeDefaults = typeof runtimeDefinition.getDefaultConfig === "function" ? runtimeDefinition.getDefaultConfig() : {};
       const runtimeConfigOverrides = parseJsonRecord(button.dataset.widgetConfig, {});
       const objectName = button.dataset.objectDisplayName || (kind === "graph" ? "Graph" : (runtimeDefinition.displayName || "Widget"));

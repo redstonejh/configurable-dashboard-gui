@@ -12,6 +12,7 @@ def test_workspace_taxonomy_and_layout_domains_are_documented():
         "Workspace Object Taxonomy",
         "Layout Domains",
         "Widget Runtime Contract",
+        "Universal Data Substrate",
         "Context Inheritance Backbone",
         "Save/Load And History Ownership",
     ):
@@ -94,6 +95,7 @@ def test_widget_runtime_registry_contract_covers_first_class_widgets():
         'type: "stat"',
         'type: "timeframe"',
         'type: "search"',
+        'type: "dataset-origin"',
         'type: "table"',
         'type: "chart"',
     ):

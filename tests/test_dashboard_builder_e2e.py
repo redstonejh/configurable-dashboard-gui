@@ -859,6 +859,7 @@ def test_panels_are_generic_containers_not_table_panel_types(page: Page, app_ser
     expect(page.locator('.widget-add-action[data-widget-kind="activity-feed"]')).to_have_text("Activity Feed")
     expect(page.locator('.widget-add-action[data-widget-kind="ai-assistant"]')).to_have_count(0)
     expect(page.locator('.widget-add-action[data-widget-kind="context-inspector"]')).to_have_count(0)
+    expect(page.locator('.widget-add-action[data-widget-kind="dataset-origin"]')).to_have_count(0)
     expect(page.locator('.widget-add-action[data-widget-kind="anchor"]')).to_have_count(1)
     expect(page.locator('.divider-add-action[data-divider-kind="context-divider"]')).to_have_count(1)
 
@@ -931,6 +932,7 @@ def test_add_object_menu_uses_categorized_right_expanding_submenus(page: Page, a
     data.locator(".object-add-category-trigger").hover()
     expect(data.locator('.widget-add-action[data-widget-kind="stat"]')).to_be_visible()
     expect(data.locator('.widget-add-action[data-widget-kind="table"]')).to_be_visible()
+    expect(data.locator('.object-add-subcategory[data-object-add-subcategory="Dataset Origin"]')).to_have_count(0)
     expect(data.locator('.object-add-subcategory[data-object-add-subcategory="Data Filter"]')).to_have_count(0)
     expect(menu.locator('.widget-add-action[data-widget-kind="stat-filter"]')).to_have_count(0)
     expect(menu.locator('.widget-add-action[data-widget-kind="logic-gate"]')).to_have_count(0)
@@ -939,6 +941,11 @@ def test_add_object_menu_uses_categorized_right_expanding_submenus(page: Page, a
     page.locator(".panel-add-button").click()
     data = page.locator('.object-add-category[data-object-menu-category="data"]')
     data.locator(".object-add-category-trigger").hover()
+    dataset_origin = data.locator('.object-add-subcategory[data-object-add-subcategory="Dataset Origin"]')
+    expect(dataset_origin.locator(".object-add-subcategory-trigger")).to_be_visible()
+    dataset_origin.locator(".object-add-subcategory-trigger").hover()
+    expect(dataset_origin.locator('.widget-add-action[data-widget-kind="dataset-origin"]')).to_have_text("Dataset Origin")
+    expect(dataset_origin.locator('.widget-add-action[data-widget-kind="dataset-origin"]')).to_have_attribute("data-widget-layer", "backend")
     data_filter = data.locator('.object-add-subcategory[data-object-add-subcategory="Data Filter"]')
     expect(data_filter.locator(".object-add-subcategory-trigger")).to_be_visible()
     data_filter.locator(".object-add-subcategory-trigger").hover()
@@ -1697,17 +1704,19 @@ def test_widget_runtime_registry_drives_real_widget_contracts(page: Page, app_se
         })
         """
     )
-    for widget_type in ("stat", "timeframe", "search", "filter", "text", "region-summary", "image", "video", "document", "activity-feed", "ai-assistant", "context-inspector", "data-filter", "shift", "table", "chart", "map"):
+    for widget_type in ("stat", "timeframe", "search", "filter", "text", "region-summary", "image", "video", "document", "activity-feed", "ai-assistant", "context-inspector", "dataset-origin", "data-filter", "shift", "table", "chart", "map"):
         assert widget_type in runtime["types"]
     assert "stat-filter" not in runtime["types"]
     assert "logic-gate" not in runtime["types"]
     assert runtime["layers"]["data-filter"] == "backend"
+    assert runtime["layers"]["dataset-origin"] == "backend"
     assert runtime["layers"]["context-inspector"] == "backend"
     assert runtime["layers"]["stat"] == "presentation"
     assert runtime["layers"]["chart"] == "presentation"
     assert runtime["layers"]["table"] == "presentation"
     assert runtime["layers"]["timeframe"] == "presentation"
     assert runtime["engineerOnly"]["data-filter"] is True
+    assert runtime["engineerOnly"]["dataset-origin"] is True
     assert runtime["engineerOnly"]["context-inspector"] is True
     assert runtime["timeframe"] == "timeframe"
     assert runtime["timeframeRuntimeType"] == "timeframe"
@@ -1971,7 +1980,7 @@ def test_every_add_menu_widget_entry_creates_registry_backed_runtime_widget(page
                   hasDefaults: typeof definition.getDefaultConfig === "function",
                 },
                 hasRenderedSurface: Boolean(node.querySelector(
-                  ".stat-val, .stat-lbl, input, textarea, select, svg, table, iframe, video, img, .media-widget-state, .text-widget-content, .meta-widget, .data-filter-widget, .shift-widget"
+                  ".stat-val, .stat-lbl, input, textarea, select, svg, table, iframe, video, img, .media-widget-state, .text-widget-content, .meta-widget, .dataset-origin-widget, .data-filter-widget, .shift-widget"
                 )),
                 text: node.textContent.trim().replace(/\\s+/g, " "),
               };
@@ -2003,6 +2012,9 @@ def test_every_add_menu_widget_entry_creates_registry_backed_runtime_widget(page
             assert state["config"]["chartType"] == entry["chartType"]
         if entry["widgetKind"] == "data-filter":
             assert state["definition"] == "data-filter"
+            assert state["widgetLayer"] == "backend"
+        if entry["widgetKind"] == "dataset-origin":
+            assert state["definition"] == "dataset-origin"
             assert state["widgetLayer"] == "backend"
 
     assert len(created_widgets) == len(set(created_widgets))
@@ -2385,11 +2397,14 @@ def test_ai_operator_plans_executes_and_persists_visual_dashboard(page: Page, ap
     assert plan["intent"] == "executive-summary"
     assert plan["status"] == "ready"
     assert "revenue" in plan["requiredData"] or "value" in plan["requiredData"]
+    assert any(step["type"] == "createDatasetOrigin" for step in plan["steps"])
     assert any(step["type"] == "createPanel" for step in plan["steps"])
     assert any(step["type"] == "createChart" for step in plan["steps"])
     assert any(step["type"] == "createTable" for step in plan["steps"])
     assert result["execution"]["ok"] is True
     assert result["execution"]["validation"]["ok"] is True
+    assert result["execution"]["validation"]["proof"]["originWidgetIds"]
+    assert result["execution"]["validation"]["proof"]["dataflowLinkIds"]
     assert result["execution"]["validation"]["proof"]["visualWidgetIds"]
 
     page.wait_for_function(
@@ -2476,12 +2491,16 @@ def test_ai_operator_what_if_uses_derived_fields_and_engineer_transparency(page:
           const stat = widgets.find((node) => node.dataset.widgetDefinition === "stat");
           const table = widgets.find((node) => node.dataset.widgetDefinition === "table");
           const backend = widgets.find((node) => node.dataset.widgetDefinition === "data-filter");
+          const origin = widgets.find((node) => node.dataset.widgetDefinition === "dataset-origin");
           return {
             statConfig: JSON.parse(stat?.dataset.widgetConfig || "{}"),
             tableConfig: JSON.parse(table?.dataset.widgetConfig || "{}"),
             tableText: table?.textContent || "",
             backendLayer: backend?.dataset.widgetLayer || "",
             backendHiddenNormal: backend ? (backend.hidden || getComputedStyle(backend).display === "none" || backend.offsetParent === null) : false,
+            originLayer: origin?.dataset.widgetLayer || "",
+            originHiddenNormal: origin ? (origin.hidden || getComputedStyle(origin).display === "none" || origin.offsetParent === null) : false,
+            originText: origin?.textContent || "",
             links: window.dashboardRelationshipRuntime.dataflowLinks("builder").filter((link) => link.id.startsWith(planId)).map((link) => ({
               id: link.id,
               sourceRole: link.source.role,
@@ -2501,8 +2520,12 @@ def test_ai_operator_what_if_uses_derived_fields_and_engineer_transparency(page:
     assert state["sourceRowsPersisted"] is False
     assert state["backendLayer"] == "backend"
     assert state["backendHiddenNormal"] is True
+    assert state["originLayer"] == "backend"
+    assert state["originHiddenNormal"] is True
+    assert "Customer" in state["originText"] or "rows" in state["originText"]
     assert len(state["links"]) >= 3
     assert all(link["sourceRole"] == "output" and link["targetRole"] == "input" for link in state["links"])
+    assert any(link["sourceObjectId"] == f'{plan["id"]}-origin' for link in state["links"])
     assert {link["targetObjectId"] for link in state["links"]}.issuperset({
         f'{plan["id"]}-savings',
         f'{plan["id"]}-scenario-chart',
@@ -2515,14 +2538,18 @@ def test_ai_operator_what_if_uses_derived_fields_and_engineer_transparency(page:
     page.locator(".engineer-mode-button").click()
     expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
     backend = page.locator(f'.widget-card[data-ai-plan-id="{plan["id"]}"][data-widget-definition="data-filter"]')
+    origin = page.locator(f'.widget-card[data-ai-plan-id="{plan["id"]}"][data-widget-definition="dataset-origin"]')
     expect(backend).to_be_visible()
+    expect(origin).to_be_visible()
     expect(backend).to_contain_text("AND")
     engineer_proof = page.evaluate(
         """
         planId => {
           const backend = document.querySelector(`.widget-card[data-ai-plan-id="${planId}"][data-widget-definition="data-filter"]`);
+          const origin = document.querySelector(`.widget-card[data-ai-plan-id="${planId}"][data-widget-definition="dataset-origin"]`);
           return {
             ports: window.dashboardRelationshipRuntime.portsForObject("builder", backend.dataset.widgetKey).map((port) => port.role).sort(),
+            originPorts: window.dashboardRelationshipRuntime.portsForObject("builder", origin.dataset.widgetKey).map((port) => port.role).sort(),
             links: window.dashboardRelationshipRuntime.dataflowLinks("builder").filter((link) => link.id.startsWith(planId)).length,
           };
         }
@@ -2530,6 +2557,7 @@ def test_ai_operator_what_if_uses_derived_fields_and_engineer_transparency(page:
         plan["id"],
     )
     assert engineer_proof["ports"] == ["input", "output"]
+    assert engineer_proof["originPorts"] == ["output", "output"]
     assert engineer_proof["links"] >= 3
     assert_clean_browser(page)
 
@@ -11104,6 +11132,319 @@ def test_data_filter_widget_registers_configures_persists_and_exposes_dataflow_p
         """,
         arg=key,
     )
+    assert_clean_browser(page)
+
+
+def test_dataset_origin_node_browses_substrate_and_exposes_typed_outputs(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    substrate = page.evaluate(
+        """
+        () => {
+          window.dashboardContextEngine.setDataSources("builder", [
+            {
+              id: "customers",
+              name: "Customers",
+              kind: "manual",
+              config: {
+                metadata: { freshness: "2026-05-26T08:00:00.000Z" },
+                rows: [
+                  { id: "cust-1", name: "Northwind", status: "Active", revenue: 120000, timestamp: "2026-05-24" },
+                  { id: "cust-2", name: "Contoso", status: "Warning", revenue: 76000, timestamp: "2026-05-25" }
+                ]
+              }
+            },
+            {
+              id: "sites",
+              name: "Sites",
+              kind: "manual",
+              config: {
+                rows: [
+                  { id: "site-1", label: "Site One", latitude: 37.62, longitude: -122.48, value: 12, timestamp: "2026-05-25" }
+                ]
+              }
+            }
+          ]);
+          const datasets = window.dashboardDataSubstrateRuntime.inspectDatasets("builder");
+          return {
+            ids: datasets.map((dataset) => dataset.id),
+            customerFields: datasets.find((dataset) => dataset.id === "customers").fields.map((field) => [field.name, field.type]),
+            freshness: datasets.find((dataset) => dataset.id === "customers").freshness,
+          };
+        }
+        """
+    )
+    assert substrate["ids"] == ["customers", "sites"]
+    assert ["revenue", "number"] in substrate["customerFields"]
+    assert substrate["freshness"] == "2026-05-26T08:00:00.000Z"
+
+    expect(page.locator('.widget-add-action[data-widget-kind="dataset-origin"]')).to_have_count(0)
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
+    open_add_category(page, "data", "Dataset Origin").locator('.widget-add-action[data-widget-kind="dataset-origin"]').click()
+    origin = page.locator('.widget-layout > .dataset-origin-widget-card[data-widget-definition="dataset-origin"]').last
+    expect(origin).to_be_visible()
+    expect(origin.locator(".dataset-origin-widget")).to_contain_text("Customers")
+    expect(origin.locator(".dataset-origin-widget")).to_contain_text("Sites")
+    expect(origin.locator(".dataset-origin-widget")).to_contain_text("revenue")
+    expect(origin.locator(".dataset-origin-widget")).to_contain_text("rows")
+
+    origin_state = origin.evaluate(
+        """
+        node => {
+          const ports = window.dashboardRelationshipRuntime.portsForObject("builder", node.dataset.widgetKey);
+          return {
+            key: node.dataset.widgetKey,
+            type: node.dataset.widgetDefinition,
+            layer: node.dataset.widgetLayer,
+            capabilities: JSON.parse(node.dataset.widgetCapabilities || "{}"),
+            settings: JSON.parse(node.dataset.widgetSettingsSchema || "{}").sections.flatMap(section => section.fields.map(field => field.key)),
+            portRoles: ports.map((port) => port.role),
+            portNames: ports.map((port) => port.name).sort(),
+            portMetadata: ports.map((port) => port.metadata),
+          };
+        }
+        """
+    )
+    assert origin_state["type"] == "dataset-origin"
+    assert origin_state["layer"] == "backend"
+    assert origin_state["capabilities"]["substrateGateway"] is True
+    assert {"datasetIds", "originTypes", "exposeAllDatasets", "showSchema", "showSamples"}.issubset(set(origin_state["settings"]))
+    assert origin_state["portRoles"] == ["output", "output"]
+    assert origin_state["portNames"] == ["customers", "sites"]
+    assert any(port["datasetId"] == "customers" and port["fieldCount"] >= 5 for port in origin_state["portMetadata"])
+
+    page.wait_for_function(
+        """
+        key => document.querySelectorAll(`.workspace-wire-nodule[data-wire-object-id="${key}"][data-wire-port-role="output"]`).length === 2
+        """,
+        arg=origin_state["key"],
+    )
+    nodule_state = page.evaluate(
+        """
+        key => [...document.querySelectorAll(`.workspace-wire-nodule[data-wire-object-id="${key}"]`)].map((node) => ({
+          role: node.dataset.wirePortRole,
+          name: node.dataset.wirePortName,
+          metadata: JSON.parse(node.dataset.wirePortMetadata || "{}"),
+        }))
+        """,
+        origin_state["key"],
+    )
+    assert {entry["name"] for entry in nodule_state} == {"customers", "sites"}
+    assert all(entry["role"] == "output" for entry in nodule_state)
+    assert any(entry["metadata"]["streamType"] == "dataset" for entry in nodule_state)
+
+    origin.evaluate(
+        """
+        node => {
+          window.dashboardWidgetSettingsRuntime.applySetting(node, "datasetIds", ["customers"]);
+          window.dashboardEngineerMode.refresh();
+        }
+        """
+    )
+    expect(origin.locator(".dataset-origin-widget")).to_contain_text("Customers")
+    expect(origin.locator(".dataset-origin-widget")).not_to_contain_text("Sites")
+    narrowed_ports = origin.evaluate(
+        """
+        node => window.dashboardRelationshipRuntime.portsForObject("builder", node.dataset.widgetKey).map((port) => ({
+          role: port.role,
+          name: port.name,
+          metadata: port.metadata,
+        }))
+        """
+    )
+    assert len(narrowed_ports) == 1
+    assert narrowed_ports[0]["role"] == "output"
+    assert narrowed_ports[0]["name"] == "customers"
+    assert narrowed_ports[0]["metadata"]["objectType"] == "dataset-origin"
+    assert narrowed_ports[0]["metadata"]["streamType"] == "dataset"
+    assert narrowed_ports[0]["metadata"]["datasetId"] == "customers"
+    assert narrowed_ports[0]["metadata"]["datasetName"] == "Customers"
+    assert narrowed_ports[0]["metadata"]["originType"] == "manual"
+    assert narrowed_ports[0]["metadata"]["sourceKind"] == "manual"
+    assert narrowed_ports[0]["metadata"]["rowCount"] == 2
+    assert narrowed_ports[0]["metadata"]["fieldCount"] == 5
+    assert narrowed_ports[0]["metadata"]["fields"] == [
+        {"name": "id", "type": "string"},
+        {"name": "name", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "revenue", "type": "number"},
+        {"name": "timestamp", "type": "date"},
+    ]
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    reloaded = page.locator(f'.dataset-origin-widget-card[data-widget-key="{origin_state["key"]}"]')
+    expect(reloaded).to_be_hidden()
+    page.locator(".engineer-mode-button").click()
+    expect(reloaded).to_be_visible()
+    expect(reloaded).to_contain_text("Customers")
+    expect(reloaded).not_to_contain_text("Sites")
+    assert reloaded.evaluate("node => window.dashboardRelationshipRuntime.portsForObject('builder', node.dataset.widgetKey).map((port) => port.name)") == ["customers"]
+    assert_clean_browser(page)
+
+
+def test_dataset_origin_supports_origin_types_derived_datasets_and_lineage(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+
+    state = page.evaluate(
+        """
+        async () => {
+          window.dashboardContextEngine.setDataSources("builder", [
+            {
+              id: "customers",
+              name: "Customers",
+              kind: "manual",
+              config: {
+                rows: [
+                  { id: "cust-1", name: "Northwind", status: "Active", revenue: 120000, cost: 70000, timestamp: "2026-05-24" },
+                  { id: "cust-2", name: "Contoso", status: "Warning", revenue: 76000, cost: 69000, timestamp: "2026-05-25" }
+                ],
+                semanticMapping: { labelField: "name", valueField: "revenue", dateField: "timestamp", statusField: "status" }
+              }
+            },
+            {
+              id: "api-tickets",
+              name: "Ticket API Cache",
+              kind: "api",
+              config: {
+                rows: [
+                  { id: "ticket-1", status: "Open", priority: "High", value: 4, timestamp: "2026-05-25" }
+                ]
+              }
+            }
+          ]);
+          const derived = window.dashboardDataSubstrateRuntime.registerDerivedDataset("builder", {
+            id: "customer-margin",
+            name: "Customer Margin",
+            sourceId: "customers",
+            transform: {
+              calculatedFields: [{ name: "margin", expression: "revenue - cost" }],
+              equationFilters: [{ expression: "margin > 10000" }]
+            },
+            createdBy: "test"
+          });
+          await window.dashboardWorkspaceActionRuntime.executeAction({
+            type: "createDatasetOrigin",
+            id: "lineage-origin",
+            title: "Dataset Origin",
+            col: 1,
+            row: 8,
+            cols: 3,
+            rows: 2,
+            config: { title: "Dataset Origin", datasetIds: ["customers", "customer-margin"], exposeAllDatasets: false }
+          });
+          await window.dashboardWorkspaceActionRuntime.executeAction({
+            type: "createEquationFilter",
+            id: "lineage-transform",
+            title: "Margin Transform",
+            col: 4,
+            row: 8,
+            cols: 2,
+            rows: 1,
+            layer: "backend",
+            config: { title: "Margin Transform", operator: "AND", expression: "margin > 10000", calculatedFields: [{ name: "margin", expression: "revenue - cost" }] }
+          });
+          await window.dashboardWorkspaceActionRuntime.executeAction({
+            type: "createTable",
+            id: "lineage-table",
+            title: "Margin Rows",
+            col: 1,
+            row: 10,
+            cols: 4,
+            rows: 2,
+            config: { title: "Margin Rows", columns: ["name", "revenue", "cost", "margin"], calculatedFields: [{ name: "margin", expression: "revenue - cost" }] }
+          });
+          await window.dashboardWorkspaceActionRuntime.executeAction({
+            type: "createDataflowLink",
+            id: "origin-to-transform",
+            source: { objectId: "lineage-origin", role: "output", name: "customers" },
+            target: { objectId: "lineage-transform", role: "input", name: "main" },
+            label: "Customers -> transform"
+          });
+          await window.dashboardWorkspaceActionRuntime.executeAction({
+            type: "createDataflowLink",
+            id: "derived-to-table",
+            source: { objectId: "lineage-origin", role: "output", name: "customer-margin" },
+            target: { objectId: "lineage-table", role: "input", name: "main" },
+            label: "Derived -> table"
+          });
+          await window.dashboardWorkspaceActionRuntime.executeAction({
+            type: "createDataflowLink",
+            id: "transform-to-table",
+            source: { objectId: "lineage-transform", role: "output", name: "main" },
+            target: { objectId: "lineage-table", role: "input", name: "main" },
+            label: "Transform -> table"
+          });
+          const duplicate = window.dashboardRelationshipRuntime.addLink("builder", {
+            id: "derived-to-table-duplicate",
+            source: { objectId: "lineage-origin", role: "output", name: "customer-margin" },
+            target: { objectId: "lineage-table", role: "input", name: "main" }
+          }, "1", { force: true });
+          const invalid = window.dashboardRelationshipRuntime.addLink("builder", {
+            id: "invalid-output-output",
+            source: { objectId: "lineage-origin", role: "output", name: "customers" },
+            target: { objectId: "lineage-transform", role: "output", name: "main" }
+          }, "1", { force: true });
+          return {
+            originTypes: window.dashboardDataSubstrateRuntime.originTypes(),
+            datasets: window.dashboardDataSubstrateRuntime.inspectDatasets("builder").map((dataset) => ({
+              id: dataset.id,
+              originType: dataset.originType,
+              sourceType: dataset.sourceType,
+              fields: dataset.fields.map((field) => field.name),
+              lineage: dataset.lineage,
+              rowCount: dataset.rowCount
+            })),
+            derivedRows: window.dashboardDataSubstrateRuntime.sourceRows("customer-margin", "builder"),
+            originPorts: window.dashboardRelationshipRuntime.portsForObject("builder", "lineage-origin").map((port) => ({
+              role: port.role,
+              name: port.name,
+              metadata: port.metadata
+            })),
+            lineage: window.dashboardRelationshipRuntime.lineageForObject("builder", "lineage-table"),
+            linkCount: window.dashboardRelationshipRuntime.dataflowLinks("builder").length,
+            duplicateAccepted: Boolean(duplicate),
+            invalidAccepted: Boolean(invalid),
+            derived,
+          };
+        }
+        """
+    )
+    origin_type_kinds = {entry["kind"] for entry in state["originTypes"]}
+    assert {"manual", "api", "derived", "sql", "uploaded-file", "realtime-stream", "cached-query"}.issubset(origin_type_kinds)
+    datasets = {entry["id"]: entry for entry in state["datasets"]}
+    assert datasets["api-tickets"]["originType"] == "api"
+    assert datasets["customer-margin"]["originType"] == "derived"
+    assert datasets["customer-margin"]["lineage"]["sourceId"] == "customers"
+    assert "margin" in datasets["customer-margin"]["fields"]
+    assert state["derivedRows"] and all(row["margin"] > 10000 for row in state["derivedRows"])
+    assert [port["role"] for port in state["originPorts"]] == ["output", "output"]
+    assert {port["name"] for port in state["originPorts"]} == {"customers", "customer-margin"}
+    assert any(port["metadata"]["originType"] == "derived" and port["metadata"]["lineage"]["sourceId"] == "customers" for port in state["originPorts"])
+    assert state["lineage"]["traceable"] is True
+    def lineage_link_ids(lineage):
+        ids = set(lineage.get("inboundLinkIds", []))
+        for entry in lineage.get("upstream", []):
+            ids.add(entry["linkId"])
+            if entry.get("sourceLineage"):
+                ids.update(lineage_link_ids(entry["sourceLineage"]))
+        return ids
+
+    assert {"origin-to-transform", "derived-to-table", "transform-to-table"}.issubset(lineage_link_ids(state["lineage"]))
+    origin_dataset_ids = {entry["datasetId"] for entry in state["lineage"]["originStreams"]}
+    assert {"customers", "customer-margin"}.issubset(origin_dataset_ids)
+    assert any(entry["id"] == "customer-margin" for entry in state["lineage"]["derivedStreams"])
+    assert state["duplicateAccepted"] is False
+    assert state["invalidAccepted"] is False
+    assert state["linkCount"] == 3
     assert_clean_browser(page)
 
 

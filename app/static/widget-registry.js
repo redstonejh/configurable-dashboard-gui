@@ -1648,6 +1648,122 @@
   });
 
   registerWidgetDefinition({
+    type: "dataset-origin",
+    displayName: "Dataset Origin",
+    category: "data",
+    subcategory: "Dataset Origin",
+    layer: "backend",
+    engineerOnly: true,
+    aliases: ["data-origin", "origin-node", "dataset-source", "substrate-origin"],
+    defaultSize: { cols: 3, rows: 2 },
+    minSize: { cols: 2, rows: 1 },
+    widgetType: "dataset-origin",
+    dashboardObjectKind: "dataset-origin",
+    contextRole: "substrate-gateway",
+    htmlTag: "div",
+    className: "stat-card widget-card widget-card-custom dataset-origin-widget-card",
+    capabilities: {
+      readsContext: false,
+      writesContext: false,
+      requiresDataSource: false,
+      supportsFilters: false,
+      supportsTimeRange: false,
+      supportsResize: true,
+      exposesPorts: true,
+      substrateGateway: true,
+    },
+    supportedSettings: ["datasetIds", "originTypes", "exposeAllDatasets", "showSchema", "showSamples", "color", "pin", "duplicate", "delete"],
+    settingsSchema: {
+      sections: [{
+        id: "origin",
+        label: "Dataset Origin",
+        fields: [
+          { key: "title", label: "Title", type: "text", defaultValue: "Dataset Origin" },
+          { key: "datasetIds", label: "Dataset ids", type: "textarea", valueType: "array", placeholder: "customers, work-orders", affectsQuery: true, surface: "logic" },
+          { key: "originTypes", label: "Origin types", type: "textarea", valueType: "array", placeholder: "manual, derived, api", affectsQuery: true, surface: "logic" },
+          { key: "exposeAllDatasets", label: "Expose all when empty", type: "toggle", defaultValue: true, affectsQuery: true, surface: "logic" },
+          { key: "showSchema", label: "Schema preview", type: "toggle", defaultValue: true, surface: "logic" },
+          { key: "showSamples", label: "Sample values", type: "toggle", defaultValue: true, surface: "logic" },
+        ],
+      }],
+    },
+    queryRequirements: { substrate: true, dataflowSource: true },
+    getDefaultConfig: () => ({
+      title: "Dataset Origin",
+      datasetIds: [],
+      originTypes: [],
+      exposeAllDatasets: true,
+      showSchema: true,
+      showSamples: true,
+    }),
+    resolveQuery: () => null,
+    render: ({ instance }) => {
+      const config = instance.config || {};
+      const title = config.title || "Dataset Origin";
+      const substrate = window.dashboardDataSubstrateRuntime;
+      const allDatasets = substrate?.inspectDatasets?.("builder") || [];
+      const datasets = substrate?.originDatasetsForConfig?.(config, "builder") || [];
+      const density = normalizeDensity(instance.density || resolveWidgetDensity(instance), "standard");
+      const compact = compactDensity(density);
+      if (!allDatasets.length) {
+        return `
+          <div class="dataset-origin-widget dataset-origin-density-${escapeHtml(density)}" data-origin-state="empty">
+            <div class="dataset-origin-header">
+              <span class="stat-lbl">${escapeHtml(title)}</span>
+              <span class="dataset-origin-kicker">Substrate</span>
+            </div>
+            <div class="dataset-origin-empty widget-runtime-state" role="status">
+              <span class="stat-val">No datasets</span>
+              <span class="stat-lbl">Substrate is empty</span>
+            </div>
+          </div>`;
+      }
+      if (!datasets.length) {
+        return `
+          <div class="dataset-origin-widget dataset-origin-density-${escapeHtml(density)}" data-origin-state="unselected">
+            <div class="dataset-origin-header">
+              <span class="stat-lbl">${escapeHtml(title)}</span>
+              <span class="dataset-origin-kicker">Substrate</span>
+            </div>
+            <div class="dataset-origin-empty widget-runtime-state" role="status">
+              <span class="stat-val">${escapeHtml(String(allDatasets.length))}</span>
+              <span class="stat-lbl">Datasets available</span>
+            </div>
+          </div>`;
+      }
+      const visibleDatasets = datasets.slice(0, compact ? 2 : 4);
+      return `
+        <div class="dataset-origin-widget dataset-origin-density-${escapeHtml(density)}" data-origin-state="ready" data-origin-dataset-count="${datasets.length}">
+          <div class="dataset-origin-header">
+            <span class="stat-lbl">${escapeHtml(title)}</span>
+            <span class="dataset-origin-kicker">${escapeHtml(`${datasets.length} stream${datasets.length === 1 ? "" : "s"}`)}</span>
+          </div>
+          <div class="dataset-origin-list" role="list" aria-label="Exposed substrate datasets">
+            ${visibleDatasets.map((dataset) => {
+              const fields = (dataset.fields || []).slice(0, compact ? 3 : 6);
+              return `
+                <section class="dataset-origin-entry" role="listitem" data-origin-dataset-id="${escapeHtml(dataset.id)}">
+                  <div class="dataset-origin-entry-head">
+                    <strong>${escapeHtml(dataset.name || dataset.id)}</strong>
+                    <span>${escapeHtml(dataset.sourceType || dataset.kind || "data")}</span>
+                  </div>
+                  <div class="dataset-origin-meta">
+                    <span>${escapeHtml(`${dataset.rowCount || 0} rows`)}</span>
+                    <span>${escapeHtml(`${(dataset.fields || []).length} fields`)}</span>
+                    ${compact ? "" : `<span>${escapeHtml(dataset.freshness || "unknown")}</span>`}
+                  </div>
+                  ${config.showSchema === false ? "" : `<div class="dataset-origin-fields">
+                    ${fields.map((field) => `<span${config.showSamples === false ? "" : ` title="${escapeHtml((field.sampleValues || []).join(", "))}"`}>${escapeHtml(field.name)} <b>${escapeHtml(field.type || "unknown")}</b></span>`).join("")}
+                  </div>`}
+                </section>`;
+            }).join("")}
+          </div>
+          ${datasets.length > visibleDatasets.length ? `<div class="dataset-origin-more">${escapeHtml(`+${datasets.length - visibleDatasets.length} more`)}</div>` : ""}
+        </div>`;
+    },
+  });
+
+  registerWidgetDefinition({
     type: "data-filter",
     displayName: "Data Filter",
     category: "data",
