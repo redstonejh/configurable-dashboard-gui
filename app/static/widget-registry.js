@@ -1476,8 +1476,8 @@
     displayName: "Filter Control",
     category: "controls",
     aliases: ["filter-control"],
-    defaultSize: { cols: 3, rows: 2 },
-    minSize: { cols: 2, rows: 1 },
+    defaultSize: { cols: 3, rows: 4 },
+    minSize: { cols: 2, rows: 3 },
     widgetType: "filter",
     dashboardObjectKind: "filter",
     contextRole: "filter-control",
@@ -1981,8 +1981,8 @@
     displayName: "AI Assistant",
     category: "system",
     aliases: ["assistant", "ai"],
-    defaultSize: { cols: 3, rows: 2 },
-    minSize: { cols: 2, rows: 1 },
+    defaultSize: { cols: 3, rows: 3 },
+    minSize: { cols: 2, rows: 2 },
     widgetType: "ai-assistant",
     dashboardObjectKind: "ai-assistant",
     contextRole: "assistant",
@@ -2009,7 +2009,7 @@
       }],
     },
     queryRequirements: { assistantScope: true },
-    getDefaultConfig: () => ({ title: "AI Assistant", scope: "region", promptTemplate: "" }),
+    getDefaultConfig: () => ({ title: "AI Assistant", scope: "region", promptTemplate: "", lastQuestion: "", lastPlanSummary: "", lastPlanStatus: "", lastPlanId: "" }),
     resolveQuery: () => null,
     render: ({ instance, resolvedContext }) => {
       const config = instance.config || {};
@@ -2021,21 +2021,36 @@
       }) || {};
       const range = timeRangeDisplay(scope.timeRange);
       const filterCount = Array.isArray(scope.filters) ? scope.filters.length : 0;
+      const lastQuestion = String(config.lastQuestion || "").trim();
+      const lastStatus = String(config.lastPlanStatus || "").trim();
+      const lastSummary = String(config.lastPlanSummary || "").trim();
+      const planId = String(config.lastPlanId || "").trim();
       return `
         <div class="meta-widget ai-assistant-widget meta-density-${density}" data-meta-widget="ai-assistant" data-assistant-scope="${escapeHtml(scope.scope || config.scope || "region")}">
           <div class="meta-widget-header">
             <span class="stat-lbl">${escapeHtml(config.title || "AI Assistant")}</span>
-            <span class="meta-widget-kicker">Placeholder</span>
+            <span class="meta-widget-kicker">Operator</span>
           </div>
           <div class="ai-assistant-panel">
             <strong>${escapeHtml(scope.regionLabel || contextScopeLabel(resolvedContext))}</strong>
-            <p>No external AI service is connected. This widget is reserved for a future context-aware assistant.</p>
-            <div class="meta-widget-facts">
+            ${lastQuestion ? "" : "<p>Ask for an analytical workspace. The operator inspects data, creates a plan, and builds registry-backed widgets through safe actions.</p>"}
+            <form class="ai-operator-form" data-ai-operator-form="true">
+              <textarea class="ai-operator-prompt" name="prompt" rows="2" placeholder="Build me an executive overview of this data">${escapeHtml(lastQuestion || config.promptTemplate || "")}</textarea>
+              <div class="ai-operator-actions">
+                <button class="ai-operator-button" type="submit" data-ai-operator-mode="plan">Plan</button>
+                <button class="ai-operator-button ai-operator-primary" type="submit" data-ai-operator-mode="execute">Build</button>
+              </div>
+            </form>
+            ${lastQuestion ? `<div class="ai-operator-result" data-ai-plan-id="${escapeHtml(planId)}" data-ai-plan-status="${escapeHtml(lastStatus)}">
+              <span>${escapeHtml(lastStatus || "planned")}</span>
+              <p>${escapeHtml(lastSummary || "Plan ready for review.")}</p>
+            </div>` : ""}
+            ${lastQuestion ? "" : `<div class="meta-widget-facts">
               <span>Scope <b>${escapeHtml(scope.scope || config.scope || "region")}</b></span>
               <span>Source <b>${escapeHtml(scope.dataSourceName || scope.dataSourceId || "None")}</b></span>
               <span>Filters <b>${filterCount}</b></span>
               ${range ? `<span>Time <b>${escapeHtml(range)}</b></span>` : ""}
-            </div>
+            </div>`}
           </div>
         </div>`;
     },

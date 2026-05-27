@@ -2198,6 +2198,257 @@ def test_demo_workspace_presets_render_visible_data_and_persist_panel_scope(page
     assert_clean_browser(page)
 
 
+def seed_ai_operator_source(page: Page, scenario: str = "executive-overview") -> None:
+    page.evaluate(
+        """
+        (scenario) => {
+          const source = window.dashboardDemoDataRuntime.scenarioSource(scenario, { seed: `ai-${scenario}` });
+          window.dashboardContextEngine.setDataSources("builder", [source]);
+          window.dashboardContextEngine.setWorkspaceContexts("builder", [source.context]);
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """,
+        scenario,
+    )
+
+
+def test_ai_operator_plans_executes_and_persists_visual_dashboard(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    seed_ai_operator_source(page, "executive-overview")
+
+    result = page.evaluate(
+        """
+        async () => {
+          const plan = await window.dashboardAiOperatorRuntime.plan("Build me an executive overview of this dataset");
+          const execution = await window.dashboardAiOperatorRuntime.executePlan(plan);
+          return { plan, execution };
+        }
+        """
+    )
+    plan = result["plan"]
+    assert plan["intent"] == "executive-summary"
+    assert plan["status"] == "ready"
+    assert "revenue" in plan["requiredData"] or "value" in plan["requiredData"]
+    assert any(step["type"] == "createPanel" for step in plan["steps"])
+    assert any(step["type"] == "createChart" for step in plan["steps"])
+    assert any(step["type"] == "createTable" for step in plan["steps"])
+    assert result["execution"]["ok"] is True
+
+    page.wait_for_function(
+        """
+        planId => [...document.querySelectorAll(`.widget-card[data-ai-plan-id="${planId}"]`)]
+          .filter((node) => node.dataset.widgetRuntimeStatus === "ready" || node.dataset.widgetDefinition === "text").length >= 5
+        """,
+        arg=plan["id"],
+    )
+    visual_state = page.evaluate(
+        """
+        (planId) => {
+          const widgets = [...document.querySelectorAll(`.widget-card[data-ai-plan-id="${planId}"]`)];
+          return {
+            widgets: widgets.map((node) => node.dataset.widgetDefinition),
+            unsupported: widgets.filter((node) => node.dataset.widgetDefinition === "unsupported").length,
+            chartMarks: widgets.filter((node) => node.dataset.widgetDefinition === "chart")
+              .map((node) => node.querySelectorAll("svg circle, svg rect, svg path, svg line, svg polyline").length),
+            tableRows: widgets.filter((node) => node.dataset.widgetDefinition === "table")
+              .map((node) => node.querySelectorAll("tbody tr").length),
+            explanation: widgets.find((node) => node.dataset.widgetDefinition === "text")?.textContent || "",
+          };
+        }
+        """,
+        plan["id"],
+    )
+    assert {"stat", "chart", "table", "text"}.issubset(set(visual_state["widgets"]))
+    assert visual_state["unsupported"] == 0
+    assert all(count > 0 for count in visual_state["chartMarks"])
+    assert all(count > 0 for count in visual_state["tableRows"])
+    assert "Question:" in visual_state["explanation"]
+
+    page.locator(".layout-save-button").click()
+    expect(page.locator(".toast", has_text="saved")).to_be_visible()
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    reloaded = page.evaluate(
+        """
+        (planId) => ({
+          widgets: [...document.querySelectorAll(`.widget-card[data-widget-key^="${planId}"]`)].map((node) => node.dataset.widgetDefinition),
+          panel: Boolean(document.querySelector(`.db-panel[data-panel-key="${planId}-panel"]`)),
+          validation: window.dashboardPersistenceRuntime.validate("builder", "1").ok,
+        })
+        """,
+        plan["id"],
+    )
+    assert reloaded["panel"] is True
+    assert {"stat", "chart", "table", "text"}.issubset(set(reloaded["widgets"]))
+    assert reloaded["validation"] is True
+    assert_clean_browser(page)
+
+
+def test_ai_operator_what_if_uses_derived_fields_and_engineer_transparency(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    seed_ai_operator_source(page, "customer-success")
+
+    result = page.evaluate(
+        """
+        async () => window.dashboardAiOperatorRuntime.runPrompt("What if labor cost dropped by 12%?", { execute: true })
+        """
+    )
+    plan = result["plan"]
+    assert result["ok"] is True
+    assert plan["intent"] == "what-if"
+    assert plan["scenario"]["destructive"] is False
+    assert plan["scenario"]["factor"] == 0.88
+    assert any("laborCost is not present" in assumption["text"] for assumption in plan["assumptions"])
+
+    page.wait_for_function(
+        """
+        planId => document.querySelectorAll(`.widget-card[data-ai-plan-id="${planId}"]`).length >= 4
+        """,
+        arg=plan["id"],
+    )
+    state = page.evaluate(
+        """
+        (planId) => {
+          const widgets = [...document.querySelectorAll(`.widget-card[data-ai-plan-id="${planId}"]`)];
+          const stat = widgets.find((node) => node.dataset.widgetDefinition === "stat");
+          const table = widgets.find((node) => node.dataset.widgetDefinition === "table");
+          const backend = widgets.find((node) => node.dataset.widgetDefinition === "data-filter");
+          return {
+            statConfig: JSON.parse(stat?.dataset.widgetConfig || "{}"),
+            tableConfig: JSON.parse(table?.dataset.widgetConfig || "{}"),
+            tableText: table?.textContent || "",
+            backendLayer: backend?.dataset.widgetLayer || "",
+            backendHiddenNormal: backend ? (backend.hidden || getComputedStyle(backend).display === "none" || backend.offsetParent === null) : false,
+            sourceRowsPersisted: window.dashboardContextEngine.getDataSources("builder")[0].config.rows.some((row) =>
+              Object.prototype.hasOwnProperty.call(row, "aiAdjustedCost") ||
+              Object.keys(row).some((key) => key.startsWith("aiProjected"))
+            ),
+          };
+        }
+        """,
+        plan["id"],
+    )
+    assert state["sourceRowsPersisted"] is False
+    assert state["backendLayer"] == "backend"
+    assert state["backendHiddenNormal"] is True
+    assert any(field["name"].startswith("aiAdjusted") for field in state["statConfig"]["calculatedFields"])
+    assert "aiProjectedSavings" in state["tableConfig"]["columns"]
+    assert "Scenario" in state["tableText"]
+
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
+    backend = page.locator(f'.widget-card[data-ai-plan-id="{plan["id"]}"][data-widget-definition="data-filter"]')
+    expect(backend).to_be_visible()
+    expect(backend).to_contain_text("AND")
+    assert_clean_browser(page)
+
+
+def test_ai_operator_missing_fields_returns_reviewable_partial_plan(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    page.evaluate(
+        """
+        () => {
+          window.dashboardContextEngine.setDataSources("builder", [{
+            id: "thin-source",
+            name: "Thin Source",
+            kind: "manual",
+            config: { rows: [{ label: "Alpha", category: "A" }, { label: "Beta", category: "B" }] }
+          }]);
+          window.dashboardContextEngine.setWorkspaceContexts("builder", [{
+            id: "builder:region:root",
+            name: "Thin Root",
+            dataSourceId: "thin-source",
+            semanticMapping: { labelField: "label", categoryField: "category" }
+          }]);
+          window.dashboardContextEngine.refresh("builder");
+        }
+        """
+    )
+    plan = page.evaluate(
+        """
+        async () => window.dashboardAiOperatorRuntime.plan("What changed this month?")
+        """
+    )
+    assert plan["intent"] == "trend"
+    assert plan["status"] == "partial"
+    limitation_text = " ".join(entry["text"] for entry in plan["limitations"])
+    assert "date" in limitation_text.lower()
+    assert "numeric" in limitation_text.lower()
+    assert "laborCost" not in str(plan)
+    assert_clean_browser(page)
+
+
+def test_ai_assistant_widget_builds_workspace_from_prompt(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate("localStorage.clear()")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".page")
+    seed_ai_operator_source(page, "operations-command-center")
+
+    open_add_category(page, "system").locator('.widget-add-action[data-widget-kind="ai-assistant"]').click()
+    assistant = page.locator('.widget-layout > .ai-assistant-widget-card[data-widget-definition="ai-assistant"]').last
+    expect(assistant).to_be_visible()
+    assistant.locator(".ai-operator-prompt").fill("Show trends over time")
+    assistant.locator('.ai-operator-button[data-ai-operator-mode="execute"]').click()
+    expect(assistant.locator(".ai-operator-result")).to_contain_text(re.compile("built|partial|ready", re.I))
+    config = assistant.evaluate("node => JSON.parse(node.dataset.widgetConfig || '{}')")
+    assert config["lastQuestion"] == "Show trends over time"
+    assert config["lastPlanId"]
+    page.wait_for_function(
+        """
+        planId => document.querySelectorAll(`.widget-card[data-ai-plan-id="${planId}"]`).length >= 4
+        """,
+        arg=config["lastPlanId"],
+    )
+    built = page.evaluate(
+        """
+        planId => ({
+          chartMarks: [...document.querySelectorAll(`.widget-card[data-ai-plan-id="${planId}"][data-widget-definition="chart"]`)]
+            .map((node) => node.querySelectorAll("svg circle, svg rect, svg path, svg line, svg polyline").length),
+          explanation: document.querySelector(`.widget-card[data-ai-plan-id="${planId}"][data-widget-definition="text"]`)?.textContent || "",
+          overlapsExisting: (() => {
+            const visible = (node) => {
+              const rect = node.getBoundingClientRect();
+              const style = getComputedStyle(node);
+              return rect.width > 4 && rect.height > 4 && style.display !== "none" && style.visibility !== "hidden";
+            };
+            const overlap = (leftNode, rightNode) => {
+              const left = leftNode.getBoundingClientRect();
+              const right = rightNode.getBoundingClientRect();
+              return left.left < right.right - 2 &&
+                left.right > right.left + 2 &&
+                left.top < right.bottom - 2 &&
+                left.bottom > right.top + 2;
+            };
+            const aiObjects = [
+              ...document.querySelectorAll(`.panel-layout > .db-panel[data-ai-plan-id="${planId}"]`),
+              ...document.querySelectorAll(`.widget-layout:not(.panel-internal-widget-grid) > .widget-card[data-ai-plan-id="${planId}"]`),
+            ].filter(visible);
+            const existingObjects = [
+              ...document.querySelectorAll(`.panel-layout > .db-panel:not([data-ai-plan-id="${planId}"])`),
+              ...document.querySelectorAll(`.widget-layout:not(.panel-internal-widget-grid) > .widget-card:not([data-ai-plan-id="${planId}"])`),
+            ].filter(visible);
+            return aiObjects.some((aiObject) => existingObjects.some((existingObject) => overlap(aiObject, existingObject)));
+          })(),
+        })
+        """,
+        config["lastPlanId"],
+    )
+    assert built["chartMarks"] and all(count > 0 for count in built["chartMarks"])
+    assert "Show trends over time" in built["explanation"]
+    assert built["overlapsExisting"] is False
+    assert_clean_browser(page)
+
+
 def test_widget_body_workbench_and_appearance_settings_split_configuration(page: Page, app_server: str) -> None:
     goto(page, app_server)
     page.evaluate("localStorage.clear()")
@@ -9692,7 +9943,10 @@ def test_system_meta_widgets_render_context_and_engineer_gated_inspector(page: P
     expect(activity.locator(".activity-feed-widget")).to_be_visible()
     expect(activity.locator(".activity-feed-widget")).to_contain_text(re.compile("added|ready|changed", re.I))
     expect(assistant.locator(".ai-assistant-widget")).to_be_visible()
-    expect(assistant).to_contain_text("No external AI service is connected")
+    expect(assistant).to_contain_text("Ask for an analytical workspace")
+    expect(assistant.locator(".ai-operator-prompt")).to_be_visible()
+    expect(assistant.locator('.ai-operator-button[data-ai-operator-mode="plan"]')).to_be_visible()
+    expect(assistant.locator('.ai-operator-button[data-ai-operator-mode="execute"]')).to_be_visible()
     expect(assistant).to_contain_text("Meta Source")
     expect(assistant).to_contain_text("Filters")
 

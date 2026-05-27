@@ -264,10 +264,14 @@ The registry is intentionally not responsible for dashboard interaction mechanic
 - Region Summary widgets map committed spatial/divider metadata to a visual overview only; they do not duplicate inherited context into widget config.
 - Image, Video, and PDF / Document widgets map user-provided source references to sanitized media/document previews in widget config. Upload persistence is deferred until a durable asset system exists; temporary blob URLs should not be treated as saved layout state.
 - Activity Feed widgets map transient local workspace events to a visual log while persisting only display config.
-- AI Assistant widgets map resolved context and current scope to a non-functional placeholder surface; external AI integration is intentionally deferred.
+- AI Assistant widgets map resolved context and current scope to the local AI Workspace Operator surface; external AI integration is intentionally deferred.
 - Context Inspector widgets map resolved context and region metadata to Engineer Mode debug output only.
 - Context filters must pass through the data/query layer rather than being duplicated in each widget renderer.
 - Formula and computed-field support must be sandboxed and must not evaluate arbitrary JavaScript.
+
+## AI Workspace Operator
+
+The AI Assistant widget is backed by the local AI Workspace Operator foundation in `app/static/ai-workspace-operator.js`. The operator does not mutate random DOM internals; it produces structured plans and executes validated workspace actions through `window.dashboardWorkspaceActionRuntime`. Current actions can inspect datasets/schema/widget definitions, create panels, create registry-backed widgets, create derived what-if calculations, create explanatory notes, and add Engineer Mode equation-filter surfaces. External AI/model integration is intentionally deferred; this version proves the action, planning, data-understanding, and visual-answer architecture with deterministic local planning. See `docs/ai-workspace-operator.md`.
 
 ## Rendering Rules
 

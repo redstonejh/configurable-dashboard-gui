@@ -13907,6 +13907,304 @@ document.addEventListener("DOMContentLoaded", () => {
     applyPreset: applyDemoWorkspacePreset,
     clear: clearDemoPresetObjects,
   };
+  const AI_ACTION_TYPES = new Set([
+    "inspectDatasets",
+    "inspectSchema",
+    "inspectWidgetRegistry",
+    "createWidget",
+    "createPanel",
+    "createDivider",
+    "createFilter",
+    "createCalculatedField",
+    "createEquationFilter",
+    "createChart",
+    "createTable",
+    "createStat",
+    "createMap",
+    "createNote",
+    "moveObject",
+    "resizeObject",
+    "groupObjects",
+    "createDataflowLink",
+    "applyConditionalStyle",
+    "createScenario",
+    "duplicateWorkspace",
+    "summarizeWorkspace",
+    "explainWidget",
+    "explainCalculation",
+  ]);
+  const normalizeAiActionType = (type = "") => AI_ACTION_TYPES.has(type) ? type : "";
+  const nextAiObjectId = (prefix = "ai") => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  const visibleFieldsForAiWidget = (config = {}, fallback = []) => (
+    Array.isArray(config.columns) && config.columns.length ? config.columns : fallback
+  );
+  const aiWidgetKindForAction = (action = {}) => {
+    if (action.type === "createStat") return "stat";
+    if (action.type === "createChart") return "chart";
+    if (action.type === "createTable") return "table";
+    if (action.type === "createMap") return "map";
+    if (action.type === "createFilter") return "filter";
+    if (action.type === "createNote") return "text";
+    if (action.type === "createEquationFilter") return "data-filter";
+    return action.widgetType || action.runtimeType || action.kind || "stat";
+  };
+  const aiPanelActionConfig = (action = {}) => ({
+    key: action.id || action.key || nextAiObjectId("ai-panel"),
+    title: action.title || action.label || "AI Analysis",
+    span: Number(action.cols) || Number(action.span) || 6,
+    gridCol: Number(action.col) || Number(action.x) || 1,
+    gridRow: Number(action.row) || Number(action.y) || 8,
+    color: action.color || "#2563eb",
+  });
+  const createWorkspacePanelFromAction = (action = {}, options = {}) => {
+    const layoutKey = options.layoutKey || action.layoutKey || "builder";
+    const profile = options.profile || getActivePanelProfile(layoutKey);
+    const layout = document.querySelector(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"]`);
+    if (!layout) return { ok: false, error: "Panel layout not found.", action };
+    const definition = aiPanelActionConfig(action);
+    const panel = createCustomPanel(definition);
+    panel.dataset.aiCreated = "true";
+    panel.dataset.aiPlanId = options.planId || action.planId || "";
+    panel.dataset.gridRowSpan = String(Number(action.rows) || Number(action.rowSpan) || 3);
+    layout.appendChild(panel);
+    applyPanelSpan(panel, definition.span);
+    applyPanelGridPosition(panel, definition.gridCol, definition.gridRow);
+    layout.__initPanel?.(panel);
+    savePanelLayouts(layout, profile, { persist: true, history: options.history !== false });
+    return { ok: true, id: panel.dataset.panelKey, type: "panel", element: panel };
+  };
+  const createWorkspaceWidgetFromAction = (action = {}, options = {}) => {
+    const layoutKey = options.layoutKey || action.layoutKey || "builder";
+    const profile = options.profile || getActivePanelProfile(layoutKey);
+    const runtimeType = aiWidgetKindForAction(action);
+    const runtimeDefinition = widgetDefinitionFor(runtimeType);
+    if (runtimeDefinition.type === "unsupported") return { ok: false, error: `Unsupported widget type: ${runtimeType}`, action };
+    const widgetLayout = document.querySelector(`.widget-layout[data-widget-layout-key="${CSS.escape(layoutKey)}"]`);
+    const panel = action.panelId
+      ? document.querySelector(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"] .db-panel[data-panel-key="${CSS.escape(action.panelId)}"]`)
+      : null;
+    const targetLayout = panel ? ensurePanelInternalWidgetGrid(panel) : widgetLayout;
+    if (!targetLayout) return { ok: false, error: "Widget layout not found.", action };
+    if (panel && !targetLayout.__initWidget) initWidgetLayout(targetLayout);
+    const defaults = typeof runtimeDefinition.getDefaultConfig === "function" ? runtimeDefinition.getDefaultConfig() : {};
+    const config = {
+      ...defaults,
+      ...(action.config || {}),
+      ...(action.title ? { title: action.title } : {}),
+    };
+    if (action.type === "createNote" && action.body && !config.body) config.body = action.body;
+    if (action.type === "createStat") config.label = config.label || action.title || config.title;
+    if (action.type === "createTable") config.columns = visibleFieldsForAiWidget(config, action.columns || []);
+    const colorIndex = targetLayout.querySelectorAll(":scope > .widget-card").length;
+    const definition = {
+      key: action.id || action.key || nextAiObjectId("ai-widget"),
+      title: config.title || runtimeDefinition.displayName || "Widget",
+      value: config.value,
+      color: action.color || panelThemePresets[colorIndex % panelThemePresets.length],
+      span: Number(action.cols) || Number(action.span) || runtimeDefinition.defaultSize?.cols || 1,
+      rowSpan: Number(action.rows) || Number(action.rowSpan) || runtimeDefinition.defaultSize?.rows || 1,
+      gridCol: Number(action.col) || Number(action.x) || 1,
+      gridRow: Number(action.row) || Number(action.y) || 8,
+      minW: runtimeDefinition.minSize?.cols || 1,
+      minH: runtimeDefinition.minSize?.rows || null,
+      type: runtimeDefinition.widgetType || runtimeDefinition.type,
+      runtimeType: runtimeDefinition.type,
+      widgetLayer: action.layer || runtimeDefinition.layer || "presentation",
+      workspaceObjectType: WORKSPACE_OBJECT_TYPES.widget,
+      dashboardObjectKind: runtimeDefinition.dashboardObjectKind || runtimeDefinition.type,
+      contextRole: runtimeDefinition.contextRole || "content",
+      config: JSON.stringify(config),
+    };
+    const widget = createCustomWidget(definition);
+    widget.dataset.aiCreated = "true";
+    widget.dataset.aiPlanId = options.planId || action.planId || "";
+    if (action.scenarioId) widget.dataset.aiScenarioId = action.scenarioId;
+    if (panel) {
+      widget.dataset.panelChildWidget = "true";
+      widget.dataset.parentPanelKey = panel.dataset.panelKey || "";
+    }
+    ensureWidgetTools(widget, definition.color);
+    applyWidgetSpan(widget, definition.span);
+    applyPanelColor(widget, definition.color);
+    applyPanelTitleColor(widget, "#ffffff");
+    applyWidgetGridPosition(widget, definition.gridCol, definition.gridRow, definition.rowSpan);
+    targetLayout.appendChild(widget);
+    targetLayout.__initWidget?.(widget);
+    if (panel) {
+      updatePanelChildEmptyState(panel);
+      syncOpenPanelHeightToInternalGrid(panel, { reflow: false });
+      savePanelLayouts(panel.closest(".panel-layout"), profile, { persist: true, history: options.history !== false });
+    } else {
+      saveWidgetLayouts(targetLayout, profile, { persist: true, history: options.history !== false });
+    }
+    refreshResolvedContextDebug(layoutKey, profile);
+    refreshEngineerOverlays();
+    return { ok: true, id: widget.dataset.widgetKey, type: runtimeDefinition.type, element: widget, config };
+  };
+  const moveWorkspaceObjectFromAction = (action = {}, options = {}) => {
+    const layoutKey = options.layoutKey || action.layoutKey || "builder";
+    const profile = options.profile || getActivePanelProfile(layoutKey);
+    const id = action.objectId || action.id || "";
+    const node = document.querySelector(`.widget-card[data-widget-key="${CSS.escape(id)}"], .db-panel[data-panel-key="${CSS.escape(id)}"]`);
+    if (!node) return { ok: false, error: "Object not found.", action };
+    if (node.classList.contains("db-panel")) {
+      applyPanelGridPosition(node, action.col || action.x || 1, action.row || action.y || 1);
+      savePanelLayouts(node.closest(".panel-layout"), profile, { persist: true, history: options.history !== false });
+    } else {
+      applyWidgetGridPosition(node, action.col || action.x || 1, action.row || action.y || 1, action.rows || action.rowSpan || gridItemRowSpan(node));
+      const layout = node.closest(".widget-layout");
+      if (isPanelInternalWidgetLayout(layout)) {
+        saveWidgetLayouts(layout, profile, { history: options.history !== false });
+      } else {
+        saveWidgetLayouts(layout, profile, { persist: true, history: options.history !== false });
+      }
+    }
+    return { ok: true, id, type: "moveObject" };
+  };
+  const resizeWorkspaceObjectFromAction = (action = {}, options = {}) => {
+    const layoutKey = options.layoutKey || action.layoutKey || "builder";
+    const profile = options.profile || getActivePanelProfile(layoutKey);
+    const id = action.objectId || action.id || "";
+    const node = document.querySelector(`.widget-card[data-widget-key="${CSS.escape(id)}"], .db-panel[data-panel-key="${CSS.escape(id)}"]`);
+    if (!node) return { ok: false, error: "Object not found.", action };
+    if (node.classList.contains("db-panel")) {
+      applyPanelSpan(node, action.cols || action.span || node.dataset.currentSpan);
+      node.dataset.gridRowSpan = String(action.rows || action.rowSpan || gridItemRowSpan(node));
+      applyPanelGridPosition(node, node.dataset.gridCol || 1, node.dataset.gridRow || 1);
+      savePanelLayouts(node.closest(".panel-layout"), profile, { persist: true, history: options.history !== false });
+    } else {
+      applyWidgetSpan(node, action.cols || action.span || node.dataset.currentSpan || node.dataset.defaultSpan);
+      applyWidgetGridPosition(node, node.dataset.gridCol || 1, node.dataset.gridRow || 1, action.rows || action.rowSpan || gridItemRowSpan(node));
+      saveWidgetLayouts(node.closest(".widget-layout"), profile, { persist: !isPanelInternalGridItem(node), history: options.history !== false });
+    }
+    return { ok: true, id, type: "resizeObject" };
+  };
+  const createDataflowLinkFromAction = (action = {}, options = {}) => {
+    const layoutKey = options.layoutKey || action.layoutKey || "builder";
+    const profile = options.profile || getActivePanelProfile(layoutKey);
+    const link = window.dashboardRelationshipRuntime?.addLink?.(layoutKey, {
+      id: action.id || nextAiObjectId("ai-dataflow-link"),
+      source: action.source || { objectId: action.sourceId, role: "output", portId: "output" },
+      target: action.target || { objectId: action.targetId, role: "input", portId: "input" },
+      signalType: action.signalType || "data",
+      signalState: action.signalState,
+      enabled: action.enabled !== false,
+    }, profile, { history: options.history !== false, source: "ai-operator" });
+    return link ? { ok: true, id: link.id, type: "createDataflowLink", link } : { ok: false, error: "Dataflow link was rejected.", action };
+  };
+  const applyConditionalStyleFromAction = (action = {}, options = {}) => {
+    const layoutKey = options.layoutKey || action.layoutKey || "builder";
+    const profile = options.profile || getActivePanelProfile(layoutKey);
+    const rule = window.dashboardRelationshipRuntime?.addStyleRule?.(layoutKey, {
+      id: action.id || nextAiObjectId("ai-style-rule"),
+      targetObjectId: action.targetObjectId || action.objectId,
+      condition: action.condition || { type: "comparison", left: "metric.value", operator: ">=", right: action.threshold ?? 0 },
+      effects: action.effects || [{ property: "rimState", value: "attention" }],
+      enabled: action.enabled !== false,
+    }, profile, { history: options.history !== false, source: "ai-operator" });
+    return rule ? { ok: true, id: rule.id, type: "applyConditionalStyle", rule } : { ok: false, error: "Style rule was rejected.", action };
+  };
+  const inspectDatasetsForAction = async (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => {
+    const sources = loadDataSources(layoutKey, profile);
+    const inspections = await Promise.all(sources.map(async (source) => {
+      const adapter = dataSourceAdapters.get(source.kind);
+      const schema = adapter ? await adapter.introspect(source) : inferDataSchema(sourceRows(source));
+      const rows = sourceRows(source);
+      const missing = (schema.fields || []).filter((field) => rows.some((row) => row?.[field.name] == null)).map((field) => field.name);
+      const numericFields = (schema.fields || []).filter((field) => field.type === "number").map((field) => field.name);
+      const categoricalFields = (schema.fields || []).filter((field) => field.type === "string").map((field) => field.name);
+      const timeFields = (schema.fields || []).filter((field) => field.type === "date" || /date|time|at$/i.test(field.name)).map((field) => field.name);
+      const geospatialFields = (schema.fields || []).filter((field) => /lat|lon|lng|location|geo/i.test(field.name)).map((field) => field.name);
+      return {
+        id: source.id,
+        name: source.name,
+        kind: source.kind,
+        rowCount: rows.length,
+        fields: schema.fields || [],
+        semanticMapping: source.config?.semanticMapping || {},
+        numericFields,
+        categoricalFields,
+        timeFields,
+        geospatialFields,
+        qualityWarnings: [
+          ...(missing.length ? [`Missing values in ${missing.slice(0, 5).join(", ")}`] : []),
+          ...(rows.length === 0 ? ["Dataset is empty"] : []),
+        ],
+        sampleRows: rows.slice(0, 3),
+      };
+    }));
+    return inspections;
+  };
+  const nextSafeWorkspaceRow = (layoutKey = "builder", options = {}) => {
+    const excludePlanId = options.excludePlanId || "";
+    const rowOf = (node) => {
+      const explicit = Number(node.dataset.gridRow || node.dataset.row || "");
+      if (Number.isFinite(explicit) && explicit > 0) return explicit;
+      const styleStart = Number(String(node.style.gridRow || "").split("/")[0]?.trim() || "");
+      return Number.isFinite(styleStart) && styleStart > 0 ? styleStart : 1;
+    };
+    const spanOf = (node) => {
+      const explicit = Number(node.dataset.gridRowSpan || node.dataset.rowSpan || "");
+      const current = Number(node.dataset.currentRowSpan || "");
+      const fallback = node.classList.contains("db-panel") ? 3 : 1;
+      const span = Number.isFinite(explicit) && explicit > 0 ? explicit : current;
+      return Number.isFinite(span) && span > 0 ? span : fallback;
+    };
+    const topLevelObjects = [
+      ...document.querySelectorAll(`.panel-layout[data-layout-key="${CSS.escape(layoutKey)}"] > .db-panel`),
+      ...document.querySelectorAll(`.widget-layout[data-widget-layout-key="${CSS.escape(layoutKey)}"]:not(.panel-internal-widget-grid) > .widget-card`),
+    ].filter((node) => !excludePlanId || node.dataset.aiPlanId !== excludePlanId);
+    const bottomRow = topLevelObjects.reduce((maxRow, node) => Math.max(maxRow, rowOf(node) + spanOf(node) - 1), 0);
+    return Math.max(1, bottomRow + (Number(options.gapRows) || 1));
+  };
+  const executeWorkspaceAiAction = async (action = {}, options = {}) => {
+    const type = normalizeAiActionType(action.type || action.action);
+    if (!type) return { ok: false, error: `Unsupported AI action: ${action.type || action.action || "unknown"}`, action };
+    const layoutKey = options.layoutKey || action.layoutKey || "builder";
+    const profile = options.profile || getActivePanelProfile(layoutKey);
+    if (type === "inspectDatasets" || type === "inspectSchema") return { ok: true, type, datasets: await inspectDatasetsForAction(layoutKey, profile) };
+    if (type === "inspectWidgetRegistry") return { ok: true, type, widgets: window.dashboardWidgetRuntime?.listWidgetDefinitions?.() || [] };
+    if (type === "createPanel") return createWorkspacePanelFromAction(action, options);
+    if (type === "createWidget" || type === "createStat" || type === "createChart" || type === "createTable" || type === "createMap" || type === "createFilter" || type === "createNote" || type === "createEquationFilter") {
+      return createWorkspaceWidgetFromAction(action, options);
+    }
+    if (type === "createDivider") return createWorkspacePanelFromAction({ ...action, dashboardObjectKind: "divider", title: action.title || "AI Divider" }, options);
+    if (type === "moveObject") return moveWorkspaceObjectFromAction(action, options);
+    if (type === "resizeObject") return resizeWorkspaceObjectFromAction(action, options);
+    if (type === "createDataflowLink") return createDataflowLinkFromAction(action, options);
+    if (type === "applyConditionalStyle") return applyConditionalStyleFromAction(action, options);
+    if (type === "createScenario" || type === "createCalculatedField" || type === "explainCalculation" || type === "summarizeWorkspace" || type === "explainWidget" || type === "groupObjects" || type === "duplicateWorkspace") {
+      return { ok: true, type, metadata: { ...action, handledAsPlanningMetadata: true } };
+    }
+    return { ok: false, error: `AI action is not implemented: ${type}`, action };
+  };
+  window.dashboardWorkspaceActionRuntime = {
+    actionTypes: () => [...AI_ACTION_TYPES],
+    validateAction: (action = {}) => ({ ok: Boolean(normalizeAiActionType(action.type || action.action)), type: normalizeAiActionType(action.type || action.action) }),
+    inspectDatasets: (layoutKey = "builder", profile = getActivePanelProfile(layoutKey)) => inspectDatasetsForAction(layoutKey, profile),
+    inspectWidgetRegistry: () => window.dashboardWidgetRuntime?.listWidgetDefinitions?.() || [],
+    nextSafeRow: nextSafeWorkspaceRow,
+    updateWidgetConfig: (widget, patch = {}, options = {}) => {
+      const node = typeof widget === "string" ? document.querySelector(widget) : widget;
+      if (!node?.classList?.contains("widget-card")) return false;
+      setWidgetConfig(node, { ...widgetConfigFromElement(node), ...(patch || {}) });
+      renderWidgetRuntimeContent(node, {
+        resolvedContext: resolveWorkspaceContextForItem(node),
+        status: node.dataset.widgetRuntimeStatus || "ready",
+      });
+      const layout = node.closest(".widget-layout");
+      if (layout) saveWidgetLayouts(layout, getActivePanelProfile(activeLayoutKeyForItem(node)), { persist: !isPanelInternalGridItem(node), history: options.history !== false });
+      return true;
+    },
+    executeAction: executeWorkspaceAiAction,
+    executePlan: async (plan = {}, options = {}) => {
+      const results = [];
+      for (const action of (Array.isArray(plan.steps) ? plan.steps : [])) {
+        results.push(await executeWorkspaceAiAction(action, { ...options, planId: plan.id || "" }));
+      }
+      return { ok: results.every((result) => result.ok), planId: plan.id || "", results };
+    },
+  };
   document.querySelectorAll(".panel-layout").forEach((layout) => {
     const layoutKey = layout.dataset.layoutKey || "default";
     refreshResolvedContextDebug(layoutKey, getActivePanelProfile(layoutKey));
