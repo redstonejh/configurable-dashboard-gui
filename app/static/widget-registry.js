@@ -160,13 +160,13 @@
   });
   const tableVisibleColumnCount = (cols) => {
     const safeCols = Number(cols) || 2;
-    if (safeCols <= 2) return 2;
+    if (safeCols <= 2) return 3;
     if (safeCols <= 3) return 4;
     return 6;
   };
   const tableVisibleRowCount = (rows, limit) => {
     const safeRows = Math.max(1, Number(rows) || 1);
-    const rowCapacity = Math.max(1, (safeRows * 2) - 1);
+    const rowCapacity = Math.max(2, (safeRows * 3) - 1);
     const configuredLimit = Number.isFinite(Number(limit)) ? Math.max(1, Number(limit)) : 50;
     return Math.min(configuredLimit, rowCapacity);
   };
@@ -641,16 +641,19 @@
     row,
     value: numberValue(row?.[field]),
   })).filter((entry) => entry.value != null);
-  const chartFrame = ({ instance, definition, density, body, meta = "", legend = "" }) => {
+  const chartFrame = ({ instance, definition, density, body, meta = "", legend = "", data = null, resolvedContext = null }) => {
     const title = instance.config?.title || definition.displayName || "Chart";
     const densityTier = normalizeDensity(instance?.density, resolveWidgetDensity(instance));
+    const contextLabel = chartContextLabel(resolvedContext || {}, data);
+    const traceable = Boolean(resolvedContext?.dataSourceId || data?.sourceId || data?.metadata?.lineage);
     return `
-      <div class="runtime-chart-widget runtime-chart-density-${density} widget-density-${densityTier}" data-density="${escapeHtml(densityTier)}" data-chart-type="${escapeHtml(definition.chartType)}" data-chart-category="${escapeHtml(definition.category || "general")}">
+      <div class="runtime-chart-widget runtime-chart-density-${density} widget-density-${densityTier}" data-density="${escapeHtml(densityTier)}" data-runtime-state="ready" data-runtime-source="${escapeHtml(runtimeSource(data))}" data-runtime-traceable="${traceable ? "true" : "false"}" data-runtime-context="${escapeHtml(contextLabel)}" data-chart-type="${escapeHtml(definition.chartType)}" data-chart-category="${escapeHtml(definition.category || "general")}">
         <div class="runtime-chart-header">
           <span class="stat-lbl">${escapeHtml(title)}</span>
           ${meta ? `<span class="runtime-chart-meta">${escapeHtml(meta)}</span>` : ""}
         </div>
         <div class="runtime-chart-stage">${body}</div>
+        ${contextLabel ? `<div class="runtime-chart-context">${escapeHtml(contextLabel)}</div>` : ""}
         ${legend}
       </div>`;
   };
@@ -659,6 +662,9 @@
       ${content}
     </svg>`;
   const axisLayer = () => `
+    <line class="runtime-chart-grid" x1="8" y1="20" x2="96" y2="20"></line>
+    <line class="runtime-chart-grid" x1="8" y1="32" x2="96" y2="32"></line>
+    <line class="runtime-chart-grid" x1="8" y1="44" x2="96" y2="44"></line>
     <line class="runtime-chart-axis" x1="8" y1="56" x2="96" y2="56"></line>
     <line class="runtime-chart-axis" x1="8" y1="8" x2="8" y2="56"></line>`;
   const chartLegend = (items, density) => {
@@ -667,11 +673,11 @@
       <span class="runtime-chart-legend-item"><i class="runtime-chart-swatch runtime-chart-fill-${CHART_PALETTE[index % CHART_PALETTE.length]}"></i>${escapeHtml(item)}</span>
     `).join("")}</div>`;
   };
-  const renderBarLikeChart = ({ instance, definition, rows, resolvedContext }) => {
+  const renderBarLikeChart = ({ instance, definition, rows, resolvedContext, data }) => {
     const config = instance.config || {};
     const density = chartDensityFor(instance);
     const points = groupedChartData(rows, config, resolvedContext, { series: ["grouped-bar", "stacked-bar"].includes(definition.chartType) });
-    if (!points.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    if (!points.length) return runtimeState(config.title || definition.displayName, "No groups match the current fields");
     const max = Math.max(...points.map((point) => Math.abs(point.value)), 1);
     const horizontal = definition.chartType === "horizontal-bar";
     const lollipop = definition.chartType === "lollipop";
@@ -698,13 +704,15 @@
       instance,
       definition,
       density,
-      meta: `${points.length} groups`,
+      meta: runtimeMeta(`${points.length} groups`, data),
       body: chartSvg(`${config.display?.showAxes === false || density === "tiny" ? "" : axisLayer()}${content}`, { label: definition.displayName }),
       legend: chartLegend([...new Set(points.map((point) => point.series))], density),
+      data,
+      resolvedContext,
     });
   };
   const linePathFor = (points) => points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
-  const renderLineLikeChart = ({ instance, definition, rows, resolvedContext }) => {
+  const renderLineLikeChart = ({ instance, definition, rows, resolvedContext, data }) => {
     const config = instance.config || {};
     const density = chartDensityFor(instance);
     const xField = chartXField(config, resolvedContext);
@@ -712,7 +720,7 @@
     const numeric = rows.map((row, index) => ({ row, index, yValue: numberValue(row?.[yField]), xValue: row?.[xField] }))
       .filter((entry) => entry.yValue != null)
       .slice(0, chartLimit(config, 80));
-    if (!numeric.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    if (!numeric.length) return runtimeState(config.title || definition.displayName, "No numeric series values");
     const min = Math.min(...numeric.map((entry) => entry.yValue));
     const max = Math.max(...numeric.map((entry) => entry.yValue), min + 1);
     const points = numeric.map((entry, index) => ({
@@ -728,9 +736,9 @@
       <path class="runtime-chart-line runtime-chart-stroke-one" d="${path}"></path>
       ${marks}
     `, { label: definition.displayName });
-    return chartFrame({ instance, definition, density, meta: `${numeric.length} points`, body });
+    return chartFrame({ instance, definition, density, meta: runtimeMeta(`${numeric.length} points`, data), body, data, resolvedContext });
   };
-  const renderScatterChart = ({ instance, definition, rows, resolvedContext }) => {
+  const renderScatterChart = ({ instance, definition, rows, resolvedContext, data }) => {
     const config = instance.config || {};
     const density = chartDensityFor(instance);
     const xField = chartXField(config, resolvedContext);
@@ -741,7 +749,7 @@
       y: numberValue(row?.[yField]),
       size: numberValue(row?.[sizeField]),
     })).filter((point) => point.x != null && point.y != null).slice(0, chartLimit(config, 80));
-    if (!points.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    if (!points.length) return runtimeState(config.title || definition.displayName, "No paired numeric fields");
     const minX = Math.min(...points.map((point) => point.x));
     const maxX = Math.max(...points.map((point) => point.x), minX + 1);
     const minY = Math.min(...points.map((point) => point.y));
@@ -753,14 +761,14 @@
       const r = definition.chartType === "bubble" ? 1.8 + (((point.size || 1) / maxSize) * 3) : 2.2;
       return `<circle class="runtime-chart-point runtime-chart-fill-${CHART_PALETTE[index % CHART_PALETTE.length]}" cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${r.toFixed(2)}"></circle>`;
     }).join("");
-    return chartFrame({ instance, definition, density, meta: `${points.length} points`, body: chartSvg(`${axisLayer()}${marks}`, { label: definition.displayName }) });
+    return chartFrame({ instance, definition, density, meta: runtimeMeta(`${points.length} points`, data), body: chartSvg(`${axisLayer()}${marks}`, { label: definition.displayName }), data, resolvedContext });
   };
-  const renderHistogramChart = ({ instance, definition, rows, resolvedContext }) => {
+  const renderHistogramChart = ({ instance, definition, rows, resolvedContext, data }) => {
     const config = instance.config || {};
     const density = chartDensityFor(instance);
     const yField = chartValueField(config, resolvedContext);
     const values = numericRowsFor(rows, yField).map((entry) => entry.value);
-    if (!values.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    if (!values.length) return runtimeState(config.title || definition.displayName, "No numeric distribution values");
     const min = Math.min(...values);
     const max = Math.max(...values, min + 1);
     const binCount = density === "large" ? 8 : density === "tiny" ? 4 : 6;
@@ -775,7 +783,7 @@
       const h = Math.max(1, (bin.count / maxCount) * 42);
       return `<rect class="runtime-chart-bar runtime-chart-fill-one" x="${(10 + bin.index * slot).toFixed(2)}" y="${(56 - h).toFixed(2)}" width="${Math.max(3, slot * 0.72).toFixed(2)}" height="${h.toFixed(2)}" rx="1.4"></rect>`;
     }).join("");
-    return chartFrame({ instance, definition, density, meta: `${values.length} values`, body: chartSvg(`${axisLayer()}${content}`, { label: definition.displayName }) });
+    return chartFrame({ instance, definition, density, meta: runtimeMeta(`${values.length} values`, data), body: chartSvg(`${axisLayer()}${content}`, { label: definition.displayName }), data, resolvedContext });
   };
   const pieArcPath = (cx, cy, r, start, end, inner = 0) => {
     const large = end - start > Math.PI ? 1 : 0;
@@ -787,11 +795,11 @@
     const [x4, y4] = p(start, inner);
     return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} L ${x3.toFixed(2)} ${y3.toFixed(2)} A ${inner} ${inner} 0 ${large} 0 ${x4.toFixed(2)} ${y4.toFixed(2)} Z`;
   };
-  const renderPieChart = ({ instance, definition, rows, resolvedContext }) => {
+  const renderPieChart = ({ instance, definition, rows, resolvedContext, data }) => {
     const config = instance.config || {};
     const density = chartDensityFor(instance);
     const points = groupedChartData(rows, config, resolvedContext).filter((point) => point.value > 0).slice(0, chartLimit(config, 8));
-    if (!points.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    if (!points.length) return runtimeState(config.title || definition.displayName, "No positive category values");
     const total = points.reduce((sum, point) => sum + point.value, 0) || 1;
     let cursor = -Math.PI / 2;
     const inner = definition.chartType === "donut" ? 14 : 0;
@@ -801,14 +809,14 @@
       cursor = next;
       return `<path class="runtime-chart-slice runtime-chart-fill-${CHART_PALETTE[index % CHART_PALETTE.length]}" d="${path}"></path>`;
     }).join("");
-    return chartFrame({ instance, definition, density, meta: `${points.length} slices`, body: chartSvg(content, { label: definition.displayName }), legend: chartLegend(points.map((point) => point.x), density) });
+    return chartFrame({ instance, definition, density, meta: runtimeMeta(`${points.length} slices`, data), body: chartSvg(content, { label: definition.displayName }), legend: chartLegend(points.map((point) => point.x), density), data, resolvedContext });
   };
-  const renderGaugeChart = ({ instance, definition, rows, resolvedContext }) => {
+  const renderGaugeChart = ({ instance, definition, rows, resolvedContext, data }) => {
     const config = instance.config || {};
     const density = chartDensityFor(instance);
     const yField = chartValueField(config, resolvedContext);
     const values = numericRowsFor(rows, yField).map((entry) => entry.value);
-    if (!values.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    if (!values.length) return runtimeState(config.title || definition.displayName, "No numeric gauge value");
     const value = aggregateValues(values, chartConfiguredAggregation(config)) || 0;
     const max = Number(config.max) || Math.max(value, ...values, 100);
     const ratio = Math.max(0, Math.min(1, value / Math.max(1, max)));
@@ -828,9 +836,9 @@
       <path class="runtime-chart-gauge-value runtime-chart-stroke-one" d="${arc(30, -180, end)}"></path>
       <text class="runtime-chart-value-label" x="50" y="48">${escapeHtml(label)}</text>
     `, { label: definition.displayName });
-    return chartFrame({ instance, definition, density, meta: "current", body });
+    return chartFrame({ instance, definition, density, meta: runtimeMeta("current", data), body, data, resolvedContext });
   };
-  const renderHeatmapChart = ({ instance, definition, rows, resolvedContext }) => {
+  const renderHeatmapChart = ({ instance, definition, rows, resolvedContext, data }) => {
     const config = instance.config || {};
     const density = chartDensityFor(instance);
     const xField = chartXField(config, resolvedContext);
@@ -853,21 +861,21 @@
       const opacity = 0.22 + ((cell.value / max) * 0.68);
       return `<rect class="runtime-chart-heat-cell runtime-chart-fill-one" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${Math.max(2, cellW - 1).toFixed(2)}" height="${Math.max(2, cellH - 1).toFixed(2)}" rx="1.2" style="opacity:${opacity.toFixed(2)}"></rect>`;
     }).join("");
-    return chartFrame({ instance, definition, density, meta: `${xValues.length} x ${yValues.length}`, body: chartSvg(content, { label: definition.displayName }) });
+    return chartFrame({ instance, definition, density, meta: runtimeMeta(`${xValues.length} x ${yValues.length}`, data), body: chartSvg(content, { label: definition.displayName }), data, resolvedContext });
   };
-  const renderKpiTrendChart = ({ instance, definition, rows, resolvedContext }) => {
+  const renderKpiTrendChart = ({ instance, definition, rows, resolvedContext, data }) => {
     const config = instance.config || {};
     const yField = chartValueField(config, resolvedContext);
     const values = numericRowsFor(rows, yField).map((entry) => entry.value);
-    if (!values.length) return runtimeState(config.title || definition.displayName, "Empty data");
+    if (!values.length) return runtimeState(config.title || definition.displayName, "No numeric trend values");
     const current = values.at(-1);
     const previous = values.length > 1 ? values.at(-2) : current;
     const delta = current - previous;
     return `
-      <div class="runtime-chart-kpi" data-chart-type="${escapeHtml(definition.chartType)}">
+      <div class="runtime-chart-kpi" data-runtime-state="ready" data-runtime-source="${escapeHtml(runtimeSource(data))}" data-chart-type="${escapeHtml(definition.chartType)}">
         <span class="stat-val">${escapeHtml(formatMetricValue(current, config.format))}</span>
         <span class="stat-lbl">${escapeHtml(config.title || definition.displayName)}</span>
-        <span class="runtime-chart-meta">${escapeHtml(delta >= 0 ? `+${formatMetricValue(delta)}` : formatMetricValue(delta))}</span>
+        <span class="runtime-chart-meta">${escapeHtml(runtimeMeta(delta >= 0 ? `+${formatMetricValue(delta)}` : formatMetricValue(delta), data))}</span>
       </div>`;
   };
   const registerChartDefinition = (definition) => {
@@ -927,11 +935,98 @@
     valueRequiredForAggregation: !["bar", "horizontal-bar", "grouped-bar", "stacked-bar", "lollipop", "pie", "donut", "heatmap"].includes(chartType),
   }));
 
-  const runtimeState = (label, helper = "") => `
-      <div class="widget-runtime-state">
+  const inferRuntimeState = (label = "", helper = "") => {
+    const text = `${label} ${helper}`.toLowerCase();
+    if (text.includes("loading")) return "loading";
+    if (text.includes("error") || text.includes("unable") || text.includes("failed")) return "error";
+    if (text.includes("unsupported")) return "unsupported";
+    if (text.includes("configure") || text.includes("needs") || text.includes("map a ") || text.includes("no data source")) return "configure";
+    if (text.includes("empty") || text.includes("no data") || text.includes("no rows") || text.includes("no map rows") || text.includes("no date rows") || text.includes("no numeric") || text.includes("no valid") || text.includes("no coordinates")) return "empty";
+    return "idle";
+  };
+
+  const runtimeStateLabel = (state) => ({
+    configure: "Configure",
+    empty: "Empty",
+    error: "Error",
+    loading: "Loading",
+    unsupported: "Unsupported",
+    idle: "State",
+  }[state] || "State");
+
+  const runtimeStateDetails = (label = "", helper = "", state = "idle", options = {}) => {
+    const text = `${label} ${helper}`.toLowerCase();
+    const isConfigure = state === "configure";
+    const isEmpty = state === "empty";
+    const expected = options.expected || (() => {
+      if (text.includes("location") || text.includes("coordinate") || text.includes("geospatial") || text.includes("map")) return "Geospatial rows with location or coordinate fields.";
+      if (text.includes("date") || text.includes("time")) return "Dated records from the active context.";
+      if (text.includes("numeric") || text.includes("value") || text.includes("metric") || text.includes("gauge") || text.includes("trend")) return "Numeric values mapped to the widget metric.";
+      if (text.includes("column") || text.includes("table") || text.includes("row")) return "Rows with configured display columns.";
+      if (text.includes("chart") || text.includes("field") || text.includes("group") || text.includes("series") || text.includes("category")) return "Rows with the configured chart fields.";
+      if (text.includes("image") || text.includes("video") || text.includes("document") || text.includes("asset") || text.includes("url")) return "A safe configured media asset reference.";
+      if (text.includes("data source") || text.includes("source")) return "A dataset from the workspace data substrate.";
+      return "Runtime data that matches this widget configuration.";
+    })();
+    const reason = options.reason || (() => {
+      if (state === "loading") return "The query is still hydrating.";
+      if (state === "error") return "The runtime adapter reported a load or configuration error.";
+      if (state === "unsupported") return "This saved object uses a widget type that is not registered.";
+      if (text.includes("no data source") || text.includes("needs data source") || text.includes("configure a data source")) return "No inherited or selected data source is available.";
+      if (isConfigure || text.includes("map a ") || text.includes("configure")) return "Required fields or asset settings have not been mapped yet.";
+      if (isEmpty && (text.includes("match") || text.includes("current context"))) return "The current context, filters, or time range returned zero rows.";
+      if (isEmpty && (text.includes("numeric") || text.includes("coordinate") || text.includes("valid"))) return "Rows exist, but the required field values are missing or incompatible.";
+      if (isEmpty) return "The query returned no usable records for this widget.";
+      return "The widget is waiting for runtime input.";
+    })();
+    const action = options.action || (() => {
+      if (state === "loading") return "Keep the widget in place while data loads.";
+      if (state === "error") return "Open settings or inspect the data source in Engineer Mode.";
+      if (state === "unsupported") return "Install or restore the missing registry definition.";
+      if (text.includes("data source") || text.includes("needs data source") || text.includes("configure a data source")) return "Select a dataset, origin, or inherited context source.";
+      if (text.includes("image") || text.includes("video") || text.includes("document") || text.includes("asset") || text.includes("url")) return "Open settings and provide a safe asset URL or reference.";
+      if (isConfigure || text.includes("field") || text.includes("column")) return "Open settings and map the required fields.";
+      if (isEmpty && text.includes("current context")) return "Adjust filters, time range, or panel context.";
+      if (isEmpty) return "Check source records or broaden the widget scope.";
+      return "Configure the widget or connect an input stream.";
+    })();
+    return { expected, reason, action };
+  };
+
+  const runtimeStateDetailMarkup = (details) => {
+    const items = [
+      ["Expected", details.expected],
+      ["Why", details.reason],
+      ["Next", details.action],
+    ].filter(([, value]) => String(value || "").trim());
+    if (!items.length) return "";
+    return `<div class="runtime-state-details">${items.map(([label, value]) => `
+          <span class="runtime-state-detail"><b>${escapeHtml(label)}</b><span>${escapeHtml(value)}</span></span>`).join("")}
+        </div>`;
+  };
+
+  const runtimeMeta = (primary, data = null, options = {}) => {
+    const parts = [primary].filter(Boolean);
+    if (options.filtered) parts.push("filtered");
+    if (data?.demo) parts.push("demo");
+    if (options.stale) parts.push("stale");
+    return parts.join(" / ");
+  };
+
+  const runtimeSource = (data = null) => data?.demo ? "demo" : "runtime";
+
+  const runtimeState = (label, helper = "", options = {}) => {
+    const state = options.state || inferRuntimeState(label, helper);
+    const details = runtimeStateDetails(label, helper, state, options);
+    const className = ["widget-runtime-state", options.className].filter(Boolean).join(" ");
+    return `
+      <div class="${escapeHtml(className)}" role="status" data-runtime-state="${escapeHtml(state)}">
+        <span class="runtime-state-kicker">${escapeHtml(options.kicker || runtimeStateLabel(state))}</span>
         <span class="stat-val">${escapeHtml(label)}</span>
         ${helper ? `<span class="stat-lbl">${escapeHtml(helper)}</span>` : ""}
+        ${runtimeStateDetailMarkup(details)}
       </div>`;
+  };
 
   const safeMediaUrl = (value, kind = "generic") => {
     const raw = String(value || "").trim();
@@ -956,10 +1051,12 @@
   };
 
   const safeMediaFit = (value) => ["contain", "cover", "fill", "center"].includes(value) ? value : "contain";
-  const mediaState = (label, helper, state = "empty") => `
-      <div class="media-widget-state media-widget-state-${escapeHtml(state)}" role="status">
+  const mediaState = (label, helper, state = "empty", options = {}) => `
+      <div class="media-widget-state media-widget-state-${escapeHtml(state)}" role="status" data-runtime-state="${escapeHtml(state)}">
+        <span class="runtime-state-kicker">${escapeHtml(runtimeStateLabel(state))}</span>
         <span class="stat-val">${escapeHtml(label)}</span>
         ${helper ? `<span class="stat-lbl">${escapeHtml(helper)}</span>` : ""}
+        ${runtimeStateDetailMarkup(runtimeStateDetails(label, helper, state, options))}
       </div>`;
 
   const mediaTitle = (config, fallback) => String(config?.title || fallback || "").trim();
@@ -1022,6 +1119,24 @@
   const activityTypeLabel = (type) => String(type || "workspace-update")
     .replace(/[-_]+/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
+  const runtimeEventSeverity = (event = {}) => {
+    const severity = String(event.severity || event.payload?.severity || "").toLowerCase();
+    if (["critical", "error", "warning", "active", "info"].includes(severity)) return severity;
+    const type = String(event.type || "").toLowerCase();
+    if (/(error|failed|deleted|removed|breach)/.test(type)) return "critical";
+    if (/(warn|risk|blocked|collision|stale)/.test(type)) return "warning";
+    if (/(created|saved|loaded|signal|dataflow|scenario|ai)/.test(type)) return "active";
+    return "info";
+  };
+  const runtimeEventFreshness = (event = {}) => {
+    if (event.freshness) return String(event.freshness);
+    const timestamp = Number(event.timestamp) || Date.parse(event.time || "");
+    if (!Number.isFinite(timestamp)) return "recent";
+    const age = Date.now() - timestamp;
+    if (age <= 2 * 60 * 1000) return "recent";
+    if (age <= 24 * 60 * 60 * 1000) return "fresh";
+    return "stale";
+  };
   const shortEventTime = (iso) => {
     const timestamp = Date.parse(iso);
     if (!Number.isFinite(timestamp)) return "Now";
@@ -1034,6 +1149,15 @@
     return `${Math.round(hours / 24)}d`;
   };
   const contextScopeLabel = (context = {}) => context.dataSourceName || context.dataSourceId || context.name || "Workspace context";
+  const chartContextLabel = (resolvedContext = {}, data = null) => {
+    const parts = [];
+    const filters = Array.isArray(resolvedContext?.filters) ? resolvedContext.filters.length : 0;
+    const time = timeRangeDisplay(resolvedContext?.timeRange);
+    if (filters) parts.push(`${filters} filter${filters === 1 ? "" : "s"}`);
+    if (time) parts.push(time);
+    if (data?.metadata?.scenarioId || resolvedContext?.scenarioId) parts.push("scenario");
+    return parts.join(" / ");
+  };
   const timeRangeDisplay = (timeRange) => {
     if (!timeRange) return "";
     if (timeRange.label) return timeRange.label;
@@ -1132,11 +1256,13 @@
     queryRequirements: { fields: [] },
     getDefaultConfig: () => ({ title: `Unsupported: ${type || "unknown"}` }),
     resolveQuery: () => null,
-    render: ({ instance }) => `
-      <div class="unsupported-widget-state widget-runtime-state" role="status">
-        <span class="stat-val">Unsupported widget</span>
-        <span class="stat-lbl">${escapeHtml(instance.type || type || "unknown")}</span>
-      </div>`,
+    render: ({ instance }) => runtimeState("Unsupported widget", instance.type || type || "unknown", {
+      className: "unsupported-widget-state",
+      state: "unsupported",
+      expected: "A widget type registered in the runtime registry.",
+      reason: "The saved layout references a type this build cannot render.",
+      action: "Restore the registry definition or replace this object.",
+    }),
   });
 
   const normalizeDefinition = (definition) => {
@@ -1325,7 +1451,11 @@
         if (metric === "min") value = Math.min(...numericValues);
         if (metric === "max") value = Math.max(...numericValues);
       }
+      const metricContext = metric === "count"
+        ? `${total} records`
+        : `${metric} ${valueField}`;
       return `
+        <span class="stat-runtime-meta">${escapeHtml(runtimeMeta(metricContext, data))}</span>
         <span class="stat-val">${escapeHtml(formatMetricValue(value, config.format))}</span>
         ${densityTier === "tiny" ? "" : `<span class="stat-lbl">${escapeHtml(label)}</span>`}`;
     },
@@ -1712,10 +1842,12 @@
               <span class="stat-lbl">${escapeHtml(title)}</span>
               <span class="dataset-origin-kicker">Substrate</span>
             </div>
-            <div class="dataset-origin-empty widget-runtime-state" role="status">
-              <span class="stat-val">No datasets</span>
-              <span class="stat-lbl">Substrate is empty</span>
-            </div>
+            ${runtimeState("No datasets", "Substrate is empty", {
+              state: "empty",
+              expected: "Datasets registered in the universal data substrate.",
+              reason: "No seeded, uploaded, derived, or connected datasets are available.",
+              action: "Load a demo workspace, upload data, or create a derived dataset.",
+            })}
           </div>`;
       }
       if (!datasets.length) {
@@ -1725,10 +1857,12 @@
               <span class="stat-lbl">${escapeHtml(title)}</span>
               <span class="dataset-origin-kicker">Substrate</span>
             </div>
-            <div class="dataset-origin-empty widget-runtime-state" role="status">
-              <span class="stat-val">${escapeHtml(String(allDatasets.length))}</span>
-              <span class="stat-lbl">Datasets available</span>
-            </div>
+            ${runtimeState(String(allDatasets.length), "Datasets available", {
+              state: "configure",
+              expected: "One or more selected datasets exposed as typed output streams.",
+              reason: "The substrate has data, but this origin node has not selected a dataset.",
+              action: "Open the origin settings and expose the dataset fields needed downstream.",
+            })}
           </div>`;
       }
       const visibleDatasets = datasets.slice(0, compact ? 2 : 4);
@@ -2007,19 +2141,25 @@
       const connected = Boolean(config._signalConnected);
       const label = active ? (config.stateBLabel || "Active") : (config.stateALabel || "Inactive");
       const title = config.title || "Shift";
+      const sourceLabel = (Array.isArray(config._signalSourceLabels) && config._signalSourceLabels[0]) ||
+        (Array.isArray(config._signalSourceIds) && config._signalSourceIds[0]) ||
+        "";
+      const linkId = (Array.isArray(config._signalLinkIds) && config._signalLinkIds[0]) || config._signalActiveLinkId || "";
+      const reason = connected ? `${active ? "Engaged by" : "Listening to"} ${sourceLabel || "dataflow"}` : "Waiting for dataflow input";
       return `
-        <div class="shift-widget shift-widget-density-${escapeHtml(density)}" data-shift-state="${active ? "on" : "off"}" data-shift-connected="${connected ? "true" : "false"}">
+        <div class="shift-widget shift-widget-density-${escapeHtml(density)}" data-shift-state="${active ? "on" : "off"}" data-shift-connected="${connected ? "true" : "false"}" data-shift-reason="${escapeHtml(reason)}">
           <div class="shift-widget-header">
             <span class="stat-lbl">${escapeHtml(title)}</span>
-            <span class="shift-widget-kicker">Signal</span>
+            <span class="shift-widget-kicker">${connected ? "Signal input" : "No input"}</span>
           </div>
           <div class="shift-widget-core" aria-label="${escapeHtml(`${title}: ${label}`)}">
             <strong>${escapeHtml(label)}</strong>
             <span class="shift-widget-state-dot" aria-hidden="true"></span>
           </div>
           ${density === "tiny" ? "" : `<div class="shift-widget-footer">
-            <span>${connected ? "Dataflow input" : "Default state"}</span>
+            <span>${escapeHtml(reason)}</span>
           </div>`}
+          ${connected ? `<div class="shift-widget-lineage"><span>Input</span><b>${escapeHtml(sourceLabel || "dataflow")}</b>${linkId ? `<code>${escapeHtml(linkId)}</code>` : ""}</div>` : ""}
         </div>`;
     },
   });
@@ -2077,13 +2217,19 @@
             <span class="meta-widget-kicker">${escapeHtml(config.scope || "workspace")}</span>
           </div>
           <div class="activity-feed-list" role="log" aria-label="${escapeHtml(config.title || "Activity Feed")}">
-            ${events.map((event) => `<article class="activity-feed-item" data-event-type="${escapeHtml(event.type || "")}">
+            ${events.map((event) => `<article class="activity-feed-item" tabindex="0" role="button" aria-expanded="false" data-event-id="${escapeHtml(event.id || "")}" data-event-type="${escapeHtml(event.type || "")}" data-event-severity="${escapeHtml(runtimeEventSeverity(event))}" data-event-freshness="${escapeHtml(runtimeEventFreshness(event))}" data-event-traceable="${event.traceable || event.objectId || event.payload?.linkId ? "true" : "false"}">
               <span class="activity-feed-dot" aria-hidden="true"></span>
               <span class="activity-feed-copy">
                 <strong>${escapeHtml(event.label || activityTypeLabel(event.type))}</strong>
-                <small>${escapeHtml(activityTypeLabel(event.type))}${event.detail ? ` · ${escapeHtml(event.detail)}` : ""}</small>
+                <small>${escapeHtml(activityTypeLabel(event.type))}${event.detail ? ` / ${escapeHtml(event.detail)}` : ""}</small>
               </span>
               <time>${escapeHtml(shortEventTime(event.time))}</time>
+              ${event.objectId || event.regionId || event.payload?.sourceId ? `<span class="activity-feed-context">${escapeHtml([
+                event.objectId ? `object ${event.objectId}` : "",
+                event.regionId ? `region ${event.regionId}` : "",
+                event.payload?.sourceId && event.payload?.targetId ? `${event.payload.sourceId} -> ${event.payload.targetId}` : "",
+              ].filter(Boolean).join(" / "))}</span>` : ""}
+              ${event.traceable || event.objectId || event.payload?.linkId ? `<span class="activity-feed-lineage">Engineer trace: ${escapeHtml(event.payload?.linkId || event.objectId || event.id || "runtime")}</span>` : ""}
             </article>`).join("")}
           </div>
         </div>`;
@@ -2551,7 +2697,7 @@
       const schemaFields = data?.schema?.fields?.map((field) => field.name) || Object.keys(rows[0] || {});
       const allFields = unique(configuredColumns.length ? configuredColumns : semanticFields.length ? semanticFields : schemaFields);
       if (!allFields.length) return runtimeState(title, "Configure columns");
-      if (!rows.length) return runtimeState(title, "Empty result");
+      if (!rows.length) return runtimeState(title, "No rows match the current context");
       const visibleFields = allFields.slice(0, tableVisibleColumnCount(instance.cols));
       const visibleRows = rows.slice(0, tableVisibleRowCount(instance.rows, config.limit));
       const tableDensity = Number(instance.rows) <= 2 || Number(instance.cols) <= 2
@@ -2561,10 +2707,10 @@
           : "comfortable";
       const total = Number.isFinite(Number(data?.total)) ? Number(data.total) : rows.length;
       return `
-        <div class="runtime-table-widget runtime-table-density-${tableDensity} widget-density-${densityTier}" data-density="${escapeHtml(densityTier)}" data-visible-rows="${visibleRows.length}" data-visible-columns="${visibleFields.length}">
+        <div class="runtime-table-widget runtime-table-density-${tableDensity} widget-density-${densityTier}" data-density="${escapeHtml(densityTier)}" data-runtime-state="ready" data-runtime-source="${escapeHtml(runtimeSource(data))}" data-visible-rows="${visibleRows.length}" data-visible-columns="${visibleFields.length}">
           <div class="runtime-table-header">
             <span class="stat-lbl">${escapeHtml(title)}</span>
-            <span class="runtime-table-meta">${escapeHtml(`${visibleRows.length} of ${total}`)}</span>
+            <span class="runtime-table-meta">${escapeHtml(runtimeMeta(`${visibleRows.length} of ${total} rows`, data))}</span>
           </div>
           <div class="runtime-table-scroll">
             <table class="runtime-table">
@@ -2672,7 +2818,7 @@
       if (status === "loading") return runtimeState(title, "Loading");
       if (status === "error") return runtimeState(title, data?.error || "Unable to load chart");
       const rows = Array.isArray(data?.rows) ? data.rows : [];
-      if (!rows.length) return runtimeState(title, "Empty data");
+      if (!rows.length) return runtimeState(title, "No rows match the current context");
       return definition.render({
         instance,
         definition,
@@ -2774,7 +2920,7 @@
       if (status === "loading") return runtimeState(title, "Loading");
       if (status === "error") return runtimeState(title, data?.error || "Unable to load map data");
       const rows = Array.isArray(data?.rows) ? data.rows : [];
-      if (!rows.length) return runtimeState(title, "No map data");
+      if (!rows.length) return runtimeState(title, "No map rows match the current context");
       const points = rows.map((row) => ({
         label: String(row?.[locationField] || row?.[mapping.labelField] || row?.label || "Point"),
         category: String(row?.[mapping.categoryField] || row?.category || ""),
@@ -2797,10 +2943,10 @@
       }).join("");
       const labels = points.slice(0, density === "large" ? 4 : 2).map((point) => `<span>${escapeHtml(point.label)}</span>`).join("");
       return `
-        <div class="runtime-map-widget runtime-map-density-${escapeHtml(density)}" data-map-layer="${escapeHtml(config.layerType || "points")}" data-map-demo="${data?.demo ? "true" : "false"}">
+        <div class="runtime-map-widget runtime-map-density-${escapeHtml(density)}" data-runtime-state="ready" data-runtime-source="${escapeHtml(runtimeSource(data))}" data-map-layer="${escapeHtml(config.layerType || "points")}" data-map-demo="${data?.demo ? "true" : "false"}">
           <div class="runtime-map-header">
             <span class="stat-lbl">${escapeHtml(title)}</span>
-            <span class="runtime-map-meta">${escapeHtml(`${points.length} point${points.length === 1 ? "" : "s"}${data?.demo ? " demo" : ""}`)}</span>
+            <span class="runtime-map-meta">${escapeHtml(runtimeMeta(`${points.length} point${points.length === 1 ? "" : "s"}`, data))}</span>
           </div>
           <div class="runtime-map-stage">
             <svg class="runtime-map-svg" viewBox="0 0 100 64" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(title)}">
@@ -2869,7 +3015,7 @@
       if (status === "loading") return runtimeState(title, "Loading");
       if (status === "error") return runtimeState(title, data?.error || "Unable to load dates");
       const rows = Array.isArray(data?.rows) ? data.rows : [];
-      if (!rows.length) return runtimeState(title, "No date rows");
+      if (!rows.length) return runtimeState(title, "No date rows match the current context");
       const events = rows.map((row) => {
         const timestamp = Date.parse(row?.[dateField]);
         return Number.isFinite(timestamp)
@@ -2887,10 +3033,10 @@
         return { date, dayEvents };
       });
       return `
-        <div class="runtime-calendar-widget" data-calendar-demo="${data?.demo ? "true" : "false"}">
+        <div class="runtime-calendar-widget" data-runtime-state="ready" data-runtime-source="${escapeHtml(runtimeSource(data))}" data-calendar-demo="${data?.demo ? "true" : "false"}">
           <div class="runtime-calendar-header">
             <span class="stat-lbl">${escapeHtml(title)}</span>
-            <span class="runtime-calendar-meta">${escapeHtml(`${monthName}${data?.demo ? " demo" : ""}`)}</span>
+            <span class="runtime-calendar-meta">${escapeHtml(runtimeMeta(monthName, data))}</span>
           </div>
           <div class="runtime-calendar-grid" aria-label="${escapeHtml(monthName)}">
             ${cells.map(({ date, dayEvents }) => `<div class="runtime-calendar-cell${dayEvents.length ? " has-events" : ""}">

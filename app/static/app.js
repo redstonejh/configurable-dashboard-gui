@@ -89,9 +89,18 @@ document.addEventListener("DOMContentLoaded", () => {
   const normalizeWorkspaceEvent = (event = {}) => {
     const timestamp = Number(event.timestamp) || Date.now();
     const layoutKey = event.layoutKey || event.payload?.layoutKey || document.querySelector(".panel-layout")?.dataset.layoutKey || "builder";
+    const payload = event.payload && typeof event.payload === "object" ? { ...event.payload } : {};
+    const rawSeverity = String(event.severity || payload.severity || event.tone || payload.tone || "").toLowerCase();
+    const type = String(event.type || "workspace-update");
+    const severity = rawSeverity ||
+      (/(error|failed|deleted|removed|breach)/.test(type) ? "critical" :
+        /(warn|risk|blocked|collision|stale)/.test(type) ? "warning" :
+          /(saved|loaded|created|signal|dataflow|scenario|ai)/.test(type) ? "active" : "info");
+    const ageMs = Date.now() - timestamp;
+    const freshness = ageMs <= 2 * 60 * 1000 ? "recent" : ageMs <= 24 * 60 * 60 * 1000 ? "fresh" : "stale";
     return {
       id: event.id || `workspace-event-${timestamp.toString(36)}-${(++workspaceEventSequence).toString(36)}`,
-      type: String(event.type || "workspace-update"),
+      type,
       timestamp,
       time: event.time || new Date(timestamp).toISOString(),
       source: event.source || "workspace",
@@ -102,7 +111,11 @@ document.addEventListener("DOMContentLoaded", () => {
       layoutKey,
       label: String(event.label || event.payload?.label || "Workspace updated"),
       detail: event.detail || "",
-      payload: event.payload && typeof event.payload === "object" ? { ...event.payload } : {},
+      severity,
+      freshness,
+      traceable: Boolean(event.traceable || payload.traceable || event.objectId || payload.objectId || payload.linkId),
+      lineage: event.lineage && typeof event.lineage === "object" ? { ...event.lineage } : (payload.lineage && typeof payload.lineage === "object" ? { ...payload.lineage } : null),
+      payload,
     };
   };
   const emitWorkspaceEvent = (event = {}) => {
@@ -164,6 +177,9 @@ document.addEventListener("DOMContentLoaded", () => {
     return emitWorkspaceEvent({
       type: type || "workspace-update",
       label,
+      severity: detail.severity || detail.tone || "",
+      traceable: Boolean(detail.traceable || detail.objectId || detail.payload?.linkId),
+      lineage: detail.lineage || null,
       source: detail.source || "activity",
       objectId: detail.objectId || "",
       objectType: detail.objectType || "",
@@ -1154,10 +1170,20 @@ document.addEventListener("DOMContentLoaded", () => {
     "panel-boundary-exit-release",
     "panel-entry-ghost-transition",
     "panel-exit-ghost-transition",
+    "widget-runtime-meaning",
+  ];
+  const runtimeMeaningDatasetKeys = [
+    "runtimeActivity",
+    "runtimeCondition",
+    "runtimeConfidence",
+    "runtimeFreshness",
+    "runtimeMeaningSummary",
+    "runtimeUrgency",
   ];
   const sanitizeLayoutElementForUndo = (element) => {
     const clone = element.cloneNode(true);
     clone.classList.remove(...undoTransientItemClasses);
+    runtimeMeaningDatasetKeys.forEach((key) => delete clone.dataset[key]);
     clone.removeAttribute("aria-selected");
     clone.style.removeProperty("left");
     clone.style.removeProperty("top");
@@ -2928,7 +2954,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const describeResolvedContext = (context) => {
     const mapping = context.semanticMapping || {};
     const mappedFields = [mapping.dateField, mapping.valueField, mapping.labelField, mapping.categoryField].filter(Boolean);
-    return [context.dataSourceName || context.dataSourceId || "No source", ...mappedFields.slice(0, 2)].join(" · ");
+    return [context.dataSourceName || context.dataSourceId || "No source", ...mappedFields.slice(0, 2)].join(" / ");
   };
   const ensureContextBadge = (item) => {
     let badge = item.querySelector(":scope > .workspace-context-badge");
@@ -5621,6 +5647,7 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   const widgetRuntimeTypeFromElement = (widget) => (
     widget?.dataset?.widgetRuntimeType ||
+    widget?.dataset?.widgetDefinition ||
     widget?.dataset?.dashboardObjectKind ||
     widget?.dataset?.widgetType ||
     "stat"
@@ -5685,7 +5712,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!widget?.getBoundingClientRect) return { width: 0, height: 0, panelContained: false };
     const rect = widget.getBoundingClientRect();
     const tools = widget.querySelector(":scope > .widget-tools");
-    const controlReserve = tools ? Math.min(52, Math.max(0, rect.width * 0.3)) : 0;
+    const controlReserve = tools ? Math.min(44, Math.max(0, rect.width * 0.24)) : 0;
     return {
       width: Math.max(0, rect.width - controlReserve),
       height: Math.max(0, rect.height),
@@ -5750,6 +5777,12 @@ document.addEventListener("DOMContentLoaded", () => {
       active: explicit ? coerceBooleanSignalValue(explicit.signalState) : false,
       incomingCount: incoming.length,
       sourceIds: incoming.map((link) => link.source?.objectId).filter(Boolean),
+      sourceLabels: incoming.map((link) => {
+        const id = link.source?.objectId || "";
+        const source = id ? workspaceElementByGraphId(id, layoutKey) : null;
+        return source?.dataset?.widgetDisplayName || source?.dataset?.widgetDefinition || id;
+      }).filter(Boolean),
+      linkIds: incoming.map((link) => link.id).filter(Boolean),
       activeLinkId: explicit?.id || "",
     };
   };
@@ -5765,6 +5798,11 @@ document.addEventListener("DOMContentLoaded", () => {
     widget.dataset.shiftSignalActive = active ? "true" : "false";
     widget.dataset.shiftSignalConnected = signalState.connected ? "true" : "false";
     widget.dataset.shiftSignalIncomingCount = String(signalState.incomingCount || 0);
+    widget.dataset.shiftSignalSourceIds = (signalState.sourceIds || []).join(",");
+    widget.dataset.shiftSignalLinkIds = (signalState.linkIds || []).join(",");
+    widget.dataset.shiftSignalReason = signalState.connected
+      ? `${active ? "Active" : "Inactive"} from ${signalState.sourceLabels?.[0] || signalState.sourceIds?.[0] || "dataflow"}`
+      : "No dataflow input";
     widget.style.setProperty("--shift-state-opacity", String(opacity));
     if (rgb) {
       widget.style.setProperty("--shift-state-color", `#${color.replace("#", "")}`);
@@ -5781,6 +5819,9 @@ document.addEventListener("DOMContentLoaded", () => {
     delete widget.dataset.shiftSignalActive;
     delete widget.dataset.shiftSignalConnected;
     delete widget.dataset.shiftSignalIncomingCount;
+    delete widget.dataset.shiftSignalSourceIds;
+    delete widget.dataset.shiftSignalLinkIds;
+    delete widget.dataset.shiftSignalReason;
   };
   const refreshSignalConsumerWidgetsForLinks = (layoutKey = "builder", links = []) => {
     const targetIds = new Set((links || []).map((link) => link?.target?.objectId).filter(Boolean));
@@ -5794,6 +5835,114 @@ document.addEventListener("DOMContentLoaded", () => {
         status: widget.dataset.widgetRuntimeStatus || "ready",
       });
     });
+  };
+  const runtimeMeaningStatusValue = (value) => String(value ?? "").trim().toLowerCase();
+  const runtimeMeaningStatusKind = (value) => {
+    const status = runtimeMeaningStatusValue(value);
+    if (!status) return "";
+    if (/(critical|error|failed|failure|down|offline|blocked|breach)/.test(status)) return "error";
+    if (/(warn|risk|watch|urgent|late|degraded|attention|elevated)/.test(status)) return "warning";
+    if (/(stale|expired|old|paused|inactive|dormant)/.test(status)) return "stale";
+    if (/(live|stream|refresh|running|processing)/.test(status)) return "active";
+    if (/(ok|ready|healthy|normal|complete|completed|green|clear)/.test(status)) return "healthy";
+    return "";
+  };
+  const runtimeMeaningFreshnessFromTimestamp = (timestamp) => {
+    const value = Number(timestamp) || Date.parse(timestamp || "");
+    if (!Number.isFinite(value)) return "";
+    const age = Date.now() - value;
+    if (age < 0) return "fresh";
+    if (age <= 2 * 60 * 1000) return "live";
+    if (age <= 24 * 60 * 60 * 1000) return "fresh";
+    return "stale";
+  };
+  const runtimeMeaningDataTimestamp = (data, widget) => (
+    data?.metadata?.freshness ||
+    data?.metadata?.lastUpdated ||
+    data?.freshness ||
+    data?.lastUpdated ||
+    data?.updatedAt ||
+    widget?.dataset?.widgetQueryLastUpdated ||
+    ""
+  );
+  const runtimeMeaningConfidence = (data, config = {}) => {
+    const raw = data?.confidence ?? data?.metadata?.confidence ?? config.confidence ?? config.runtimeConfidence;
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return "unknown";
+    if (value < .5) return "low";
+    if (value < .75) return "medium";
+    return "high";
+  };
+  const deriveWidgetRuntimeMeaning = ({ widget = null, definition = null, instance = null, resolvedContext = null, data = null, status = "empty" } = {}) => {
+    const rows = Array.isArray(data?.rows) ? data.rows : [];
+    const config = instance?.config || widgetConfigFromElement(widget, definition || widgetDefinitionForElement(widget));
+    const mapping = resolvedContext?.semanticMapping || data?.semanticMapping || {};
+    const statusFields = uniqueValues([
+      mapping.statusField,
+      "status",
+      "state",
+      "health",
+      "condition",
+      "priority",
+      "urgency",
+      "freshness",
+    ]).filter(Boolean);
+    const counts = { error: 0, warning: 0, stale: 0, active: 0, healthy: 0 };
+    rows.forEach((row) => {
+      statusFields.forEach((field) => {
+        const kind = runtimeMeaningStatusKind(row?.[field]);
+        if (kind && counts[kind] !== undefined) counts[kind] += 1;
+      });
+    });
+    const rowCount = Math.max(1, rows.length);
+    const freshness = runtimeMeaningFreshnessFromTimestamp(runtimeMeaningDataTimestamp(data, widget)) ||
+      (counts.stale / rowCount >= .25 ? "stale" : data?.live || data?.sourceKind === "stream" ? "live" : data ? "fresh" : "unknown");
+    const refreshing = widget?.dataset?.widgetQueryRefreshing === "true" || data?.refreshing === true;
+    let condition = "idle";
+    if (status === "error" || counts.error > 0) condition = "error";
+    else if (status === "loading") condition = "loading";
+    else if (widget?.dataset?.shiftSignalActive === "true") condition = "active";
+    else if (widget?.dataset?.shiftSignalConnected === "true") condition = "healthy";
+    else if (refreshing || data?.live === true || data?.sourceKind === "stream") condition = "active";
+    else if (status === "stale" || freshness === "stale" || counts.stale / rowCount >= .25) condition = "stale";
+    else if (counts.warning / rowCount >= .20) condition = "warning";
+    else if (status === "ready" || rows.length || counts.healthy > 0) condition = "healthy";
+    const urgency = condition === "error"
+      ? "urgent"
+      : condition === "warning"
+        ? "watch"
+        : condition === "stale"
+          ? "low"
+          : "normal";
+    const activity = condition === "loading" || refreshing || condition === "active"
+      ? "active"
+      : condition === "stale" || status === "empty"
+        ? "inactive"
+        : "steady";
+    return {
+      condition,
+      urgency,
+      freshness,
+      activity,
+      confidence: runtimeMeaningConfidence(data, config),
+      counts,
+    };
+  };
+  const applyWidgetRuntimeMeaning = (widget, context = {}) => {
+    if (!widget?.classList?.contains("widget-card")) return null;
+    const meaning = deriveWidgetRuntimeMeaning({ widget, ...context });
+    widget.classList.add("widget-runtime-meaning");
+    widget.dataset.runtimeCondition = meaning.condition;
+    widget.dataset.runtimeUrgency = meaning.urgency;
+    widget.dataset.runtimeFreshness = meaning.freshness;
+    widget.dataset.runtimeActivity = meaning.activity;
+    widget.dataset.runtimeConfidence = meaning.confidence;
+    widget.dataset.runtimeMeaningSummary = [
+      meaning.condition,
+      meaning.freshness,
+      meaning.confidence !== "unknown" ? `${meaning.confidence}-confidence` : "",
+    ].filter(Boolean).join(" ");
+    return meaning;
   };
   const WIDGET_LOGIC_SETTING_KEYS = new Set([
     "assetId",
@@ -5957,6 +6106,10 @@ document.addEventListener("DOMContentLoaded", () => {
           _signalActive: signalState.active,
           _signalConnected: signalState.connected,
           _signalIncomingCount: signalState.incomingCount,
+          _signalSourceIds: signalState.sourceIds || [],
+          _signalSourceLabels: signalState.sourceLabels || [],
+          _signalLinkIds: signalState.linkIds || [],
+          _signalActiveLinkId: signalState.activeLinkId || "",
         },
       };
       applySignalConsumerState(widget, signalState, renderInstance.config);
@@ -5971,6 +6124,13 @@ document.addEventListener("DOMContentLoaded", () => {
       status: options.status || "empty",
     }) || definition.render({ instance: renderInstance, definition, resolvedContext: options.resolvedContext || null, data: options.data, status: options.status || "empty" });
     setWidgetRuntimeContent(widget, html);
+    applyWidgetRuntimeMeaning(widget, {
+      definition,
+      instance: renderInstance,
+      resolvedContext: options.resolvedContext || null,
+      data: options.data,
+      status: options.status || "empty",
+    });
     applyStyleRulesForWidget(widget, {
       definition,
       instance: renderInstance,
@@ -6404,6 +6564,13 @@ document.addEventListener("DOMContentLoaded", () => {
       inflight: widgetQueryInflight.size,
       keys: [...widgetQueryCache.keys()],
     }),
+  };
+  window.dashboardWidgetRuntimeMeaning = {
+    derive: (options = {}) => deriveWidgetRuntimeMeaning(options),
+    apply: (widget, options = {}) => applyWidgetRuntimeMeaning(
+      typeof widget === "string" ? document.querySelector(widget) : widget,
+      options
+    ),
   };
   const hydrateWidgetRuntime = (widget, saved = null) => {
     if (!widget?.classList?.contains("widget-card") || widget.classList.contains("workspace-anchor-object")) return null;
@@ -13860,6 +14027,18 @@ document.addEventListener("DOMContentLoaded", () => {
       links.push(next);
       saveWorkspaceLogicGraph(layoutKey, { ...graph, links }, profile, options);
       refreshSignalConsumerWidgetsForLinks(layoutKey, [next]);
+      emitWorkspaceEvent({
+        type: "dataflow-link-created",
+        source: "dataflow",
+        layoutKey,
+        objectId: next.target.objectId,
+        objectType: "dataflow",
+        label: "Dataflow link created",
+        detail: `${next.source.objectId} -> ${next.target.objectId}`,
+        severity: "active",
+        traceable: true,
+        payload: { linkId: next.id, sourceId: next.source.objectId, targetId: next.target.objectId },
+      });
       return next;
     },
     removeLink: (layoutKey = "builder", linkId = "", profile = getActivePanelProfile(layoutKey), options = {}) => {
@@ -13884,6 +14063,23 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!updated) return null;
       saveWorkspaceLogicGraph(layoutKey, { ...graph, links }, profile, options);
       refreshSignalConsumerWidgetsForLinks(layoutKey, [updated]);
+      emitWorkspaceEvent({
+        type: "dataflow-signal-updated",
+        source: "dataflow",
+        layoutKey,
+        objectId: updated.target.objectId,
+        objectType: "signal",
+        label: coerceBooleanSignalValue(value) ? "Signal engaged" : "Signal cleared",
+        detail: `${updated.source.objectId} -> ${updated.target.objectId}`,
+        severity: coerceBooleanSignalValue(value) ? "active" : "info",
+        traceable: true,
+        payload: {
+          linkId: updated.id,
+          sourceId: updated.source.objectId,
+          targetId: updated.target.objectId,
+          signalState: updated.signalState,
+        },
+      });
       return updated;
     },
     signalStateForObject: (layoutKey = "builder", objectId = "", profile = getActivePanelProfile(layoutKey)) => {
@@ -14078,6 +14274,19 @@ document.addEventListener("DOMContentLoaded", () => {
     },
     retention: () => workspaceEventRetention,
   };
+
+  document.addEventListener("click", (event) => {
+    const item = event.target?.closest?.(".activity-feed-item");
+    if (!item) return;
+    item.classList.toggle("activity-feed-expanded");
+    item.setAttribute("aria-expanded", item.classList.contains("activity-feed-expanded") ? "true" : "false");
+  });
+  document.addEventListener("keydown", (event) => {
+    const item = event.target?.closest?.(".activity-feed-item");
+    if (!item || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    item.click();
+  });
 
   const bindRangeCustomControls = (root = document) => {
     root.querySelectorAll(".range-custom").forEach((form) => {

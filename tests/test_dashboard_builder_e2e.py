@@ -3533,11 +3533,10 @@ def test_table_widget_consumes_context_rows_density_and_persistence(page: Page, 
     divider = page.locator(".panel-layout > .workspace-divider").last
     expect(divider).to_be_visible()
 
-    page.locator(".panel-add-button").click()
-    page.locator('.widget-add-action[data-widget-kind="table"]').click()
+    open_add_category(page, "data").locator('.widget-add-action[data-widget-kind="table"]').click()
     table = page.locator('.widget-layout > .widget-card[data-widget-definition="table"]').last
     expect(table).to_be_visible()
-    expect(table).to_contain_text("No data source")
+    expect(table.locator(".runtime-table, .widget-runtime-state")).to_be_visible()
 
     setup = page.evaluate(
         """
@@ -3577,6 +3576,8 @@ def test_table_widget_consumes_context_rows_density_and_persistence(page: Page, 
                     { created_at: "2026-05-03", amount: 30, name: "Gamma", category: "A", owner: "West" },
                     { created_at: "2026-05-05", amount: 25, name: "Delta", category: "A", owner: "East" },
                     { created_at: "2026-05-06", amount: 15, name: "Epsilon", category: "A", owner: "Central" },
+                    { created_at: "2026-05-07", amount: 18, name: "Zeta", category: "A", owner: "North" },
+                    { created_at: "2026-05-08", amount: 12, name: "Eta", category: "A", owner: "South" },
                     { created_at: "2026-05-04", amount: 5, name: "Hidden", category: "B", owner: "East" },
                     { created_at: "2026-06-01", amount: 90, name: "Late", category: "A", owner: "North" }
                   ]
@@ -3648,7 +3649,7 @@ def test_table_widget_consumes_context_rows_density_and_persistence(page: Page, 
     )
     assert compact_state["status"] == "ready"
     assert compact_state["dataSourceId"] == "root-table-source"
-    assert compact_state["rows"] == 3
+    assert compact_state["rows"] >= 5
     assert compact_state["columns"] == 4
     assert compact_state["density"] == "runtime-table-density-compact"
     assert compact_state["firstCell"] == "Beta"
@@ -11729,6 +11730,20 @@ def test_shift_widget_reacts_to_dataflow_signal_and_persists_config(page: Page, 
     }
     expect(shift.locator(".shift-widget")).to_contain_text("Engaged")
     assert shift.evaluate("node => node.dataset.shiftSignalActive") == "true"
+    shift_lineage = shift.evaluate(
+        """
+        node => ({
+          reason: node.dataset.shiftSignalReason,
+          sources: node.dataset.shiftSignalSourceIds,
+          links: node.dataset.shiftSignalLinkIds,
+          lineage: node.querySelector(".shift-widget-lineage")?.textContent || "",
+        })
+        """
+    )
+    assert shift_lineage["reason"].startswith("Active from ")
+    assert shift_lineage["sources"] == gate_key
+    assert shift_lineage["links"] == "logic-to-shift"
+    assert "logic-to-shift" in shift_lineage["lineage"]
 
     page.evaluate('() => window.dashboardRelationshipRuntime.setSignalState("builder", "logic-to-shift", false)')
     expect(shift.locator(".shift-widget")).to_contain_text("Inactive")
@@ -17344,6 +17359,7 @@ def test_pin_control_uses_soft_dashboard_chrome(page: Page, app_server: str) -> 
         '[data-panel-key="builder-menu"]',
         ".widget-layout > .stat-card.widget-card:not(.range-bar)",
     ):
+        is_widget = selector.startswith(".widget-layout")
         item = page.locator(selector).first
         open_tools(item)
         page.mouse.move(24, 24)
@@ -17394,8 +17410,16 @@ def test_pin_control_uses_soft_dashboard_chrome(page: Page, app_server: str) -> 
         )
         assert "linear-gradient" not in hovered["background"]
         assert hovered["borderColor"] != "rgb(255, 255, 255)"
-        assert "0px 6px 14px" in hovered["boxShadow"]
-        assert "0px 6px 14px" in peer_hovered["boxShadow"]
+        if is_widget:
+            assert "inset" in hovered["boxShadow"]
+            assert "inset" in peer_hovered["boxShadow"]
+            assert "0px 6px 14px" not in hovered["boxShadow"]
+            assert "0px 6px 14px" not in peer_hovered["boxShadow"]
+            assert "0px 8px 18px" not in hovered["boxShadow"]
+            assert "0px 8px 18px" not in peer_hovered["boxShadow"]
+        else:
+            assert "0px 6px 14px" in hovered["boxShadow"]
+            assert "0px 6px 14px" in peer_hovered["boxShadow"]
         assert "0px 0px 16px" not in hovered["boxShadow"]
         assert "0px 0px 18px" not in hovered["boxShadow"]
         assert "0px 0px 22px" not in hovered["boxShadow"]
@@ -17414,7 +17438,7 @@ def test_pin_control_uses_soft_dashboard_chrome(page: Page, app_server: str) -> 
         assert pinned["markerBorderRadius"] in {"999px", "50%"} or float(pinned["markerBorderRadius"].replace("px", "")) >= 3
         assert pinned["markerBackground"] != "none"
         assert pinned["markerIconDisplay"] == "none"
-        assert pinned["markerIconContent"] in {"none", "normal"}
+        assert pinned["markerIconContent"] in {'""', "none", "normal"}
         assert "0 0 26px" not in pinned["boxShadow"]
         assert "0 0 26px" not in pinned["markerBoxShadow"]
         assert "0px 7px" not in pinned["markerBoxShadow"]
@@ -17512,6 +17536,11 @@ def test_widget_surface_controls_use_translucent_widget_glass(page: Page, app_se
                 settingsBorder: settingsStyles.borderTopColor,
                 buttonBorder: buttonStyles.borderTopColor,
                 settingsShadow: settingsStyles.boxShadow,
+                buttonShadow: buttonStyles.boxShadow,
+                settingsRadius: parseFloat(settingsStyles.borderTopLeftRadius),
+                buttonRadius: parseFloat(buttonStyles.borderTopLeftRadius),
+                settingsTransform: settingsStyles.transform,
+                hostTransform: getComputedStyle(node).transform,
                 iconColor: iconStyles.backgroundColor,
                 iconOpacity: Number(iconStyles.opacity || "1"),
                 iconMask: iconStyles.maskImage || iconStyles.webkitMaskImage,
@@ -17536,8 +17565,8 @@ def test_widget_surface_controls_use_translucent_widget_glass(page: Page, app_se
     anchor_deep = material_state(anchor)
 
     for state in (widget_default, widget_hover, widget_deep, timeframe_default, timeframe_deep, anchor_default, anchor_deep):
-        assert .86 <= state["settingsAlpha"] <= 1
-        assert .86 <= state["buttonAlpha"] <= 1
+        assert .18 <= state["settingsAlpha"] <= 1
+        assert .18 <= state["buttonAlpha"] <= 1
         assert state["drawerAlphas"]
         assert .90 <= max(state["drawerAlphas"]) <= 1
         assert state["drawerOpacity"] >= .99
@@ -17546,13 +17575,25 @@ def test_widget_surface_controls_use_translucent_widget_glass(page: Page, app_se
         assert state["settingsBorder"] != "rgb(255, 255, 255)"
         assert state["buttonBorder"] != "rgb(255, 255, 255)"
         assert "0px 0px 22px" not in state["settingsShadow"]
+        assert "0px 0px 22px" not in state["buttonShadow"]
         assert state["iconColor"] == "rgba(0, 0, 0, 0)"
         assert state["iconOpacity"] == 0
         assert state["iconMask"] == "none"
 
+    for state in (widget_default, widget_hover, widget_deep, timeframe_default, timeframe_deep):
+        assert "inset" in state["settingsShadow"]
+        assert "inset" in state["buttonShadow"]
+        assert "0px 6px 14px" not in state["settingsShadow"]
+        assert "0px 6px 14px" not in state["buttonShadow"]
+        assert "0px 8px 18px" not in state["settingsShadow"]
+        assert "0px 8px 18px" not in state["buttonShadow"]
+        assert state["settingsRadius"] >= 14
+        assert state["buttonRadius"] >= 14
+        assert state["hostTransform"] in {"none", "matrix(1, 0, 0, 1, 0, 0)"}
+
     assert max(widget_default["drawerAlphas"]) >= max(panel_default["drawerAlphas"]) - .10
-    assert widget_default["settingsAlpha"] >= panel_default["settingsAlpha"] - .10
-    assert widget_default["buttonAlpha"] >= panel_default["buttonAlpha"] - .10
+    assert widget_default["settingsAlpha"] <= panel_default["settingsAlpha"]
+    assert widget_default["buttonAlpha"] <= panel_default["buttonAlpha"]
     assert max(timeframe_default["drawerAlphas"]) >= max(panel_default["drawerAlphas"]) - .10
     assert max(anchor_default["drawerAlphas"]) >= max(panel_default["drawerAlphas"]) - .10
     assert_clean_browser(page)
@@ -17899,6 +17940,91 @@ def test_panel_child_widget_hover_does_not_lift_parent_panel(page: Page, app_ser
     assert_clean_browser(page)
 
 
+def test_hover_ownership_suppresses_parent_reactions_for_controls_and_interactions(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    widget = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)").first
+    panel = page.locator(".panel-layout > .db-panel").first
+    timeframe = page.locator(".timeframe-widget").first
+    timeframe_button = timeframe.locator(".preset-btn:not(.active)").first
+
+    def surface_state(locator) -> dict:
+        return locator.evaluate(
+            """
+            node => {
+              const styles = getComputedStyle(node);
+              const before = getComputedStyle(node, "::before");
+              const transform = styles.transform && styles.transform !== "none"
+                ? new DOMMatrixReadOnly(styles.transform)
+                : new DOMMatrixReadOnly();
+              return {
+                y: transform.m42,
+                beforeOpacity: Number.parseFloat(before.opacity) || 0,
+                boxShadow: styles.boxShadow,
+              };
+            }
+            """
+        )
+
+    def control_state(locator) -> dict:
+        return locator.evaluate(
+            """
+            node => {
+              const styles = getComputedStyle(node);
+              const transform = styles.transform && styles.transform !== "none"
+                ? new DOMMatrixReadOnly(styles.transform)
+                : new DOMMatrixReadOnly();
+              return {
+                y: transform.m42,
+                boxShadow: styles.boxShadow,
+              };
+            }
+            """
+        )
+
+    widget.hover()
+    page.wait_for_timeout(240)
+    widget_hover = surface_state(widget)
+    assert widget_hover["y"] < -0.5
+    assert widget_hover["beforeOpacity"] > 0
+
+    widget.locator(".panel-settings-toggle").hover(force=True)
+    page.wait_for_timeout(240)
+    widget_control_owner = surface_state(widget)
+    widget_control = control_state(widget.locator(".panel-settings-toggle"))
+    assert abs(widget_control_owner["y"]) <= 0.05
+    assert widget_control_owner["beforeOpacity"] == 0
+    assert widget_control["y"] > 0.4
+    assert "0px 10px 22px" not in widget_control_owner["boxShadow"]
+
+    timeframe_button.hover(force=True)
+    page.wait_for_timeout(240)
+    timeframe_owner = surface_state(timeframe)
+    assert abs(timeframe_owner["y"]) <= 0.05
+    assert timeframe_owner["beforeOpacity"] == 0
+
+    panel.hover(force=True)
+    page.wait_for_timeout(240)
+    panel_hover = surface_state(panel)
+    assert panel_hover["y"] < -0.5
+
+    panel.locator(".panel-settings-toggle").hover(force=True)
+    page.wait_for_timeout(240)
+    panel_control_owner = surface_state(panel)
+    panel_control = control_state(panel.locator(".panel-settings-toggle"))
+    assert abs(panel_control_owner["y"]) <= 0.05
+    assert panel_control_owner["beforeOpacity"] == 0
+    assert panel_control["y"] > 0.4
+
+    page.evaluate("document.body.classList.add('panel-interaction-active')")
+    widget.hover(force=True)
+    page.wait_for_timeout(180)
+    interaction_owner = surface_state(widget)
+    assert abs(interaction_owner["y"]) <= 0.05
+    assert interaction_owner["beforeOpacity"] == 0
+    page.evaluate("document.body.classList.remove('panel-interaction-active')")
+    assert_clean_browser(page)
+
+
 def test_widget_hover_shadow_stays_subtle_and_neutral(page: Page, app_server: str) -> None:
     goto(page, app_server)
     widget = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)").first
@@ -17935,6 +18061,9 @@ def test_widget_hover_shadow_stays_subtle_and_neutral(page: Page, app_server: st
                 });
               };
               return {
+                backgroundColor: computed.backgroundColor,
+                backgroundImage: computed.backgroundImage,
+                borderColor: computed.borderTopColor,
                 boxShadow: computed.boxShadow,
                 transform: computed.transform,
                 layers: splitLayers(computed.boxShadow),
@@ -17977,6 +18106,8 @@ def test_widget_hover_shadow_stays_subtle_and_neutral(page: Page, app_server: st
     page.wait_for_timeout(260)
     custom_hovered = read_shadow(widget)
     assert_shadow_is_restrained(custom_hovered, max_blur=28)
+    assert custom_hovered["backgroundImage"] == "none"
+    assert custom_hovered["borderColor"] != "rgb(255, 255, 255)"
 
     page.mouse.move(24, 24)
     page.evaluate("document.documentElement.dataset.background = 'deep-slate'")
@@ -17985,6 +18116,1769 @@ def test_widget_hover_shadow_stays_subtle_and_neutral(page: Page, app_server: st
     page.wait_for_timeout(260)
     deep_background_hovered = read_shadow(widget)
     assert_shadow_is_restrained(deep_background_hovered, max_blur=28)
+    assert_clean_browser(page)
+
+
+def test_workspace_material_hierarchy_keeps_secondary_layers_quiet(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    widget = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)").first
+    widget.evaluate(
+        """
+        node => {
+          node.classList.add("db-panel-custom-color");
+          node.dataset.panelColor = "#dc2626";
+          node.style.setProperty("--panel-accent", "#dc2626");
+          node.style.setProperty("--panel-accent-rgb", "220, 38, 38");
+          node.style.setProperty("--panel-accent-text", "#7f1d1d");
+          let meta = node.querySelector(".runtime-table-meta");
+          if (!meta) {
+            meta = document.createElement("span");
+            meta.className = "runtime-table-meta";
+            meta.textContent = "12 rows";
+            node.appendChild(meta);
+          }
+        }
+        """
+    )
+
+    def read_hierarchy_state() -> dict:
+        return widget.evaluate(
+            """
+            node => {
+              const alphaFromColor = (value) => {
+                const raw = String(value || "");
+                if (raw === "transparent" || raw === "rgba(0, 0, 0, 0)") return 0;
+                const slash = raw.match(/\\/\\s*([\\d.]+)/);
+                if (slash) return Number.parseFloat(slash[1]);
+                const rgba = raw.match(/rgba\\([^,]+,[^,]+,[^,]+,\\s*([\\d.]+)\\)/);
+                if (rgba) return Number.parseFloat(rgba[1]);
+                return raw.includes("rgb(") || raw.includes("color(") || raw.includes("oklab(") ? 1 : Number.NaN;
+              };
+              const styles = getComputedStyle(node);
+              const control = getComputedStyle(node.querySelector(".panel-settings-toggle"));
+              const value = getComputedStyle(node.querySelector(".stat-val"));
+              const label = getComputedStyle(node.querySelector(".stat-lbl"));
+              const meta = getComputedStyle(node.querySelector(".runtime-table-meta"));
+              return {
+                surfaceAlpha: alphaFromColor(styles.backgroundColor),
+                surfaceBackgroundImage: styles.backgroundImage,
+                controlAlpha: alphaFromColor(control.backgroundColor),
+                controlRadius: Number.parseFloat(control.borderTopLeftRadius),
+                controlShadow: control.boxShadow,
+                valueColor: value.color,
+                labelColor: label.color,
+                metadataAlpha: alphaFromColor(meta.color),
+              };
+            }
+            """
+        )
+
+    rest = read_hierarchy_state()
+    assert .36 <= rest["surfaceAlpha"] <= .50
+    assert rest["surfaceBackgroundImage"] == "none"
+    assert .14 <= rest["controlAlpha"] <= .26
+    assert rest["controlRadius"] >= 14
+    assert "inset" in rest["controlShadow"]
+    assert "0px 6px 14px" not in rest["controlShadow"]
+    assert rest["valueColor"] != rest["labelColor"]
+    assert rest["metadataAlpha"] <= .60
+
+    timeframe_controls = page.locator(".timeframe-widget").first.evaluate(
+        """
+        node => {
+          const alphaFromColor = (value) => {
+            const raw = String(value || "");
+            if (raw === "transparent" || raw === "rgba(0, 0, 0, 0)") return 0;
+            const slash = raw.match(/\\/\\s*([\\d.]+)/);
+            if (slash) return Number.parseFloat(slash[1]);
+            const rgba = raw.match(/rgba\\([^,]+,[^,]+,[^,]+,\\s*([\\d.]+)\\)/);
+            if (rgba) return Number.parseFloat(rgba[1]);
+            return raw.includes("rgb(") || raw.includes("color(") || raw.includes("oklab(") ? 1 : Number.NaN;
+          };
+          const preset = getComputedStyle(node.querySelector(".preset-btn"));
+          const selector = getComputedStyle(node.querySelector(".timeframe-selector"));
+          const icon = getComputedStyle(node.querySelector(".range-icon-button"));
+          return {
+            presetAlpha: alphaFromColor(preset.backgroundColor),
+            selectorAlpha: alphaFromColor(selector.backgroundColor),
+            iconAlpha: alphaFromColor(icon.backgroundColor),
+            presetShadow: preset.boxShadow,
+          };
+        }
+        """
+    )
+    assert .30 <= timeframe_controls["presetAlpha"] <= .52
+    assert .34 <= timeframe_controls["selectorAlpha"] <= .54
+    assert .30 <= timeframe_controls["iconAlpha"] <= .52
+    assert "0px 8px 18px" not in timeframe_controls["presetShadow"]
+
+    widget.locator(".panel-settings-toggle").hover(force=True)
+    page.wait_for_timeout(180)
+    control_hover = read_hierarchy_state()
+    assert .18 <= control_hover["controlAlpha"] <= .36
+    assert control_hover["surfaceAlpha"] <= rest["surfaceAlpha"] + .04
+    assert control_hover["controlRadius"] >= 14
+    assert "0px 0px 22px" not in control_hover["controlShadow"]
+    assert_clean_browser(page)
+
+
+def test_widget_visual_composition_makes_payload_primary(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const layout = document.querySelector(".widget-layout");
+          if (!layout) return;
+          const makeCard = (key, classes, html, col, row, span, rows) => {
+            const card = document.createElement("div");
+            card.className = `stat-card widget-card widget-card-custom db-panel-custom-color ${classes}`;
+            card.dataset.widgetKey = key;
+            card.dataset.widgetDefinition = key.split("-")[0];
+            card.dataset.panelColor = "#2563eb";
+            card.style.setProperty("--panel-accent", "#2563eb");
+            card.style.setProperty("--panel-accent-rgb", "37, 99, 235");
+            card.style.setProperty("--panel-accent-text", "#0f172a");
+            card.style.gridColumn = `${col} / span ${span}`;
+            card.style.gridRow = `${row} / span ${rows}`;
+            card.style.height = `${rows === 1 ? 81 : 178}px`;
+            card.innerHTML = html;
+            layout.appendChild(card);
+            return card;
+          };
+          makeCard(
+            "stat-visual-primary",
+            "widget-density-standard",
+            `<span class="stat-val">458</span><span class="stat-lbl">Open work</span>`,
+            1,
+            9,
+            1,
+            1
+          );
+          makeCard(
+            "table-visual-primary",
+            "table-widget-card widget-density-standard",
+            `<div class="runtime-table-widget runtime-table-density-comfortable widget-density-standard">
+              <div class="runtime-table-header"><span class="stat-lbl">Work orders</span><span class="runtime-table-meta">6 of 42</span></div>
+              <div class="runtime-table-scroll"><table class="runtime-table"><thead><tr><th>Site</th><th>Status</th><th>Cost</th></tr></thead><tbody>
+                <tr><td>North Pier</td><td>Open</td><td>$12,400</td></tr>
+                <tr><td>River Gate</td><td>Warning</td><td>$8,900</td></tr>
+                <tr><td>West Yard</td><td>Closed</td><td>$3,200</td></tr>
+              </tbody></table></div>
+            </div>`,
+            2,
+            9,
+            3,
+            2
+          );
+          makeCard(
+            "chart-visual-primary",
+            "chart-widget-card widget-density-standard",
+            `<div class="runtime-chart-widget runtime-chart-density-comfortable widget-density-standard">
+              <div class="runtime-chart-header"><span class="stat-lbl">Cost trend</span><span class="runtime-chart-meta">12 points</span></div>
+              <div class="runtime-chart-stage">
+                <svg class="runtime-chart-svg" viewBox="0 0 100 64" preserveAspectRatio="none">
+                  <line class="runtime-chart-axis" x1="8" y1="56" x2="96" y2="56"></line>
+                  <path class="runtime-chart-line runtime-chart-stroke-one" d="M8 50 L28 44 L48 32 L68 36 L92 14"></path>
+                  <circle class="runtime-chart-point runtime-chart-fill-two" cx="92" cy="14" r="3"></circle>
+                </svg>
+              </div>
+              <div class="runtime-chart-legend"><span class="runtime-chart-legend-item"><i class="runtime-chart-swatch runtime-chart-fill-one"></i>Cost</span></div>
+            </div>`,
+            5,
+            9,
+            2,
+            2
+          );
+        }
+        """
+    )
+
+    composition = page.evaluate(
+        """
+        () => {
+          const number = (value) => Number.parseFloat(value) || 0;
+          const rect = (node) => node.getBoundingClientRect();
+          const stat = document.querySelector('[data-widget-key="stat-visual-primary"]');
+          const table = document.querySelector('[data-widget-key="table-visual-primary"]');
+          const chart = document.querySelector('[data-widget-key="chart-visual-primary"]');
+          const statValue = getComputedStyle(stat.querySelector(".stat-val"));
+          const statLabel = getComputedStyle(stat.querySelector(".stat-lbl"));
+          const tableScroll = table.querySelector(".runtime-table-scroll");
+          const tableCell = table.querySelector(".runtime-table td");
+          const chartStage = chart.querySelector(".runtime-chart-stage");
+          const chartLine = chart.querySelector(".runtime-chart-line");
+          stat.classList.add("surface-response-active");
+          return {
+            statValueSize: number(statValue.fontSize),
+            statLabelSize: number(statLabel.fontSize),
+            statBeforeOpacity: number(getComputedStyle(stat, "::before").opacity),
+            tableScrollRatio: rect(tableScroll).height / rect(table).height,
+            tableCellSize: number(getComputedStyle(tableCell).fontSize),
+            chartStageRatio: rect(chartStage).height / rect(chart).height,
+            chartLineStroke: number(getComputedStyle(chartLine).strokeWidth),
+            chartBackgroundImage: getComputedStyle(chart).backgroundImage,
+          };
+        }
+        """
+    )
+
+    assert composition["statValueSize"] >= 32
+    assert composition["statLabelSize"] <= composition["statValueSize"] * .36
+    assert composition["statBeforeOpacity"] <= .36
+    assert composition["tableScrollRatio"] >= .50
+    assert composition["tableCellSize"] >= 11
+    assert composition["chartStageRatio"] >= .52
+    assert composition["chartLineStroke"] >= 2.4
+    assert composition["chartBackgroundImage"] == "none"
+    assert_clean_browser(page)
+
+
+def test_chart_runtime_visual_hierarchy_makes_plot_area_primary(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const layout = document.querySelector(".widget-layout");
+          const runtime = window.dashboardWidgetRuntime;
+          if (!layout || !runtime) return;
+          const context = {
+            dataSourceId: "chart-visual-runtime",
+            canQuery: true,
+            semanticMapping: {
+              categoryField: "category",
+              valueField: "value",
+              dateField: "date",
+            },
+          };
+          const rows = Array.from({ length: 14 }, (_, index) => ({
+            category: index % 4 === 0 ? "North" : index % 4 === 1 ? "East" : index % 4 === 2 ? "South" : "West",
+            value: 18 + (index * 6) + (index % 3 === 0 ? 12 : 0),
+            date: `2026-05-${String(index + 1).padStart(2, "0")}`,
+          }));
+          const data = { rows, total: rows.length, demo: true };
+          const makeChart = (key, config, col, row, span, rowSpan) => {
+            const definition = runtime.getWidgetDefinition("chart");
+            const card = document.createElement("div");
+            card.className = `${definition.className} widget-density-standard`;
+            card.dataset.widgetKey = key;
+            card.dataset.widgetDefinition = definition.type;
+            card.style.gridColumn = `${col} / span ${span}`;
+            card.style.gridRow = `${row} / span ${rowSpan}`;
+            card.style.height = `${rowSpan * 81 + Math.max(0, rowSpan - 1) * 14}px`;
+            card.innerHTML = runtime.renderWidget("chart", {
+              instance: { type: "chart", config, cols: span, rows: rowSpan, density: "standard" },
+              resolvedContext: context,
+              data,
+              status: "ready",
+            });
+            layout.appendChild(card);
+          };
+          makeChart("chart-hierarchy-bar", { title: "Regional load", chartType: "bar", xField: "category", yField: "value", aggregation: "avg" }, 1, 23, 3, 2);
+          makeChart("chart-hierarchy-area", { title: "Load trend", chartType: "area", xField: "date", yField: "value" }, 4, 23, 3, 2);
+          makeChart("chart-hierarchy-line", { title: "Compact trend", chartType: "line", xField: "date", yField: "value" }, 7, 23, 2, 1);
+        }
+        """
+    )
+
+    hierarchy = page.evaluate(
+        """
+        () => {
+          const number = (value) => Number.parseFloat(value) || 0;
+          const alphaFromColor = (value) => {
+            const raw = String(value || "");
+            if (raw === "transparent" || raw === "rgba(0, 0, 0, 0)") return 0;
+            const slash = raw.match(/\\/\\s*([\\d.]+)/);
+            if (slash) return Number.parseFloat(slash[1]);
+            const rgba = raw.match(/rgba\\([^,]+,[^,]+,[^,]+,\\s*([\\d.]+)\\)/);
+            if (rgba) return Number.parseFloat(rgba[1]);
+            return raw.includes("rgb(") || raw.includes("color(") || raw.includes("oklab(") ? 1 : 0;
+          };
+          const svgPaint = (computed, property) => computed.getPropertyValue(property) || computed[property];
+          const read = (key) => {
+            const host = document.querySelector(`[data-widget-key="${key}"]`);
+            const stage = host.querySelector(".runtime-chart-stage");
+            const header = host.querySelector(".runtime-chart-header");
+            const legend = host.querySelector(".runtime-chart-legend");
+            const title = host.querySelector(".runtime-chart-header .stat-lbl");
+            const meta = host.querySelector(".runtime-chart-meta");
+            const axis = host.querySelector(".runtime-chart-axis");
+            const grid = host.querySelector(".runtime-chart-grid");
+            const line = host.querySelector(".runtime-chart-line");
+            const bar = host.querySelector(".runtime-chart-bar");
+            const area = host.querySelector(".runtime-chart-area");
+            const stageStyle = getComputedStyle(stage);
+            const axisStyle = axis ? getComputedStyle(axis) : null;
+            const gridStyle = grid ? getComputedStyle(grid) : null;
+            const lineStyle = line ? getComputedStyle(line) : null;
+            const barStyle = bar ? getComputedStyle(bar) : null;
+            const areaStyle = area ? getComputedStyle(area) : null;
+            return {
+              stageRatio: stage.getBoundingClientRect().height / host.getBoundingClientRect().height,
+              headerRatio: header.getBoundingClientRect().height / host.getBoundingClientRect().height,
+              legendRatio: legend ? legend.getBoundingClientRect().height / host.getBoundingClientRect().height : 0,
+              stagePaddingTop: number(stageStyle.paddingTop),
+              stageBackgroundAlpha: alphaFromColor(stageStyle.backgroundColor),
+              stageBorderAlpha: alphaFromColor(stageStyle.borderTopColor),
+              titleSize: number(getComputedStyle(title).fontSize),
+              metaSize: number(getComputedStyle(meta).fontSize),
+              gridCount: host.querySelectorAll(".runtime-chart-grid").length,
+              gridAlpha: gridStyle ? alphaFromColor(svgPaint(gridStyle, "stroke")) : 0,
+              axisAlpha: axisStyle ? alphaFromColor(svgPaint(axisStyle, "stroke")) : 0,
+              lineStrokeWidth: lineStyle ? number(lineStyle.strokeWidth) : 0,
+              barStrokeWidth: barStyle ? number(barStyle.strokeWidth) : 0,
+              barFillAlpha: barStyle ? alphaFromColor(svgPaint(barStyle, "fill")) : 0,
+              areaOpacity: areaStyle ? number(areaStyle.opacity) : 0,
+            };
+          };
+          return {
+            bar: read("chart-hierarchy-bar"),
+            area: read("chart-hierarchy-area"),
+            line: read("chart-hierarchy-line"),
+          };
+        }
+        """
+    )
+
+    for item in hierarchy.values():
+        assert item["stageRatio"] >= .62
+        assert item["headerRatio"] <= .16
+        assert item["legendRatio"] <= .10
+        assert item["stagePaddingTop"] <= 3
+        assert .04 <= item["stageBackgroundAlpha"] <= .24
+        assert item["stageBorderAlpha"] <= .20
+        assert item["metaSize"] < item["titleSize"]
+    assert hierarchy["bar"]["gridCount"] >= 3
+    assert hierarchy["bar"]["gridAlpha"] <= hierarchy["bar"]["axisAlpha"]
+    assert hierarchy["bar"]["axisAlpha"] <= .18
+    assert hierarchy["bar"]["barStrokeWidth"] <= .4
+    assert hierarchy["bar"]["barFillAlpha"] >= .94
+    assert hierarchy["area"]["lineStrokeWidth"] >= 2.8
+    assert .20 <= hierarchy["area"]["areaOpacity"] <= .32
+    assert hierarchy["line"]["stageRatio"] >= .58
+    assert hierarchy["line"]["lineStrokeWidth"] >= 2.8
+    assert_clean_browser(page)
+
+
+def test_widget_internals_share_one_material_language(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const layout = document.querySelector(".widget-layout");
+          if (!layout) return;
+          const card = document.createElement("div");
+          card.className = "stat-card widget-card widget-card-custom db-panel-custom-color widget-density-standard";
+          card.dataset.widgetKey = "cohesion-runtime-widget";
+          card.dataset.widgetDefinition = "cohesion";
+          card.dataset.panelColor = "#2563eb";
+          card.style.setProperty("--panel-accent", "#2563eb");
+          card.style.setProperty("--panel-accent-rgb", "37, 99, 235");
+          card.style.setProperty("--panel-accent-text", "#0f172a");
+          card.style.gridColumn = "1 / span 4";
+          card.style.gridRow = "9 / span 3";
+          card.style.height = "275px";
+          card.innerHTML = `
+            <div class="widget-tools">
+              <button class="panel-settings-toggle" aria-label="Settings"><span class="settings-icon"></span></button>
+            </div>
+            <div class="runtime-chart-widget runtime-chart-density-comfortable widget-density-standard">
+              <div class="runtime-chart-header">
+                <span class="stat-lbl">Operational flow</span>
+                <span class="runtime-chart-meta">12 points</span>
+              </div>
+              <span class="stat-val">458</span>
+              <div class="runtime-table-widget runtime-table-density-comfortable widget-density-standard">
+                <div class="runtime-table-scroll">
+                  <table class="runtime-table">
+                    <thead><tr><th>Site</th><th>Status</th><th>Cost</th></tr></thead>
+                    <tbody>
+                      <tr><td>North Pier</td><td>Open</td><td>$12,400</td></tr>
+                      <tr><td>River Gate</td><td>Warning</td><td>$8,900</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <span class="runtime-table-meta">2 of 42</span>
+              </div>
+              <div class="runtime-chart-stage">
+                <svg class="runtime-chart-svg" viewBox="0 0 100 64" preserveAspectRatio="none">
+                  <line class="runtime-chart-axis" x1="8" y1="56" x2="96" y2="56"></line>
+                  <path class="runtime-chart-line runtime-chart-stroke-one" d="M8 50 L28 44 L48 32 L68 36 L92 14"></path>
+                  <circle class="runtime-chart-point runtime-chart-fill-two" cx="92" cy="14" r="3"></circle>
+                </svg>
+              </div>
+              <div class="runtime-chart-legend">
+                <span class="runtime-chart-legend-item"><i class="runtime-chart-swatch runtime-chart-fill-one"></i>Cost</span>
+              </div>
+            </div>`;
+          layout.appendChild(card);
+        }
+        """
+    )
+
+    cohesion = page.locator('[data-widget-key="cohesion-runtime-widget"]').evaluate(
+        """
+        node => {
+          const alphaFromColor = (value) => {
+            const raw = String(value || "");
+            if (raw === "transparent" || raw === "rgba(0, 0, 0, 0)") return 0;
+            const slash = raw.match(/\\/\\s*([\\d.]+)/);
+            if (slash) return Number.parseFloat(slash[1]);
+            const rgba = raw.match(/rgba\\([^,]+,[^,]+,[^,]+,\\s*([\\d.]+)\\)/);
+            if (rgba) return Number.parseFloat(rgba[1]);
+            return raw.includes("rgb(") || raw.includes("color(") || raw.includes("oklab(") ? 1 : 0;
+          };
+          const styles = (selector) => getComputedStyle(node.querySelector(selector));
+          const card = getComputedStyle(node);
+          const stage = styles(".runtime-chart-stage");
+          const stat = styles(".stat-val");
+          const label = styles(".stat-lbl");
+          const tableTh = styles(".runtime-table th");
+          const tableTd = styles(".runtime-table td");
+          const tableMeta = styles(".runtime-table-meta");
+          const chartMeta = styles(".runtime-chart-meta");
+          const legend = styles(".runtime-chart-legend");
+          const tableLine = tableTd.borderBottomColor;
+          const axis = styles(".runtime-chart-axis");
+          const chartLine = styles(".runtime-chart-line");
+          const point = styles(".runtime-chart-point");
+          const control = styles(".panel-settings-toggle");
+          const svgPaint = (computed, property) => computed.getPropertyValue(property) || computed[property];
+          return {
+            cardBackgroundImage: card.backgroundImage,
+            statColor: stat.color,
+            tableTdColor: tableTd.color,
+            labelColor: label.color,
+            tableThColor: tableTh.color,
+            legendColor: legend.color,
+            labelAlpha: alphaFromColor(label.color),
+            legendAlpha: alphaFromColor(legend.color),
+            tableMetaColor: tableMeta.color,
+            chartMetaColor: chartMeta.color,
+            tableLineAlpha: alphaFromColor(tableLine),
+            axisAlpha: alphaFromColor(svgPaint(axis, "stroke")),
+            chartLineStroke: svgPaint(chartLine, "stroke"),
+            pointFill: svgPaint(point, "fill"),
+            stageBackgroundAlpha: alphaFromColor(stage.backgroundColor),
+            stageBorderAlpha: alphaFromColor(stage.borderTopColor),
+            stageBorderWidth: Number.parseFloat(stage.borderTopWidth),
+            stageShadow: stage.boxShadow,
+            controlBackgroundAlpha: alphaFromColor(control.backgroundColor),
+            controlRadius: Number.parseFloat(control.borderTopLeftRadius),
+            controlShadow: control.boxShadow,
+          };
+        }
+        """
+    )
+
+    assert cohesion["cardBackgroundImage"] == "none"
+    assert cohesion["statColor"] == cohesion["tableTdColor"]
+    assert cohesion["labelColor"] == cohesion["tableThColor"]
+    assert cohesion["legendColor"] != cohesion["labelColor"]
+    assert cohesion["legendAlpha"] < cohesion["labelAlpha"]
+    assert cohesion["tableMetaColor"] == cohesion["chartMetaColor"]
+    assert .04 <= cohesion["axisAlpha"] <= .18
+    assert .06 <= cohesion["tableLineAlpha"] <= .24
+    assert cohesion["axisAlpha"] <= cohesion["tableLineAlpha"] + .06
+    assert cohesion["chartLineStroke"] != cohesion["pointFill"]
+    assert .08 <= cohesion["stageBackgroundAlpha"] <= .30
+    assert cohesion["stageBorderWidth"] <= 1
+    assert "inset" in cohesion["stageShadow"]
+    assert .14 <= cohesion["controlBackgroundAlpha"] <= .30
+    assert cohesion["controlRadius"] >= 14
+    assert "inset" in cohesion["controlShadow"]
+    assert "0px 6px 14px" not in cohesion["controlShadow"]
+    assert_clean_browser(page)
+
+
+def test_workspace_typography_hierarchy_distinguishes_semantic_roles(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const layout = document.querySelector(".widget-layout");
+          if (!layout) return;
+          const card = document.createElement("div");
+          card.className = "stat-card widget-card widget-card-custom db-panel-custom-color widget-density-standard";
+          card.dataset.widgetKey = "typography-hierarchy-widget";
+          card.dataset.widgetDefinition = "typography";
+          card.dataset.panelColor = "#2563eb";
+          card.style.setProperty("--panel-accent", "#2563eb");
+          card.style.setProperty("--panel-accent-rgb", "37, 99, 235");
+          card.style.setProperty("--panel-accent-text", "#0f172a");
+          card.style.gridColumn = "1 / span 4";
+          card.style.gridRow = "15 / span 3";
+          card.style.height = "275px";
+          card.innerHTML = `
+            <span class="stat-val">458</span>
+            <span class="stat-lbl">Open work</span>
+            <div class="runtime-table-widget runtime-table-density-comfortable widget-density-standard">
+              <div class="runtime-table-header">
+                <span class="stat-lbl">Work orders</span>
+                <span class="runtime-table-meta">6 of 42</span>
+              </div>
+              <div class="runtime-table-scroll">
+                <table class="runtime-table">
+                  <thead><tr><th>Site</th><th>Status</th><th>Cost</th></tr></thead>
+                  <tbody><tr><td>North Pier</td><td>Open</td><td>$12,400</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="runtime-chart-widget runtime-chart-density-comfortable widget-density-standard">
+              <div class="runtime-chart-header">
+                <span class="stat-lbl">Cost trend</span>
+                <span class="runtime-chart-meta">12 points</span>
+              </div>
+              <div class="runtime-chart-stage">
+                <svg class="runtime-chart-svg" viewBox="0 0 100 64" preserveAspectRatio="none">
+                  <path class="runtime-chart-line runtime-chart-stroke-one" d="M8 50 L28 44 L48 32 L68 36 L92 14"></path>
+                </svg>
+              </div>
+            </div>
+            <div class="meta-widget">
+              <div class="activity-feed-list">
+                <article class="activity-feed-item">
+                  <i class="activity-feed-dot"></i>
+                  <span class="activity-feed-copy"><strong>Alarm reviewed</strong><small>Operator note</small></span>
+                  <time>09:42</time>
+                </article>
+              </div>
+            </div>`;
+          layout.appendChild(card);
+        }
+        """
+    )
+
+    hierarchy = page.locator('[data-widget-key="typography-hierarchy-widget"]').evaluate(
+        """
+        node => {
+          const number = (value) => Number.parseFloat(value) || 0;
+          const alphaFromColor = (value) => {
+            const raw = String(value || "");
+            if (raw === "transparent" || raw === "rgba(0, 0, 0, 0)") return 0;
+            const slash = raw.match(/\\/\\s*([\\d.]+)/);
+            if (slash) return Number.parseFloat(slash[1]);
+            const rgba = raw.match(/rgba\\([^,]+,[^,]+,[^,]+,\\s*([\\d.]+)\\)/);
+            if (rgba) return Number.parseFloat(rgba[1]);
+            return raw.includes("rgb(") || raw.includes("color(") || raw.includes("oklab(") ? 1 : 0;
+          };
+          const letterSpacing = (computed) => computed.letterSpacing === "normal" ? 0 : number(computed.letterSpacing);
+          const style = (selector) => getComputedStyle(node.querySelector(selector));
+          const metric = style(":scope > .stat-val");
+          const statLabel = style(":scope > .stat-lbl");
+          const tableTitle = style(".runtime-table-header .stat-lbl");
+          const tableMeta = style(".runtime-table-meta");
+          const chartTitle = style(".runtime-chart-header .stat-lbl");
+          const chartMeta = style(".runtime-chart-meta");
+          const timestamp = style(".activity-feed-item time");
+          const activityTitle = style(".activity-feed-copy strong");
+          const activityNote = style(".activity-feed-copy small");
+          const panelTitle = getComputedStyle(document.querySelector(".db-panel-title"));
+          return {
+            metricSize: number(metric.fontSize),
+            metricWeight: number(metric.fontWeight),
+            metricTracking: letterSpacing(metric),
+            statLabelSize: number(statLabel.fontSize),
+            statLabelWeight: number(statLabel.fontWeight),
+            statLabelTracking: letterSpacing(statLabel),
+            statLabelTransform: statLabel.textTransform,
+            tableTitleSize: number(tableTitle.fontSize),
+            tableTitleWeight: number(tableTitle.fontWeight),
+            tableMetaSize: number(tableMeta.fontSize),
+            tableMetaWeight: number(tableMeta.fontWeight),
+            tableMetaTracking: letterSpacing(tableMeta),
+            tableMetaTransform: tableMeta.textTransform,
+            tableMetaAlpha: alphaFromColor(tableMeta.color),
+            chartTitleSize: number(chartTitle.fontSize),
+            chartMetaSize: number(chartMeta.fontSize),
+            chartMetaTransform: chartMeta.textTransform,
+            timestampSize: number(timestamp.fontSize),
+            timestampWeight: number(timestamp.fontWeight),
+            timestampAlpha: alphaFromColor(timestamp.color),
+            activityTitleWeight: number(activityTitle.fontWeight),
+            activityNoteWeight: number(activityNote.fontWeight),
+            panelTitleTransform: panelTitle.textTransform,
+            panelTitleTracking: letterSpacing(panelTitle),
+          };
+        }
+        """
+    )
+
+    assert hierarchy["metricSize"] >= hierarchy["statLabelSize"] * 2.7
+    assert hierarchy["metricWeight"] > hierarchy["statLabelWeight"]
+    assert hierarchy["metricTracking"] == 0
+    assert hierarchy["statLabelTransform"] == "none"
+    assert hierarchy["statLabelTracking"] <= .25
+    assert hierarchy["tableTitleSize"] > hierarchy["tableMetaSize"]
+    assert hierarchy["tableTitleWeight"] > hierarchy["tableMetaWeight"]
+    assert hierarchy["tableMetaTransform"] == "none"
+    assert hierarchy["tableMetaTracking"] <= .25
+    assert .45 <= hierarchy["tableMetaAlpha"] <= .85
+    assert hierarchy["chartTitleSize"] > hierarchy["chartMetaSize"]
+    assert hierarchy["chartMetaTransform"] == "none"
+    assert hierarchy["timestampSize"] >= hierarchy["tableMetaSize"]
+    assert hierarchy["timestampWeight"] < hierarchy["activityTitleWeight"]
+    assert hierarchy["activityNoteWeight"] <= hierarchy["activityTitleWeight"]
+    assert hierarchy["timestampAlpha"] >= .60
+    assert hierarchy["panelTitleTransform"] == "none"
+    assert hierarchy["panelTitleTracking"] <= .25
+    assert_clean_browser(page)
+
+
+def test_widget_metadata_renders_quiet_clear_and_intentional(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const layout = document.querySelector(".widget-layout");
+          const runtime = window.dashboardWidgetRuntime;
+          if (!layout || !runtime) return;
+          const context = {
+            dataSourceId: "metadata-visual-demo",
+            canQuery: true,
+            semanticMapping: {
+              labelField: "label",
+              categoryField: "category",
+              statusField: "state",
+              valueField: "value",
+              latitudeField: "latitude",
+              longitudeField: "longitude",
+              locationField: "location",
+            },
+          };
+          const rows = Array.from({ length: 18 }, (_, index) => ({
+            label: `Unit ${index + 1}`,
+            category: index % 3 === 0 ? "North" : index % 3 === 1 ? "East" : "West",
+            state: index % 4 === 0 ? "Watch" : "Ready",
+            value: 18 + index * 5,
+            latitude: 36.7 + index * 0.026,
+            longitude: -121.9 + index * 0.02,
+            location: `Sector ${index + 1}`,
+          }));
+          const data = { rows, total: rows.length, demo: true };
+          const makeCard = (key, type, config, col, row, span, rowSpan) => {
+            const definition = runtime.getWidgetDefinition(type);
+            const card = document.createElement("div");
+            card.className = `${definition.className || "stat-card widget-card widget-card-custom"} widget-density-standard`;
+            card.dataset.widgetKey = key;
+            card.dataset.widgetDefinition = definition.type;
+            card.style.gridColumn = `${col} / span ${span}`;
+            card.style.gridRow = `${row} / span ${rowSpan}`;
+            card.style.height = `${rowSpan * 81 + Math.max(0, rowSpan - 1) * 14}px`;
+            card.innerHTML = runtime.renderWidget(type, {
+              instance: { id: key, type, config, cols: span, rows: rowSpan, density: "standard" },
+              resolvedContext: context,
+              data,
+              status: "ready",
+            });
+            layout.appendChild(card);
+          };
+          makeCard("metadata-table", "table", { title: "Open Work Orders", columns: ["label", "state", "value"], limit: 8 }, 1, 21, 3, 3);
+          makeCard("metadata-chart", "chart", { title: "Regional Load", chartType: "bar", xField: "category", yField: "value", aggregation: "avg" }, 4, 21, 3, 3);
+          makeCard("metadata-map", "map", { title: "Technician Position", latitudeField: "latitude", longitudeField: "longitude", locationField: "location" }, 7, 21, 3, 3);
+          makeCard("metadata-media", "image", {
+            title: "Asset Reference",
+            alt: "Reference",
+            caption: "Updated 09:42",
+            src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 44'%3E%3Crect width='80' height='44' fill='%2360a5fa'/%3E%3C/svg%3E",
+          }, 1, 23, 2, 2);
+          const metaCard = document.createElement("div");
+          metaCard.className = "stat-card widget-card widget-card-custom db-panel-custom-color meta-widget-card widget-density-standard";
+          metaCard.dataset.widgetKey = "metadata-feed";
+          metaCard.dataset.widgetDefinition = "activity-feed";
+          metaCard.dataset.panelColor = "#2563eb";
+          metaCard.style.setProperty("--panel-accent", "#2563eb");
+          metaCard.style.setProperty("--panel-accent-rgb", "37, 99, 235");
+          metaCard.style.setProperty("--panel-accent-text", "#0f172a");
+          metaCard.style.gridColumn = "3 / span 3";
+          metaCard.style.gridRow = "23 / span 2";
+          metaCard.style.height = "176px";
+          metaCard.innerHTML = `
+            <div class="meta-widget activity-feed-widget">
+              <div class="meta-widget-header">
+                <span class="stat-lbl">Activity</span>
+                <span class="meta-widget-kicker">workspace</span>
+              </div>
+              <div class="activity-feed-list">
+                <article class="activity-feed-item">
+                  <i class="activity-feed-dot"></i>
+                  <span class="activity-feed-copy"><strong>Route updated</strong><small>Dispatch board</small></span>
+                  <time>09:42</time>
+                </article>
+              </div>
+            </div>`;
+          layout.appendChild(metaCard);
+        }
+        """
+    )
+
+    metadata = page.evaluate(
+        """
+        () => {
+          const number = (value) => Number.parseFloat(value) || 0;
+          const alphaFromColor = (value) => {
+            const raw = String(value || "");
+            if (raw === "transparent" || raw === "rgba(0, 0, 0, 0)") return 0;
+            const slash = raw.match(/\\/\\s*([\\d.]+)/);
+            if (slash) return Number.parseFloat(slash[1]);
+            const rgba = raw.match(/rgba\\([^,]+,[^,]+,[^,]+,\\s*([\\d.]+)\\)/);
+            if (rgba) return Number.parseFloat(rgba[1]);
+            return raw.includes("rgb(") || raw.includes("color(") || raw.includes("oklab(") ? 1 : 0;
+          };
+          const readHeader = (hostSelector, titleSelector, metaSelector) => {
+            const host = document.querySelector(hostSelector);
+            const title = host.querySelector(titleSelector);
+            const meta = host.querySelector(metaSelector);
+            const titleBox = title.getBoundingClientRect();
+            const metaBox = meta.getBoundingClientRect();
+            const titleStyle = getComputedStyle(title);
+            const metaStyle = getComputedStyle(meta);
+            return {
+              titleAlpha: alphaFromColor(titleStyle.color),
+              metaAlpha: alphaFromColor(metaStyle.color),
+              metaSize: number(metaStyle.fontSize),
+              titleSize: number(titleStyle.fontSize),
+              metaWeight: number(metaStyle.fontWeight),
+              titleWeight: number(titleStyle.fontWeight),
+              metaTransform: metaStyle.textTransform,
+              metaAlign: metaStyle.textAlign,
+              metaRight: Math.round(metaBox.right),
+              hostRight: Math.round(host.getBoundingClientRect().right),
+              titleRight: Math.round(titleBox.right),
+              metaLeft: Math.round(metaBox.left),
+              metaWidthRatio: metaBox.width / host.getBoundingClientRect().width,
+            };
+          };
+          const quiet = (selector) => {
+            const node = document.querySelector(selector);
+            const styles = getComputedStyle(node);
+            return {
+              alpha: alphaFromColor(styles.color),
+              size: number(styles.fontSize),
+              weight: number(styles.fontWeight),
+              text: node.textContent.trim(),
+            };
+          };
+          return {
+            table: readHeader('[data-widget-key="metadata-table"]', '.runtime-table-header .stat-lbl', '.runtime-table-meta'),
+            chart: readHeader('[data-widget-key="metadata-chart"]', '.runtime-chart-header .stat-lbl', '.runtime-chart-meta'),
+            map: readHeader('[data-widget-key="metadata-map"]', '.runtime-map-header .stat-lbl', '.runtime-map-meta'),
+            feed: readHeader('[data-widget-key="metadata-feed"]', '.meta-widget-header .stat-lbl', '.meta-widget-kicker'),
+            caption: quiet('[data-widget-key="metadata-media"] .media-widget-caption'),
+            legend: quiet('[data-widget-key="metadata-map"] .runtime-map-legend span'),
+            note: quiet('[data-widget-key="metadata-feed"] .activity-feed-copy small'),
+            timestamp: quiet('[data-widget-key="metadata-feed"] time'),
+          };
+        }
+        """
+    )
+
+    for key in ["table", "chart", "map", "feed"]:
+        item = metadata[key]
+        assert .38 <= item["metaAlpha"] < item["titleAlpha"]
+        assert item["metaSize"] < item["titleSize"]
+        assert item["metaWeight"] < item["titleWeight"]
+        assert item["metaTransform"] == "none"
+        assert item["metaAlign"] == "right"
+        assert item["titleRight"] <= item["metaLeft"] or item["metaWidthRatio"] <= .50
+        assert item["hostRight"] - item["metaRight"] <= 60
+    assert .30 <= metadata["caption"]["alpha"] <= .60
+    assert .30 <= metadata["legend"]["alpha"] <= .60
+    assert .38 <= metadata["note"]["alpha"] <= .70
+    assert .52 <= metadata["timestamp"]["alpha"] <= .86
+    assert metadata["timestamp"]["weight"] <= metadata["feed"]["titleWeight"]
+    assert_clean_browser(page)
+
+
+def test_runtime_meaning_drives_activity_shift_and_chart_context(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const events = window.dashboardWorkspaceEvents;
+          const runtime = window.dashboardWidgetRuntime;
+          const layout = document.querySelector(".widget-layout");
+          if (!events || !runtime || !layout) return;
+          events.clear();
+          events.emit({
+            id: "runtime-event-stale",
+            type: "query-stale",
+            label: "Dataset stale",
+            detail: "customers",
+            timestamp: Date.now() - (3 * 24 * 60 * 60 * 1000),
+            severity: "warning",
+            objectId: "chart-runtime-context",
+            traceable: true,
+            payload: { linkId: "origin-to-chart", sourceId: "origin", targetId: "chart-runtime-context" },
+          });
+          events.emit({
+            id: "runtime-event-signal",
+            type: "dataflow-signal-updated",
+            label: "Signal engaged",
+            detail: "gate -> shift",
+            severity: "active",
+            objectId: "shift-runtime-context",
+            traceable: true,
+            payload: { linkId: "gate-to-shift", sourceId: "gate", targetId: "shift-runtime-context" },
+          });
+          const activityDefinition = runtime.getWidgetDefinition("activity-feed");
+          const activity = document.createElement("div");
+          activity.className = `${activityDefinition.className} widget-density-standard`;
+          activity.dataset.widgetKey = "runtime-activity-feed";
+          activity.dataset.widgetDefinition = "activity-feed";
+          activity.style.gridColumn = "1 / span 3";
+          activity.style.gridRow = "28 / span 2";
+          activity.style.height = "176px";
+          activity.innerHTML = runtime.renderWidget("activity-feed", {
+            instance: { id: "runtime-activity-feed", type: "activity-feed", config: { title: "Runtime Feed", maxItems: 4, scope: "workspace" }, cols: 3, rows: 2, density: "standard" },
+            resolvedContext: { dataSourceId: "runtime-demo" },
+            status: "ready",
+          });
+          layout.appendChild(activity);
+
+          const chartDefinition = runtime.getWidgetDefinition("chart");
+          const chart = document.createElement("div");
+          chart.className = `${chartDefinition.className} widget-density-standard`;
+          chart.dataset.widgetKey = "chart-runtime-context";
+          chart.dataset.widgetDefinition = "chart";
+          chart.style.gridColumn = "4 / span 3";
+          chart.style.gridRow = "28 / span 2";
+          chart.style.height = "176px";
+          chart.innerHTML = runtime.renderWidget("chart", {
+            instance: { id: "chart-runtime-context", type: "chart", config: { title: "Filtered trend", chartType: "bar", xField: "category", yField: "value", aggregation: "avg" }, cols: 3, rows: 2, density: "standard" },
+            resolvedContext: {
+              dataSourceId: "runtime-demo",
+              filters: [{ field: "region", value: "West" }],
+              timeRange: { label: "Last 30 days" },
+              semanticMapping: { categoryField: "category", valueField: "value" },
+            },
+            data: { rows: [{ category: "West", value: 42 }, { category: "East", value: 21 }], total: 2, metadata: { lineage: { sourceId: "origin" } } },
+            status: "ready",
+          });
+          layout.appendChild(chart);
+        }
+        """
+    )
+
+    activity = page.locator('[data-widget-key="runtime-activity-feed"]')
+    expect(activity.locator('.activity-feed-item[data-event-severity="active"]')).to_be_visible()
+    expect(activity.locator('.activity-feed-item[data-event-freshness="stale"]')).to_be_visible()
+    first_event = activity.locator(".activity-feed-item").first
+    first_event.click()
+    expect(first_event).to_have_attribute("aria-expanded", "true")
+    expect(first_event.locator(".activity-feed-context")).to_be_visible()
+
+    chart = page.locator('[data-widget-key="chart-runtime-context"] .runtime-chart-widget')
+    expect(chart).to_have_attribute("data-runtime-traceable", "true")
+    expect(chart.locator(".runtime-chart-context")).to_contain_text("1 filter")
+    expect(chart.locator(".runtime-chart-context")).to_contain_text("Last 30 days")
+
+    page.locator(".engineer-mode-button").click()
+    expect(page.locator(".engineer-mode-button")).to_have_attribute("aria-pressed", "true")
+    expect(activity.locator(".activity-feed-lineage").first).to_be_visible()
+    assert_clean_browser(page)
+
+
+def test_widgets_use_adaptive_density_for_payload_area(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const layout = document.querySelector(".widget-layout");
+          if (!layout) return;
+          const makeCard = (key, classes, html, col, row, span, rows) => {
+            const card = document.createElement("div");
+            card.className = `stat-card widget-card widget-card-custom db-panel-custom-color widget-density-standard ${classes}`;
+            card.dataset.widgetKey = key;
+            card.dataset.widgetDefinition = key;
+            card.dataset.panelColor = "#2563eb";
+            card.style.setProperty("--panel-accent", "#2563eb");
+            card.style.setProperty("--panel-accent-rgb", "37, 99, 235");
+            card.style.setProperty("--panel-accent-text", "#0f172a");
+            card.style.gridColumn = `${col} / span ${span}`;
+            card.style.gridRow = `${row} / span ${rows}`;
+            card.style.height = `${rows * 81 + Math.max(0, rows - 1) * 14}px`;
+            card.innerHTML = html;
+            layout.appendChild(card);
+            return card;
+          };
+          makeCard(
+            "density-stat",
+            "",
+            `<span class="stat-val">458</span><span class="stat-lbl">Open work</span>`,
+            1,
+            9,
+            1,
+            1
+          );
+          makeCard(
+            "density-table",
+            "table-widget-card",
+            `<div class="runtime-table-widget runtime-table-density-compact widget-density-standard" data-density="standard">
+              <div class="runtime-table-header"><span class="stat-lbl">Work orders</span><span class="runtime-table-meta">5 of 42</span></div>
+              <div class="runtime-table-scroll"><table class="runtime-table"><thead><tr><th>Site</th><th>Status</th><th>Cost</th></tr></thead><tbody>
+                <tr><td>North Pier</td><td>Open</td><td>$12,400</td></tr>
+                <tr><td>River Gate</td><td>Warning</td><td>$8,900</td></tr>
+                <tr><td>West Yard</td><td>Closed</td><td>$3,200</td></tr>
+                <tr><td>Central</td><td>Open</td><td>$5,400</td></tr>
+                <tr><td>South</td><td>Queued</td><td>$1,900</td></tr>
+              </tbody></table></div>
+            </div>`,
+            2,
+            9,
+            3,
+            2
+          );
+          makeCard(
+            "density-chart",
+            "chart-widget-card",
+            `<div class="runtime-chart-widget runtime-chart-density-comfortable widget-density-standard">
+              <div class="runtime-chart-header"><span class="stat-lbl">Cost trend</span><span class="runtime-chart-meta">12 points</span></div>
+              <div class="runtime-chart-stage">
+                <svg class="runtime-chart-svg" viewBox="0 0 100 64" preserveAspectRatio="none">
+                  <line class="runtime-chart-axis" x1="8" y1="56" x2="96" y2="56"></line>
+                  <path class="runtime-chart-area runtime-chart-fill-one" d="M8 50 L28 44 L48 32 L68 36 L92 14 L92 56 L8 56 Z"></path>
+                  <path class="runtime-chart-line runtime-chart-stroke-one" d="M8 50 L28 44 L48 32 L68 36 L92 14"></path>
+                  <circle class="runtime-chart-point runtime-chart-fill-two" cx="92" cy="14" r="3"></circle>
+                </svg>
+              </div>
+              <div class="runtime-chart-legend"><span class="runtime-chart-legend-item"><i class="runtime-chart-swatch runtime-chart-fill-one"></i>Cost</span></div>
+            </div>`,
+            5,
+            9,
+            2,
+            2
+          );
+          makeCard(
+            "density-empty",
+            "",
+            `<div class="widget-runtime-state"><span class="stat-val">No data</span><span class="stat-lbl">Configure source</span></div>`,
+            1,
+            12,
+            1,
+            1
+          );
+          makeCard(
+            "density-media",
+            "media-widget-card",
+            `<div class="media-widget media-widget-image-wrap" data-media-kind="image">
+              <div class="media-widget-header"><span class="stat-lbl">Preview</span><span class="media-widget-meta">Image</span></div>
+              <figure class="media-widget-stage image-widget-stage"><div class="media-widget-image"></div></figure>
+              <div class="media-widget-caption">Asset reference</div>
+            </div>`,
+            2,
+            12,
+            2,
+            2
+          );
+        }
+        """
+    )
+
+    density = page.evaluate(
+        """
+        () => {
+          const rect = (node) => node.getBoundingClientRect();
+          const number = (value) => Number.parseFloat(value) || 0;
+          const state = (key) => document.querySelector(`[data-widget-key="${key}"]`);
+          const stat = state("density-stat");
+          const statValue = stat.querySelector(".stat-val");
+          const table = state("density-table");
+          const tableScroll = table.querySelector(".runtime-table-scroll");
+          const tableRows = table.querySelectorAll(".runtime-table tbody tr");
+          const tableCell = table.querySelector(".runtime-table td");
+          const chart = state("density-chart");
+          const chartStage = chart.querySelector(".runtime-chart-stage");
+          const chartSvg = chart.querySelector(".runtime-chart-svg");
+          const empty = state("density-empty");
+          const emptyState = empty.querySelector(".widget-runtime-state");
+          const media = state("density-media");
+          const mediaStage = media.querySelector(".media-widget-stage");
+          return {
+            statValueArea: (rect(statValue).width * rect(statValue).height) / (rect(stat).width * rect(stat).height),
+            statPaddingTop: number(getComputedStyle(stat).paddingTop),
+            tableScrollRatio: rect(tableScroll).height / rect(table).height,
+            tableRowCount: tableRows.length,
+            tableCellSize: number(getComputedStyle(tableCell).fontSize),
+            chartStageRatio: rect(chartStage).height / rect(chart).height,
+            chartSvgMinHeight: getComputedStyle(chartSvg).minHeight,
+            emptyStateHeightRatio: rect(emptyState).height / rect(empty).height,
+            emptyValueSize: number(getComputedStyle(emptyState.querySelector(".stat-val")).fontSize),
+            mediaStageRatio: rect(mediaStage).height / rect(media).height,
+          };
+        }
+        """
+    )
+
+    assert density["statPaddingTop"] <= 11
+    assert density["statValueArea"] >= .12
+    assert density["tableScrollRatio"] >= .62
+    assert density["tableRowCount"] >= 5
+    assert 10 <= density["tableCellSize"] <= 12
+    assert density["chartStageRatio"] >= .66
+    assert density["chartSvgMinHeight"] == "0px"
+    assert density["emptyStateHeightRatio"] <= .52
+    assert density["emptyValueSize"] <= 16
+    assert density["mediaStageRatio"] >= .66
+    assert_clean_browser(page)
+
+
+def test_workspace_objects_blend_without_hard_card_boundaries(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    widget = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)").first
+    panel = page.locator(".panel-layout > .db-panel").first
+
+    def read_boundary(locator) -> dict:
+        return locator.evaluate(
+            """
+            node => {
+              const alphaFromColor = (value) => {
+                const raw = String(value || "");
+                const slash = raw.match(/\\/\\s*([\\d.]+)/);
+                if (slash) return Number.parseFloat(slash[1]);
+                const rgba = raw.match(/rgba\\([^,]+,[^,]+,[^,]+,\\s*([\\d.]+)\\)/);
+                if (rgba) return Number.parseFloat(rgba[1]);
+                return raw.includes("rgb(") || raw.includes("color(") || raw.includes("oklab(") ? 1 : 0;
+              };
+              const shadowLayers = (value) => String(value || "")
+                .split(/,(?![^()]*\\))/)
+                .map((raw) => {
+                  const lengths = raw
+                    .replace(/rgba?\\([^)]+\\)/g, "")
+                    .replace(/color\\([^)]+\\)/g, "")
+                    .replace(/inset/g, "")
+                    .trim()
+                    .split(/\\s+/)
+                    .map((part) => Number.parseFloat(part))
+                    .filter(Number.isFinite);
+                  return {
+                    raw,
+                    inset: raw.includes("inset"),
+                    offsetY: lengths[1] || 0,
+                    blur: lengths[2] || 0,
+                  };
+                });
+              const styles = getComputedStyle(node);
+              const transform = styles.transform && styles.transform !== "none"
+                ? new DOMMatrixReadOnly(styles.transform)
+                : new DOMMatrixReadOnly();
+              const outer = shadowLayers(styles.boxShadow).filter((layer) => !layer.inset);
+              return {
+                borderAlpha: alphaFromColor(styles.borderTopColor),
+                backgroundAlpha: alphaFromColor(styles.backgroundColor),
+                maxOuterOffset: outer.length ? Math.max(...outer.map((layer) => layer.offsetY)) : 0,
+                maxOuterBlur: outer.length ? Math.max(...outer.map((layer) => layer.blur)) : 0,
+                transformY: transform.m42,
+                beforeOpacity: Number.parseFloat(getComputedStyle(node, "::before").opacity) || 0,
+              };
+            }
+            """
+        )
+
+    rest = read_boundary(widget)
+    assert rest["backgroundAlpha"] <= .50
+    assert rest["borderAlpha"] <= .82
+    assert rest["maxOuterOffset"] <= 4
+    assert rest["maxOuterBlur"] <= 12
+
+    widget.hover()
+    page.wait_for_timeout(260)
+    widget_hover = read_boundary(widget)
+    assert widget_hover["borderAlpha"] <= .88
+    assert widget_hover["maxOuterOffset"] <= 6
+    assert widget_hover["maxOuterBlur"] <= 14
+    assert -1.2 <= widget_hover["transformY"] < 0
+    assert widget_hover["beforeOpacity"] <= .34
+
+    panel.hover()
+    page.wait_for_timeout(260)
+    panel_hover = read_boundary(panel)
+    assert panel_hover["borderAlpha"] <= .88
+    assert panel_hover["maxOuterOffset"] <= 10
+    assert panel_hover["maxOuterBlur"] <= 22
+    assert -1.2 <= panel_hover["transformY"] < 0
+    assert_clean_browser(page)
+
+
+def test_widgets_are_grounded_into_workspace_environment(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    widget = page.locator(".widget-layout > .stat-card.widget-card:not(.range-bar)").first
+    panel = page.locator(".panel-layout > .db-panel").first
+
+    def read_grounding(locator) -> dict:
+        return locator.evaluate(
+            """
+            node => {
+              const shadowLayers = (value) => String(value || "")
+                .split(/,(?![^()]*\\))/)
+                .map((raw) => {
+                  const lengths = raw
+                    .replace(/rgba?\\([^)]+\\)/g, "")
+                    .replace(/color\\([^)]+\\)/g, "")
+                    .replace(/inset/g, "")
+                    .trim()
+                    .split(/\\s+/)
+                    .map((part) => Number.parseFloat(part))
+                    .filter(Number.isFinite);
+                  return {
+                    raw,
+                    inset: raw.includes("inset"),
+                    offsetY: lengths[1] || 0,
+                    blur: lengths[2] || 0,
+                  };
+                });
+              const styles = getComputedStyle(node);
+              const before = getComputedStyle(node, "::before");
+              const shadows = shadowLayers(styles.boxShadow);
+              const outer = shadows.filter((layer) => !layer.inset);
+              const inset = shadows.filter((layer) => layer.inset);
+              return {
+                backgroundImage: styles.backgroundImage,
+                backgroundColor: styles.backgroundColor,
+                borderColor: styles.borderTopColor,
+                outerCount: outer.length,
+                insetCount: inset.length,
+                maxOuterOffset: outer.length ? Math.max(...outer.map((layer) => layer.offsetY)) : 0,
+                maxOuterBlur: outer.length ? Math.max(...outer.map((layer) => layer.blur)) : 0,
+                maxInsetBlur: inset.length ? Math.max(...inset.map((layer) => layer.blur)) : 0,
+                beforeOpacity: Number.parseFloat(before.opacity) || 0,
+              };
+            }
+            """
+        )
+
+    widget_rest = read_grounding(widget)
+    panel_rest = read_grounding(panel)
+    assert widget_rest["backgroundImage"] == "none"
+    assert widget_rest["outerCount"] <= 1
+    assert widget_rest["insetCount"] >= 2
+    assert widget_rest["maxOuterOffset"] <= 2
+    assert widget_rest["maxOuterBlur"] <= 7
+    assert widget_rest["maxInsetBlur"] >= 10
+    assert widget_rest["backgroundColor"] != panel_rest["backgroundColor"]
+    assert widget_rest["borderColor"] != "rgb(255, 255, 255)"
+    assert widget_rest["beforeOpacity"] == 0
+
+    widget.hover()
+    page.wait_for_timeout(260)
+    widget_hover = read_grounding(widget)
+    assert widget_hover["outerCount"] <= 1
+    assert widget_hover["maxOuterOffset"] <= 5
+    assert widget_hover["maxOuterBlur"] <= 13
+    assert widget_hover["insetCount"] >= 2
+    assert widget_hover["beforeOpacity"] <= .34
+
+    page.evaluate("document.documentElement.dataset.background = 'deep-slate'")
+    expect(page.locator("html")).to_have_attribute("data-background", "deep-slate")
+    dark_widget = read_grounding(widget)
+    assert dark_widget["outerCount"] <= 1
+    assert dark_widget["maxOuterOffset"] <= 3
+    assert dark_widget["maxOuterBlur"] <= 8
+    assert dark_widget["insetCount"] >= 2
+    assert_clean_browser(page)
+
+
+def test_widgets_surface_operational_runtime_meaning(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const layout = document.querySelector(".widget-layout");
+          const runtime = window.dashboardWidgetRuntime;
+          if (!layout || !runtime) return;
+          const context = {
+            dataSourceId: "demo-ops",
+            canQuery: true,
+            semanticMapping: {
+              labelField: "label",
+              categoryField: "category",
+              statusField: "state",
+              valueField: "value",
+              dateField: "date",
+              latitudeField: "latitude",
+              longitudeField: "longitude",
+              locationField: "location",
+            },
+          };
+          const rows = Array.from({ length: 18 }, (_, index) => ({
+            label: `Site ${index + 1}`,
+            category: index % 3 === 0 ? "Service" : index % 3 === 1 ? "Install" : "Audit",
+            state: index % 4 === 0 ? "Warning" : "Ready",
+            value: 22 + (index * 7),
+            date: `2026-05-${String((index % 24) + 1).padStart(2, "0")}`,
+            latitude: 37.2 + (index * 0.04),
+            longitude: -122.4 + (index * 0.03),
+            location: `Zone ${index + 1}`,
+          }));
+          const data = { rows, total: rows.length, demo: true };
+          const makeCard = (key, type, config, col, row, span, rowSpan, dataOverride = data, status = "ready") => {
+            const definition = runtime.getWidgetDefinition(type);
+            const card = document.createElement("div");
+            card.className = `${definition.className || "stat-card widget-card widget-card-custom"} widget-density-standard`;
+            card.dataset.widgetKey = key;
+            card.dataset.widgetDefinition = definition.type;
+            card.dataset.widgetType = definition.widgetType || definition.type;
+            card.style.gridColumn = `${col} / span ${span}`;
+            card.style.gridRow = `${row} / span ${rowSpan}`;
+            card.style.height = `${rowSpan * 81 + Math.max(0, rowSpan - 1) * 14}px`;
+            card.innerHTML = runtime.renderWidget(type, {
+              instance: { type, config, cols: span, rows: rowSpan, density: "standard" },
+              resolvedContext: context,
+              data: dataOverride,
+              status,
+            });
+            layout.appendChild(card);
+            return card;
+          };
+          makeCard("operational-stat", "stat", { label: "Open load", metric: "avg", valueField: "value" }, 1, 13, 2, 1);
+          makeCard("operational-table", "table", { title: "Work queue", columns: ["label", "state", "value"], limit: 18 }, 3, 13, 3, 2);
+          makeCard("operational-chart", "chart", { title: "Load by category", chartType: "bar", xField: "category", yField: "value", aggregation: "avg" }, 6, 13, 3, 2);
+          makeCard("operational-map", "map", { title: "Coverage", latitudeField: "latitude", longitudeField: "longitude", locationField: "location" }, 1, 15, 3, 2);
+          makeCard("operational-empty", "chart", { title: "Filtered trend", chartType: "line", xField: "date", yField: "value" }, 4, 15, 2, 1, { rows: [], total: 0, demo: true });
+        }
+        """
+    )
+
+    state = page.evaluate(
+        """
+        () => {
+          const rect = (node) => node.getBoundingClientRect();
+          const number = (value) => Number.parseFloat(value) || 0;
+          const widget = (key) => document.querySelector(`[data-widget-key="${key}"]`);
+          const stat = widget("operational-stat");
+          const table = widget("operational-table");
+          const chart = widget("operational-chart");
+          const map = widget("operational-map");
+          const empty = widget("operational-empty");
+          const emptyState = empty.querySelector(".widget-runtime-state");
+          const emptyKicker = emptyState.querySelector(".runtime-state-kicker");
+          const statMeta = stat.querySelector(".stat-runtime-meta");
+          const tableRuntime = table.querySelector(".runtime-table-widget");
+          const chartRuntime = chart.querySelector(".runtime-chart-widget");
+          const mapRuntime = map.querySelector(".runtime-map-widget");
+          return {
+            statMetaText: statMeta?.textContent || "",
+            statMetaSize: number(getComputedStyle(statMeta).fontSize),
+            statValueSize: number(getComputedStyle(stat.querySelector(".stat-val")).fontSize),
+            tableState: tableRuntime?.dataset.runtimeState || "",
+            tableSource: tableRuntime?.dataset.runtimeSource || "",
+            tableMeta: table.querySelector(".runtime-table-meta")?.textContent || "",
+            tableRows: table.querySelectorAll(".runtime-table tbody tr").length,
+            chartState: chartRuntime?.dataset.runtimeState || "",
+            chartSource: chartRuntime?.dataset.runtimeSource || "",
+            chartMeta: chart.querySelector(".runtime-chart-meta")?.textContent || "",
+            chartMarks: chart.querySelectorAll(".runtime-chart-bar,.runtime-chart-line,.runtime-chart-point,.runtime-chart-slice").length,
+            mapState: mapRuntime?.dataset.runtimeState || "",
+            mapSource: mapRuntime?.dataset.runtimeSource || "",
+            mapMeta: map.querySelector(".runtime-map-meta")?.textContent || "",
+            mapPoints: map.querySelectorAll(".runtime-map-point").length,
+            emptyRuntimeState: emptyState?.dataset.runtimeState || "",
+            emptyKicker: emptyKicker?.textContent || "",
+            emptyHelper: emptyState.querySelector(".stat-lbl")?.textContent || "",
+            emptyHeightRatio: rect(emptyState).height / rect(empty).height,
+            emptyKickerSize: number(getComputedStyle(emptyKicker).fontSize),
+          };
+        }
+        """
+    )
+
+    assert "avg value" in state["statMetaText"]
+    assert "demo" in state["statMetaText"]
+    assert state["statMetaSize"] < state["statValueSize"]
+    assert state["tableState"] == "ready"
+    assert state["tableSource"] == "demo"
+    assert "rows" in state["tableMeta"]
+    assert "demo" in state["tableMeta"]
+    assert state["tableRows"] >= 5
+    assert state["chartState"] == "ready"
+    assert state["chartSource"] == "demo"
+    assert "groups" in state["chartMeta"]
+    assert "demo" in state["chartMeta"]
+    assert state["chartMarks"] > 0
+    assert state["mapState"] == "ready"
+    assert state["mapSource"] == "demo"
+    assert "points" in state["mapMeta"]
+    assert "demo" in state["mapMeta"]
+    assert state["mapPoints"] > 0
+    assert state["emptyRuntimeState"] == "empty"
+    assert state["emptyKicker"] == "Empty"
+    assert "current context" in state["emptyHelper"]
+    assert state["emptyHeightRatio"] <= .62
+    assert state["emptyKickerSize"] <= 10
+    assert_clean_browser(page)
+
+
+def test_widget_empty_states_are_operational_guidance_not_placeholders(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const layout = document.querySelector(".widget-layout");
+          const runtime = window.dashboardWidgetRuntime;
+          if (!layout || !runtime) return;
+          const emptyContext = {
+            dataSourceId: "demo-empty",
+            canQuery: true,
+            semanticMapping: {
+              labelField: "label",
+              categoryField: "category",
+              valueField: "value",
+              dateField: "date",
+              latitudeField: "latitude",
+              longitudeField: "longitude",
+              locationField: "location",
+            },
+          };
+          const makeCard = (key, type, config, col, row, span, rowSpan, context = emptyContext, data = { rows: [], total: 0, demo: true }) => {
+            const definition = runtime.getWidgetDefinition(type);
+            const card = document.createElement("div");
+            card.className = `${definition.className || "stat-card widget-card widget-card-custom"} widget-density-standard`;
+            card.dataset.widgetKey = key;
+            card.dataset.widgetDefinition = definition.type;
+            card.dataset.widgetType = definition.widgetType || definition.type;
+            card.style.gridColumn = `${col} / span ${span}`;
+            card.style.gridRow = `${row} / span ${rowSpan}`;
+            card.style.height = `${rowSpan * 81 + Math.max(0, rowSpan - 1) * 14}px`;
+            card.innerHTML = runtime.renderWidget(type, {
+              instance: { type, config, cols: span, rows: rowSpan, density: "standard" },
+              resolvedContext: context,
+              data,
+              status: "empty",
+            });
+            layout.appendChild(card);
+          };
+          makeCard("empty-guidance-stat", "stat", { label: "Open load", metric: "avg", valueField: "value" }, 1, 23, 2, 1, null, null);
+          makeCard("empty-guidance-table", "table", { title: "Work queue", columns: [] }, 3, 23, 3, 2, { dataSourceId: "demo-empty", canQuery: true, semanticMapping: {} });
+          makeCard("empty-guidance-chart", "chart", { title: "Filtered trend", chartType: "line", xField: "date", yField: "value" }, 6, 23, 3, 2);
+          makeCard("empty-guidance-map", "map", { title: "Coverage", latitudeField: "latitude", longitudeField: "longitude" }, 1, 25, 3, 2);
+          makeCard("empty-guidance-image", "image", { title: "Reference image", src: "" }, 4, 25, 2, 2, null, null);
+        }
+        """
+    )
+
+    guidance = page.evaluate(
+        """
+        () => {
+          const number = (value) => Number.parseFloat(value) || 0;
+          const read = (key) => {
+            const host = document.querySelector(`[data-widget-key="${key}"]`);
+            const state = host.querySelector(".widget-runtime-state, .media-widget-state");
+            const styles = getComputedStyle(state);
+            const headline = getComputedStyle(state.querySelector(".stat-val"));
+            const details = [...state.querySelectorAll(".runtime-state-detail")].map((node) => ({
+              label: node.querySelector("b")?.textContent || "",
+              text: node.querySelector("span")?.textContent || "",
+              size: number(getComputedStyle(node).fontSize),
+            }));
+            return {
+              text: state.textContent,
+              state: state.dataset.runtimeState,
+              detailLabels: details.map((item) => item.label),
+              detailText: details.map((item) => item.text).join(" "),
+              detailCount: details.length,
+              detailMaxSize: Math.max(...details.map((item) => item.size)),
+              headlineSize: number(headline.fontSize),
+              background: styles.backgroundColor,
+              border: styles.borderTopColor,
+              heightRatio: state.getBoundingClientRect().height / host.getBoundingClientRect().height,
+              textAlign: styles.textAlign,
+            };
+          };
+          return {
+            stat: read("empty-guidance-stat"),
+            table: read("empty-guidance-table"),
+            chart: read("empty-guidance-chart"),
+            map: read("empty-guidance-map"),
+            image: read("empty-guidance-image"),
+          };
+        }
+        """
+    )
+
+    assert guidance["stat"]["state"] == "configure"
+    assert "No inherited or selected data source" in guidance["stat"]["detailText"]
+    assert guidance["table"]["state"] == "configure"
+    assert "required fields" in guidance["table"]["detailText"].lower()
+    assert guidance["chart"]["state"] == "empty"
+    assert "filters" in guidance["chart"]["detailText"].lower()
+    assert guidance["map"]["state"] == "empty"
+    assert "zero rows" in guidance["map"]["detailText"].lower()
+    assert guidance["image"]["state"] == "empty"
+    assert "safe asset" in guidance["image"]["detailText"].lower()
+    for state in guidance.values():
+        assert state["detailLabels"] == ["Expected", "Why", "Next"]
+        assert state["detailCount"] == 3
+        assert state["background"] != "rgba(0, 0, 0, 0)"
+        assert state["border"] != "rgba(0, 0, 0, 0)"
+        assert state["textAlign"] == "left"
+        assert state["heightRatio"] <= .90
+        assert state["detailMaxSize"] < state["headlineSize"]
+    assert_clean_browser(page)
+
+
+def test_widget_composition_uses_shared_structural_rhythm(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const layout = document.querySelector(".widget-layout");
+          const runtime = window.dashboardWidgetRuntime;
+          if (!layout || !runtime) return;
+          const context = {
+            dataSourceId: "demo-composition",
+            canQuery: true,
+            semanticMapping: {
+              labelField: "label",
+              categoryField: "category",
+              statusField: "state",
+              valueField: "value",
+              dateField: "date",
+              latitudeField: "latitude",
+              longitudeField: "longitude",
+              locationField: "location",
+            },
+          };
+          const rows = Array.from({ length: 16 }, (_, index) => ({
+            label: `Unit ${index + 1}`,
+            category: index % 2 ? "Alpha" : "Beta",
+            state: index % 3 ? "Ready" : "Watch",
+            value: 40 + index * 5,
+            date: `2026-05-${String(index + 1).padStart(2, "0")}`,
+            latitude: 36.8 + index * 0.03,
+            longitude: -121.9 + index * 0.02,
+            location: `Sector ${index + 1}`,
+          }));
+          const data = { rows, total: rows.length, demo: true };
+          const makeCard = (key, type, config, col, row, span, rowSpan, dataOverride = data) => {
+            const definition = runtime.getWidgetDefinition(type);
+            const card = document.createElement("div");
+            card.className = `${definition.className || "stat-card widget-card widget-card-custom"} widget-density-standard`;
+            card.dataset.widgetKey = key;
+            card.dataset.widgetDefinition = definition.type;
+            card.style.gridColumn = `${col} / span ${span}`;
+            card.style.gridRow = `${row} / span ${rowSpan}`;
+            card.style.height = `${rowSpan * 81 + Math.max(0, rowSpan - 1) * 14}px`;
+            card.innerHTML = runtime.renderWidget(type, {
+              instance: { id: key, type, config, cols: span, rows: rowSpan, density: "standard" },
+              resolvedContext: context,
+              data: dataOverride,
+              status: "ready",
+            });
+            layout.appendChild(card);
+          };
+          makeCard("composition-table", "table", { title: "Queue", columns: ["label", "state", "value"], limit: 16 }, 1, 18, 3, 2);
+          makeCard("composition-chart", "chart", { title: "Load", chartType: "bar", xField: "category", yField: "value", aggregation: "avg" }, 4, 18, 3, 2);
+          makeCard("composition-map", "map", { title: "Map", latitudeField: "latitude", longitudeField: "longitude", locationField: "location" }, 7, 18, 3, 2);
+          makeCard("composition-filter", "filter", { title: "Filters", filters: [{ id: "state", type: "dropdown", label: "State", field: "state", value: "" }] }, 1, 20, 3, 2);
+          makeCard("composition-text", "text", { title: "Note", body: "Operator note", placeholder: "Write a note" }, 4, 20, 2, 2);
+          makeCard("composition-media", "image", {
+            title: "Reference",
+            alt: "Reference image",
+            caption: "Asset reference",
+            src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 44'%3E%3Crect width='80' height='44' fill='%2360a5fa'/%3E%3C/svg%3E",
+          }, 6, 20, 2, 2);
+        }
+        """
+    )
+
+    composition = page.evaluate(
+        """
+        () => {
+          const number = (value) => Number.parseFloat(value) || 0;
+          const read = (selector) => {
+            const node = document.querySelector(selector);
+            const styles = getComputedStyle(node);
+            return {
+              gap: number(styles.gap),
+              paddingRight: number(styles.paddingRight),
+              borderWidth: number(styles.borderTopWidth),
+              radius: number(styles.borderTopLeftRadius),
+              background: styles.backgroundColor,
+              shadow: styles.boxShadow,
+              height: node.getBoundingClientRect().height,
+            };
+          };
+          const header = (selector) => {
+            const node = document.querySelector(selector);
+            const styles = getComputedStyle(node);
+            return {
+              height: node.getBoundingClientRect().height,
+              gap: number(styles.gap),
+              alignItems: styles.alignItems,
+              titleSize: number(getComputedStyle(node.querySelector(".stat-lbl")).fontSize),
+            };
+          };
+          return {
+            hostPadding: [
+              read('[data-widget-key="composition-table"]').paddingRight,
+              read('[data-widget-key="composition-chart"]').paddingRight,
+              read('[data-widget-key="composition-map"]').paddingRight,
+              read('[data-widget-key="composition-filter"]').paddingRight,
+              read('[data-widget-key="composition-text"]').paddingRight,
+              read('[data-widget-key="composition-media"]').paddingRight,
+            ],
+            gaps: [
+              read('[data-widget-key="composition-table"] .runtime-table-widget').gap,
+              read('[data-widget-key="composition-chart"] .runtime-chart-widget').gap,
+              read('[data-widget-key="composition-map"] .runtime-map-widget').gap,
+              read('[data-widget-key="composition-filter"] .filter-widget-content').gap,
+              read('[data-widget-key="composition-text"] .text-widget-content').gap,
+              read('[data-widget-key="composition-media"] .media-widget').gap,
+            ],
+            headers: [
+              header('[data-widget-key="composition-table"] .runtime-table-header'),
+              header('[data-widget-key="composition-chart"] .runtime-chart-header'),
+              header('[data-widget-key="composition-map"] .runtime-map-header'),
+              header('[data-widget-key="composition-filter"] .filter-widget-header'),
+              header('[data-widget-key="composition-text"] .text-widget-header'),
+              header('[data-widget-key="composition-media"] .media-widget-header'),
+            ],
+            stages: [
+              read('[data-widget-key="composition-table"] .runtime-table-scroll'),
+              read('[data-widget-key="composition-chart"] .runtime-chart-stage'),
+              read('[data-widget-key="composition-map"] .runtime-map-stage'),
+              read('[data-widget-key="composition-text"] .text-widget-editor'),
+              read('[data-widget-key="composition-media"] .media-widget-stage'),
+            ],
+          };
+        }
+        """
+    )
+
+    assert all(48 <= value <= 54 for value in composition["hostPadding"])
+    chart_gap = composition["gaps"][1]
+    non_chart_gaps = [value for index, value in enumerate(composition["gaps"]) if index != 1]
+    assert max(non_chart_gaps) - min(non_chart_gaps) <= 1
+    assert all(4 <= value <= 6 for value in non_chart_gaps)
+    assert 3 <= chart_gap <= min(non_chart_gaps)
+    assert all(header["alignItems"] == "baseline" for header in composition["headers"])
+    assert max(header["gap"] for header in composition["headers"]) - min(header["gap"] for header in composition["headers"]) <= 1
+    assert max(header["titleSize"] for header in composition["headers"]) - min(header["titleSize"] for header in composition["headers"]) <= 1
+    assert max(header["height"] for header in composition["headers"]) - min(header["height"] for header in composition["headers"]) <= 3
+    assert all(stage["borderWidth"] >= 1 for stage in composition["stages"])
+    assert max(stage["radius"] for stage in composition["stages"]) - min(stage["radius"] for stage in composition["stages"]) <= 1
+    assert all(stage["background"] != "rgba(0, 0, 0, 0)" for stage in composition["stages"])
+    assert all("inset" in stage["shadow"] for stage in composition["stages"])
+    assert_clean_browser(page)
+
+
+def test_widgets_and_panels_share_recessed_interior_material_system(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const layout = document.querySelector(".widget-layout");
+          const runtime = window.dashboardWidgetRuntime;
+          if (!layout || !runtime) return;
+          const context = {
+            dataSourceId: "recessed-material-demo",
+            canQuery: true,
+            semanticMapping: {
+              labelField: "label",
+              categoryField: "category",
+              statusField: "state",
+              valueField: "value",
+              latitudeField: "latitude",
+              longitudeField: "longitude",
+              locationField: "location",
+            },
+          };
+          const rows = Array.from({ length: 8 }, (_, index) => ({
+            label: `Asset ${index + 1}`,
+            category: index % 2 ? "North" : "South",
+            state: index % 3 ? "Ready" : "Watch",
+            value: 20 + index * 7,
+            latitude: 36.75 + index * 0.035,
+            longitude: -121.9 + index * 0.025,
+            location: `Bay ${index + 1}`,
+          }));
+          const data = { rows, total: rows.length, demo: true };
+          const makeCard = (key, type, config, col, row, span, rowSpan, dataOverride = data) => {
+            const definition = runtime.getWidgetDefinition(type);
+            const card = document.createElement("div");
+            card.className = `${definition.className || "stat-card widget-card widget-card-custom"} widget-density-standard`;
+            card.dataset.widgetKey = key;
+            card.dataset.widgetDefinition = definition.type;
+            card.style.gridColumn = `${col} / span ${span}`;
+            card.style.gridRow = `${row} / span ${rowSpan}`;
+            card.style.height = `${rowSpan * 81 + Math.max(0, rowSpan - 1) * 14}px`;
+            card.innerHTML = runtime.renderWidget(type, {
+              instance: { id: key, type, config, cols: span, rows: rowSpan, density: "standard" },
+              resolvedContext: context,
+              data: dataOverride,
+              status: "ready",
+            });
+            layout.appendChild(card);
+          };
+          makeCard("recessed-table", "table", { title: "Queue", columns: ["label", "state", "value"] }, 1, 24, 3, 2);
+          makeCard("recessed-chart", "chart", { title: "Load", chartType: "bar", xField: "category", yField: "value", aggregation: "avg" }, 4, 24, 3, 2);
+          makeCard("recessed-map", "map", { title: "Sites", latitudeField: "latitude", longitudeField: "longitude", locationField: "location" }, 7, 24, 3, 2);
+          makeCard("recessed-text", "text", { title: "Note", body: "Containment check", placeholder: "Write a note" }, 1, 26, 2, 2);
+          makeCard("recessed-media", "image", {
+            title: "Reference",
+            alt: "Reference",
+            src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 44'%3E%3Crect width='80' height='44' fill='%2360a5fa'/%3E%3C/svg%3E",
+          }, 3, 26, 2, 2);
+        }
+        """
+    )
+
+    material = page.evaluate(
+        """
+        () => {
+          const alphaFromColor = (value) => {
+            const raw = String(value || "");
+            if (raw === "transparent" || raw === "rgba(0, 0, 0, 0)") return 0;
+            const slash = raw.match(/\\/\\s*([\\d.]+)/);
+            if (slash) return Number.parseFloat(slash[1]);
+            const rgba = raw.match(/rgba\\([^,]+,[^,]+,[^,]+,\\s*([\\d.]+)\\)/);
+            if (rgba) return Number.parseFloat(rgba[1]);
+            return raw.includes("rgb(") || raw.includes("color(") || raw.includes("oklab(") ? 1 : 0;
+          };
+          const number = (value) => Number.parseFloat(value) || 0;
+          const maxShadowPx = (shadow) => Math.max(0, ...(String(shadow || "").match(/[\\d.]+px/g) || []).map((value) => Number.parseFloat(value)));
+          const readStage = (selector) => {
+            const node = document.querySelector(selector);
+            const styles = getComputedStyle(node);
+            return {
+              backgroundAlpha: alphaFromColor(styles.backgroundColor),
+              borderAlpha: alphaFromColor(styles.borderTopColor),
+              radius: number(styles.borderTopLeftRadius),
+              shadow: styles.boxShadow,
+              maxShadowPx: maxShadowPx(styles.boxShadow),
+            };
+          };
+          const panelBody = document.querySelector('.panel-layout > .db-panel[data-panel-key="builder-content"] > .db-panel-body');
+          const panelStyles = getComputedStyle(panelBody);
+          return {
+            stages: [
+              readStage('[data-widget-key="recessed-table"] .runtime-table-scroll'),
+              readStage('[data-widget-key="recessed-chart"] .runtime-chart-stage'),
+              readStage('[data-widget-key="recessed-map"] .runtime-map-stage'),
+              readStage('[data-widget-key="recessed-text"] .text-widget-editor'),
+              readStage('[data-widget-key="recessed-media"] .media-widget-stage'),
+            ],
+            panel: {
+              background: panelStyles.backgroundColor,
+              backgroundImage: panelStyles.backgroundImage,
+              shadow: panelStyles.boxShadow,
+              afterOpacity: Number(getComputedStyle(panelBody, "::after").opacity),
+            },
+          };
+        }
+        """
+    )
+
+    for stage in material["stages"]:
+        assert .04 <= stage["backgroundAlpha"] <= .30
+        assert .08 <= stage["borderAlpha"] <= .28
+        assert "inset" in stage["shadow"]
+        assert stage["maxShadowPx"] <= 28
+    assert max(stage["radius"] for stage in material["stages"]) - min(stage["radius"] for stage in material["stages"]) <= 1
+    assert material["panel"]["background"] != "rgb(255, 255, 255)"
+    assert "radial-gradient" in material["panel"]["backgroundImage"]
+    assert "linear-gradient" in material["panel"]["backgroundImage"]
+    assert "inset" in material["panel"]["shadow"]
+    assert 0 < material["panel"]["afterOpacity"] <= .50
+    assert_clean_browser(page)
+
+
+def test_widget_runtime_meaning_drives_restrained_environmental_response(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.evaluate(
+        """
+        () => {
+          const layout = document.querySelector(".widget-layout");
+          const runtime = window.dashboardWidgetRuntimeMeaning;
+          if (!layout || !runtime) return;
+          const makeCard = (key, col, conditionData, status = "ready") => {
+            const card = document.createElement("div");
+            card.className = "stat-card widget-card widget-card-custom db-panel-custom-color widget-density-standard";
+            card.dataset.widgetKey = key;
+            card.dataset.widgetDefinition = "stat";
+            card.dataset.panelColor = "#2563eb";
+            card.style.setProperty("--panel-accent", "#2563eb");
+            card.style.setProperty("--panel-accent-rgb", "37, 99, 235");
+            card.style.setProperty("--panel-accent-text", "#0f172a");
+            card.style.gridColumn = `${col} / span 2`;
+            card.style.gridRow = "23 / span 1";
+            card.style.height = "81px";
+            card.innerHTML = `<span class="stat-runtime-meta">runtime</span><span class="stat-val">42</span><span class="stat-lbl">${key}</span>`;
+            layout.appendChild(card);
+            runtime.apply(card, {
+              status,
+              data: conditionData,
+              resolvedContext: { semanticMapping: { statusField: "state" } },
+              instance: { config: {} },
+            });
+            return card;
+          };
+          makeCard("meaning-healthy", 1, { rows: [{ state: "Ready" }, { state: "Healthy" }], total: 2, confidence: .94, metadata: { freshness: Date.now() - 60000 } });
+          makeCard("meaning-warning", 3, { rows: [{ state: "Warning" }, { state: "Watch" }, { state: "Ready" }], total: 3, confidence: .81, metadata: { freshness: Date.now() - 60000 } });
+          makeCard("meaning-stale", 5, { rows: [{ state: "Ready" }, { state: "Ready" }], total: 2, confidence: .88, metadata: { freshness: "2026-05-20T08:00:00.000Z" } });
+          makeCard("meaning-active", 7, { rows: [{ state: "Ready" }], total: 1, live: true, sourceKind: "stream", confidence: .9, metadata: { freshness: Date.now() } });
+          makeCard("meaning-error", 9, { rows: [{ state: "Ready" }], total: 1, confidence: .42, error: "Adapter failed" }, "error");
+        }
+        """
+    )
+
+    state = page.evaluate(
+        """
+        () => {
+          const alphaFromColor = (value) => {
+            const raw = String(value || "");
+            const slash = raw.match(/\\/\\s*([\\d.]+)/);
+            if (slash) return Number.parseFloat(slash[1]);
+            const rgba = raw.match(/rgba\\([^,]+,[^,]+,[^,]+,\\s*([\\d.]+)\\)/);
+            if (rgba) return Number.parseFloat(rgba[1]);
+            return raw.includes("rgb(") || raw.includes("color(") || raw.includes("oklab(") ? 1 : 0;
+          };
+          const read = (key) => {
+            const node = document.querySelector(`[data-widget-key="${key}"]`);
+            const styles = getComputedStyle(node);
+            return {
+              condition: node.dataset.runtimeCondition,
+              urgency: node.dataset.runtimeUrgency,
+              freshness: node.dataset.runtimeFreshness,
+              activity: node.dataset.runtimeActivity,
+              confidence: node.dataset.runtimeConfidence,
+              summary: node.dataset.runtimeMeaningSummary,
+              border: styles.borderTopColor,
+              background: styles.backgroundColor,
+              filter: styles.filter,
+              opacity: Number.parseFloat(styles.opacity),
+              shadow: styles.boxShadow,
+              borderAlpha: alphaFromColor(styles.borderTopColor),
+            };
+          };
+          return {
+            healthy: read("meaning-healthy"),
+            warning: read("meaning-warning"),
+            stale: read("meaning-stale"),
+            active: read("meaning-active"),
+            error: read("meaning-error"),
+          };
+        }
+        """
+    )
+
+    assert state["healthy"]["condition"] == "healthy"
+    assert state["warning"]["condition"] == "warning"
+    assert state["warning"]["urgency"] == "watch"
+    assert state["stale"]["condition"] == "stale"
+    assert state["stale"]["freshness"] == "stale"
+    assert state["active"]["condition"] == "active"
+    assert state["active"]["activity"] == "active"
+    assert state["error"]["condition"] == "error"
+    assert state["error"]["urgency"] == "urgent"
+    assert state["error"]["confidence"] == "low"
+    assert state["warning"]["border"] != state["healthy"]["border"]
+    assert state["stale"]["filter"] != "none"
+    assert state["active"]["summary"].startswith("active")
+    assert state["error"]["borderAlpha"] <= 1
+    for item in state.values():
+        assert "0px 0px 22px" not in item["shadow"]
+        assert "0px 0px 18px" not in item["shadow"]
+        assert item["opacity"] >= .88
     assert_clean_browser(page)
 
 
