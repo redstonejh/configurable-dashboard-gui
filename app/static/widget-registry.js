@@ -660,7 +660,6 @@
     return `
       <div class="runtime-chart-widget runtime-chart-density-${density} widget-density-${densityTier}" data-density="${escapeHtml(densityTier)}" data-runtime-state="ready" data-runtime-source="${escapeHtml(runtimeSource(data))}" data-runtime-traceable="${traceable ? "true" : "false"}" data-runtime-context="${escapeHtml(contextLabel)}" data-chart-type="${escapeHtml(definition.chartType)}" data-chart-category="${escapeHtml(definition.category || "general")}">
         <div class="runtime-chart-stage">${body}</div>
-        ${contextLabel ? `<div class="runtime-chart-context">${escapeHtml(contextLabel)}</div>` : ""}
         ${legend}
       </div>`;
   };

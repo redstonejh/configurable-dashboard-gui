@@ -6285,7 +6285,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const ensureWidgetWorkbenchPanel = (widget) => {
     const tools = widget?.querySelector(":scope > .widget-tools");
     if (!tools) return null;
-    let panel = tools.querySelector(":scope > .widget-workbench-panel");
+    let panel = tools.querySelector(":scope > .widget-workbench-panel") || widget.__widgetWorkbenchPanel || null;
     if (!panel) {
       panel = document.createElement("div");
       panel.className = "widget-workbench-panel";
@@ -6294,6 +6294,7 @@ document.addEventListener("DOMContentLoaded", () => {
       panel.hidden = true;
       tools.appendChild(panel);
     }
+    widget.__widgetWorkbenchPanel = panel;
     const isOpen = widget.classList.contains("widget-workbench-open");
     if (isOpen) {
       window.dashboardWidgetRuntime?.destroyTimeframeFlatpickr?.(panel);
@@ -6858,7 +6859,13 @@ document.addEventListener("DOMContentLoaded", () => {
     document.querySelector(`.workspace-anchor-layer[data-anchor-layout-key="${CSS.escape(layoutKey)}"]`);
 
   const ANCHOR_RAIL_START = 126;
-  const ANCHOR_RAIL_GAP = 8;
+  const ANCHOR_RAIL_STACK_GAP = 4;
+  // Canonical anchor slot height — must match .workspace-anchor-object min-height in CSS.
+  // Used for ALL layout math so positioning is deterministic and independent of render timing.
+  const ANCHOR_SLOT_HEIGHT = 44;
+
+  // Only used for animation delta measurement (where actual rendered height matters).
+  const anchorRailSlotHeight = (anchor) => Math.max(1, Math.round(anchor?.getBoundingClientRect?.().height || ANCHOR_SLOT_HEIGHT));
 
   const clampAnchorOffset = (offset, anchor = null) => {
     const height = Math.ceil(anchor?.getBoundingClientRect?.().height || 38);
@@ -6868,33 +6875,29 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const anchorOrderValue = (anchor, fallback = 0) => {
-    const offset = Number(anchor?.dataset?.anchorOffset);
-    if (Number.isFinite(offset)) return offset;
     const order = Number(anchor?.dataset?.anchorRailOrder);
-    return Number.isFinite(order) ? order : fallback;
+    if (Number.isFinite(order)) return order;
+    const offset = Number(anchor?.dataset?.anchorOffset);
+    return Number.isFinite(offset) ? offset : fallback;
   };
 
   const anchorRailAnchors = (layer) => [...layer.querySelectorAll(":scope > .workspace-anchor-object:not(.workspace-anchor-drag-ghost)")]
     .sort((a, b) => anchorOrderValue(a) - anchorOrderValue(b));
 
-  const anchorRailOffsetsForOrder = (orderedAnchors) => {
+  // Positions are derived purely from index so the layout is always compact regardless of
+  // stored offsets, render timing, or measured heights.  slotHeights is accepted for compat
+  // with callers but is intentionally ignored here.
+  const anchorRailOffsetsForOrder = (orderedAnchors, _slotHeights) => {
     const offsets = new Map();
-    let nextOffset = ANCHOR_RAIL_START;
-    orderedAnchors.forEach((anchor) => {
-      offsets.set(anchor, nextOffset);
-      nextOffset += Math.ceil(anchor.getBoundingClientRect().height || 81) + ANCHOR_RAIL_GAP;
+    orderedAnchors.forEach((anchor, index) => {
+      offsets.set(anchor, ANCHOR_RAIL_START + index * (ANCHOR_SLOT_HEIGHT + ANCHOR_RAIL_STACK_GAP));
     });
     return offsets;
   };
 
   const nextAnchorRailOffset = (layer) => {
-    const anchors = anchorRailAnchors(layer);
-    const lastBottom = anchors.reduce((bottom, anchor) => {
-      const offset = Number(anchor.dataset.anchorOffset) || ANCHOR_RAIL_START;
-      const height = Math.ceil(anchor.getBoundingClientRect().height || 81);
-      return Math.max(bottom, offset + height);
-    }, ANCHOR_RAIL_START - ANCHOR_RAIL_GAP);
-    return clampAnchorOffset(lastBottom + ANCHOR_RAIL_GAP);
+    const count = anchorRailAnchors(layer).length;
+    return clampAnchorOffset(ANCHOR_RAIL_START + count * (ANCHOR_SLOT_HEIGHT + ANCHOR_RAIL_STACK_GAP));
   };
 
   const anchorDefinitionFromElement = (anchor) => ({
@@ -6931,8 +6934,8 @@ document.addEventListener("DOMContentLoaded", () => {
     anchor.style.setProperty("--anchor-offset", `${offset}px`);
   };
 
-  const commitAnchorRailOrder = (layer, orderedAnchors = anchorRailAnchors(layer)) => {
-    const offsets = anchorRailOffsetsForOrder(orderedAnchors);
+  const commitAnchorRailOrder = (layer, orderedAnchors = anchorRailAnchors(layer), slotHeights = new Map()) => {
+    const offsets = anchorRailOffsetsForOrder(orderedAnchors, slotHeights);
     orderedAnchors.forEach((anchor, index) => {
       anchor.dataset.anchorSide = "left";
       anchor.dataset.anchorRailOrder = String(index);
@@ -6953,7 +6956,20 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const normalizeAnchorLayer = (layer) => {
-    preserveAnchorRailPositions(layer);
+    commitAnchorRailOrder(layer);
+  };
+
+  const previewIndexForPointer = (ghostOffset, peers) => {
+    // Compare ghost top against each peer's current visual midpoint.
+    // Peers have their --anchor-offset updated each preview frame so this
+    // correctly tracks what the user sees.  Height is always ANCHOR_SLOT_HEIGHT.
+    for (let index = 0; index < peers.length; index += 1) {
+      const peer = peers[index];
+      const peerOffset = parseFloat(peer.style.getPropertyValue("--anchor-offset")) ||
+                         Math.round(peer.getBoundingClientRect().top);
+      if (ghostOffset < peerOffset + ANCHOR_SLOT_HEIGHT / 2) return index;
+    }
+    return peers.length;
   };
 
   const animateAnchorRailOffsetShift = (anchor, previousTop) => {
@@ -6989,35 +7005,17 @@ document.addEventListener("DOMContentLoaded", () => {
         byLayer.set(entry.layout, group);
       });
     byLayer.forEach((anchorEntries, layer) => {
+      // Snapshot visual tops before removal so animations can play from the old positions.
       const before = new Map();
       anchorRailAnchors(layer).forEach((anchor) => {
-        before.set(anchor, {
-          offset: Number(anchor.dataset.anchorOffset) || anchor.getBoundingClientRect().top || ANCHOR_RAIL_START,
-          top: anchor.getBoundingClientRect().top,
-          height: Math.ceil(anchor.getBoundingClientRect().height || 81),
-        });
+        before.set(anchor, anchor.getBoundingClientRect().top);
       });
-      const deletedFootprints = anchorEntries
-        .map((entry) => before.get(entry.item))
-        .filter(Boolean)
-        .sort((a, b) => a.offset - b.offset);
       anchorEntries.forEach((entry) => entry.item.remove());
       const remaining = anchorRailAnchors(layer);
+      commitAnchorRailOrder(layer, remaining);
       remaining.forEach((anchor) => {
-        const old = before.get(anchor);
-        if (!old) return;
-        const shift = deletedFootprints.reduce((total, deleted) => (
-          deleted.offset < old.offset ? total + deleted.height + ANCHOR_RAIL_GAP : total
-        ), 0);
-        if (shift <= 0) return;
-        anchor.dataset.anchorOffset = String(clampAnchorOffset(old.offset - shift, anchor));
-        applyAnchorPosition(anchor);
-      });
-      preserveAnchorRailPositions(layer, remaining);
-      remaining.forEach((anchor) => {
-        const old = before.get(anchor);
-        if (!old) return;
-        animateAnchorRailOffsetShift(anchor, old.top);
+        const previousTop = before.get(anchor);
+        if (previousTop != null) animateAnchorRailOffsetShift(anchor, previousTop);
       });
     });
   };
@@ -7400,14 +7398,6 @@ document.addEventListener("DOMContentLoaded", () => {
       activeMovePointerTarget?.addEventListener?.("lostpointercapture", handleAnchorLostPointerCapture);
     };
 
-    const previewIndexForPointer = (pointerY, peers) => {
-      for (let index = 0; index < peers.length; index += 1) {
-        const rect = peers[index].getBoundingClientRect();
-        if (pointerY < rect.top + rect.height / 2) return index;
-      }
-      return peers.length;
-    };
-
     const orderedAnchorsWithSourceAt = (source, insertIndex) => {
       const peers = anchorRailAnchors(layer).filter((candidate) => candidate !== source);
       const ordered = [...peers];
@@ -7415,8 +7405,8 @@ document.addEventListener("DOMContentLoaded", () => {
       return ordered;
     };
 
-    const applyAnchorRailPreview = (state, pointerY) => {
-      const insertIndex = previewIndexForPointer(pointerY, state.peers);
+    const applyAnchorRailPreview = (state, ghostOffset) => {
+      const insertIndex = previewIndexForPointer(ghostOffset, state.peers);
       const ordered = orderedAnchorsWithSourceAt(anchor, insertIndex);
       const offsets = anchorRailOffsetsForOrder(ordered);
       ordered.forEach((candidate) => {
@@ -7439,13 +7429,19 @@ document.addEventListener("DOMContentLoaded", () => {
       ghost.removeAttribute("data-anchor-initialized");
       ghost.setAttribute("aria-hidden", "true");
       ghost.style.width = `${rect.width}px`;
-      ghost.style.height = `${rect.height}px`;
+      ghost.style.height = `${ANCHOR_SLOT_HEIGHT}px`;
       ghost.style.setProperty("--anchor-offset", `${rect.top}px`);
       const placeholder = document.createElement("div");
       placeholder.className = "workspace-anchor-rail-placeholder";
       placeholder.style.width = `${rect.width}px`;
-      placeholder.style.height = `${rect.height}px`;
+      placeholder.style.height = `${ANCHOR_SLOT_HEIGHT}px`;
       placeholder.style.setProperty("--anchor-offset", `${rect.top}px`);
+      const peers = anchorRailAnchors(layer).filter((candidate) => candidate !== anchor);
+      // slotHeights kept for animation delta measurement in removeAnchorsWithRailReflow,
+      // but anchorRailOffsetsForOrder ignores it — all layout math uses ANCHOR_SLOT_HEIGHT.
+      const slotHeights = new Map();
+      peers.forEach((peer) => slotHeights.set(peer, anchorRailSlotHeight(peer)));
+      slotHeights.set(anchor, ANCHOR_SLOT_HEIGHT);
       layer.appendChild(placeholder);
       layer.appendChild(ghost);
       anchor.classList.add("anchor-rail-source", "anchor-dragging");
@@ -7461,7 +7457,8 @@ document.addEventListener("DOMContentLoaded", () => {
       dragState = {
         ghost,
         placeholder,
-        peers: anchorRailAnchors(layer).filter((candidate) => candidate !== anchor),
+        peers,
+        slotHeights,
         previewOrder: anchorRailAnchors(layer),
         previewIndex: Number(anchor.dataset.anchorRailOrder) || 0,
       };
@@ -7477,7 +7474,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const ghostOffset = clampAnchorOffset(event.clientY - pointerOffsetY, anchor);
       dragState.ghost.style.setProperty("--anchor-offset", `${ghostOffset}px`);
       dragState.ghost.style.setProperty("--anchor-drag-x", "0px");
-      applyAnchorRailPreview(dragState, event.clientY);
+      // Pass ghostOffset (anchor top in viewport) rather than raw pointer Y so the
+      // insertion index is determined by where the ghost visually is, not where the
+      // pointer is within the anchor.
+      applyAnchorRailPreview(dragState, ghostOffset);
     };
 
     const cleanupAnchorRailDrag = (commit) => {
@@ -7495,7 +7495,7 @@ document.addEventListener("DOMContentLoaded", () => {
         candidate.style.removeProperty("--anchor-drag-x");
       });
       if (commit && state?.previewOrder?.length) {
-        commitAnchorRailOrder(layer, state.previewOrder);
+        commitAnchorRailOrder(layer, state.previewOrder, state.slotHeights);
         saveFloatingAnchors(layoutKey, getActivePanelProfile(layoutKey));
         emitWorkspaceEvent({
           type: "anchor-reordered",
@@ -10829,6 +10829,7 @@ document.addEventListener("DOMContentLoaded", () => {
         widget.classList.remove("widget-tools-open");
         widget.classList.remove("widget-workbench-open");
         settings?.setAttribute("aria-expanded", "false");
+        if (workbenchPanel) restoreFloatingMenu(workbenchPanel);
         workbenchPanel?.setAttribute("hidden", "");
         colorMenu?.classList.remove("panel-color-menu-open");
         colorToggle?.setAttribute("aria-expanded", "false");
@@ -10837,12 +10838,13 @@ document.addEventListener("DOMContentLoaded", () => {
         syncLayoutToolsActive();
       };
       const closeWorkbench = () => {
+        if (workbenchPanel) restoreFloatingMenu(workbenchPanel);
         widget.classList.remove("widget-workbench-open");
         workbenchPanel?.setAttribute("hidden", "");
         if (!widget.classList.contains("widget-tools-open")) setWidgetLinkNavigationSuspended(widget, false);
         syncLayoutToolsActive();
       };
-      const openWorkbench = () => {
+      const openWorkbench = (pointerCoords = null) => {
         if (isDashboardInteractionActive()) return;
         closeInactiveDashboardTools(widget);
         window.clearTimeout(closeTimer);
@@ -10854,12 +10856,21 @@ document.addEventListener("DOMContentLoaded", () => {
         widget.classList.add("widget-workbench-open");
         const panel = ensureWidgetWorkbenchPanel(widget);
         if (panel) {
-          positionDashboardToolDrawer(widget, settings, drawer);
-          const drawerTop = drawer?.style?.getPropertyValue("--dashboard-tool-drawer-top");
-          const drawerRight = drawer?.style?.getPropertyValue("--dashboard-tool-drawer-right");
-          if (drawerTop) tools?.style?.setProperty("--dashboard-tool-drawer-top", drawerTop);
-          if (drawerRight) tools?.style?.setProperty("--dashboard-tool-drawer-right", drawerRight);
+          portalFloatingMenu(panel, settings || widget, { skipPosition: true });
+          panel.style.left = "0px";
+          panel.style.top = "0px";
           panel.hidden = false;
+          const panelWidth = panel.offsetWidth || 318;
+          const panelHeight = panel.offsetHeight || 200;
+          const vg = 8;
+          const coords = pointerCoords || (() => {
+            const r = (settings || widget).getBoundingClientRect();
+            return { clientX: r.right, clientY: r.top };
+          })();
+          const left = Math.max(vg, Math.min(coords.clientX - panelWidth, window.innerWidth - vg - panelWidth));
+          const top = Math.max(vg, Math.min(coords.clientY, window.innerHeight - vg - panelHeight));
+          panel.style.left = `${Math.round(left)}px`;
+          panel.style.top = `${Math.round(top)}px`;
         }
         syncLayoutToolsActive();
       };
@@ -10920,7 +10931,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const interactiveTarget = event.target?.closest?.(
           `${surfaceResponseControlSelector}, .media-widget-stage, [contenteditable='true']`,
         );
-        return interactiveTarget && widget.contains(interactiveTarget);
+        return interactiveTarget && interactiveTarget !== widget && widget.contains(interactiveTarget);
       };
       widget.addEventListener("click", (event) => {
         if (!event.target?.closest?.(".widget-tools") && pointerIntersectsSettingsToggle(event)) {
@@ -10936,7 +10947,7 @@ document.addEventListener("DOMContentLoaded", () => {
         event.stopPropagation();
         if (performance.now() < suppressWidgetClickUntil) return;
         suppressToolOpenUntil = 0;
-        openWorkbench();
+        openWorkbench({ clientX: event.clientX, clientY: event.clientY });
         try {
           widget.focus?.({ preventScroll: true });
         } catch {
@@ -13107,7 +13118,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.addEventListener("click", (event) => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    const filterTarget = event.target?.closest?.(".widget-card[data-widget-type='tracker'], .range-bar a[href]");
+    // Stat widget (tracker) click-to-filter intentionally disabled — drilldown/context contract not yet formalized.
+    const filterTarget = event.target?.closest?.(".range-bar a[href]");
     if (!filterTarget || filterTarget.closest(".widget-tools")) return;
     const href = filterTarget.getAttribute("href");
     if (!href) return;

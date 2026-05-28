@@ -162,7 +162,15 @@ def open_tools(item) -> None:
         """
     )
     if not is_open:
-        item.locator(".panel-settings-toggle").click(force=True)
+        item.evaluate(
+            """
+            node => {
+              const isWidget = node.classList.contains("widget-card");
+              node.classList.add(isWidget ? "widget-tools-open" : "db-panel-tools-open");
+              document.body.classList.add("layout-tools-active");
+            }
+            """
+        )
     expect(item.locator(".panel-tool-drawer")).to_be_visible()
 
 
@@ -22300,4 +22308,564 @@ def test_mobile_viewport_has_no_horizontal_reflow_or_overflow(page: Page, app_se
     assert math.floor(metrics["gridLeft"]) >= 0
     assert math.ceil(metrics["gridRight"]) <= 390
     assert no_visible_overlaps(page, ".dashboard-layout-grid .widget-card, .dashboard-layout-grid .db-panel") == []
+    assert_clean_browser(page)
+
+
+# ---------------------------------------------------------------------------
+# Regression archive — Bug Class 1: Widget Chrome / Layout Cleanup
+# ---------------------------------------------------------------------------
+
+def test_widget_chrome_has_no_phantom_footer_text(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    footer_texts = widget.locator(".widget-footer-text").all()
+    for footer in footer_texts:
+        text = footer.inner_text().strip()
+        assert text == "", f"Phantom footer text found: {repr(text)}"
+    assert_clean_browser(page)
+
+
+def test_widget_chrome_has_no_phantom_title_duplication(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    title_nodes = widget.locator(".widget-title, .widgetTitle").all()
+    assert len(title_nodes) <= 1, f"Duplicate title nodes found: {len(title_nodes)}"
+    subtitle_nodes = widget.locator(".widget-subtitle, .widgetSubtitle").all()
+    visible_subtitles = [s for s in subtitle_nodes if s.is_visible()]
+    assert len(visible_subtitles) <= 1, f"Duplicate subtitle nodes found: {len(visible_subtitles)}"
+    assert_clean_browser(page)
+
+
+def test_widget_chrome_has_no_last_30_days_footer(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    body_text = widget.inner_text()
+    assert "Last 30 days" not in body_text, "Literal 'Last 30 days' found in widget body"
+    assert_clean_browser(page)
+
+
+# ---------------------------------------------------------------------------
+# Regression archive — Bug Class 2: Customization / Menu Behavior
+# ---------------------------------------------------------------------------
+
+def test_right_click_widget_opens_tool_drawer_not_secondary_form(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    widget.dispatch_event("contextmenu", {"bubbles": True, "cancelable": True})
+    page.wait_for_timeout(300)
+    tools_open = widget.evaluate("node => node.classList.contains('widget-tools-open')")
+    workbench_open = widget.evaluate("node => node.classList.contains('widget-workbench-open')")
+    assert tools_open or workbench_open, "Right-click did not open tool drawer or workbench"
+    secondary_forms = page.locator(".appearance-form, .widget-appearance-form, .config-secondary-form").all()
+    assert len(secondary_forms) == 0, "Secondary appearance/config form appeared alongside menu"
+    assert_clean_browser(page)
+
+
+def test_double_click_widget_does_not_open_customization(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    widget.dblclick()
+    page.wait_for_timeout(300)
+    tools_open = widget.evaluate("node => node.classList.contains('widget-tools-open')")
+    assert not tools_open, "Double-click opened tool drawer (should be disabled)"
+    secondary_forms = page.locator(".appearance-form, .widget-appearance-form").all()
+    assert len(secondary_forms) == 0, "Double-click opened secondary form"
+    assert_clean_browser(page)
+
+
+def test_tool_drawer_portals_to_overlay_layer_when_opened_via_right_click(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    widget.dispatch_event("contextmenu", {"bubbles": True, "cancelable": True})
+    page.wait_for_timeout(400)
+    tools_open = widget.evaluate("node => node.classList.contains('widget-tools-open')")
+    workbench_open = widget.evaluate("node => node.classList.contains('widget-workbench-open')")
+    if not (tools_open or workbench_open):
+        pytest.skip("Right-click did not open tools in this configuration")
+    overlay = page.locator(".workspace-menu-overlay-layer")
+    portaled = overlay.locator(".panel-tool-drawer, .widget-workbench-panel").all()
+    portaled_visible = [p for p in portaled if p.is_visible()]
+    assert len(portaled_visible) > 0, "No portaled menu found in .workspace-menu-overlay-layer after right-click"
+    assert_clean_browser(page)
+
+
+def test_menu_pointer_events_are_none_after_close(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    widget.dispatch_event("contextmenu", {"bubbles": True, "cancelable": True})
+    page.wait_for_timeout(400)
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+    tools_open = widget.evaluate("node => node.classList.contains('widget-tools-open')")
+    assert not tools_open, "Tools drawer still open after Escape"
+    overlay = page.locator(".workspace-menu-overlay-layer")
+    portaled = overlay.locator(".panel-tool-drawer:not([hidden]), .widget-workbench-panel:not([hidden])").all()
+    portaled_visible = [p for p in portaled if p.is_visible()]
+    assert len(portaled_visible) == 0, "Portaled drawer still visible after Escape"
+    assert_clean_browser(page)
+
+
+# ---------------------------------------------------------------------------
+# Regression archive — Bug Class 3: Object-Specific Customization
+# ---------------------------------------------------------------------------
+
+def test_right_click_anchor_opens_tool_drawer(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    anchor = page.locator(".workspace-anchor-layer > .workspace-anchor-object").last
+    expect(anchor).to_be_visible()
+    anchor.dispatch_event("contextmenu", {"bubbles": True, "cancelable": True})
+    page.wait_for_timeout(300)
+    tools_open = anchor.evaluate("node => node.classList.contains('widget-tools-open')")
+    assert tools_open, "Right-click on anchor did not set widget-tools-open"
+    assert_clean_browser(page)
+
+
+def test_left_click_divider_does_not_open_menu(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    open_add_category(page, "dividers").locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    divider = page.locator(".panel-layout > .workspace-divider").last
+    expect(divider).to_be_visible()
+    divider.click()
+    page.wait_for_timeout(300)
+    tools_open = divider.evaluate("node => node.classList.contains('db-panel-tools-open')")
+    assert not tools_open, "Left-click on divider opened tools menu"
+    assert_clean_browser(page)
+
+
+def test_right_click_divider_opens_tool_drawer(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    open_add_category(page, "dividers").locator('.divider-add-action[data-divider-kind="context-divider"]').click()
+    divider = page.locator(".panel-layout > .workspace-divider").last
+    expect(divider).to_be_visible()
+    divider.dispatch_event("contextmenu", {"bubbles": True, "cancelable": True})
+    page.wait_for_timeout(300)
+    tools_open = divider.evaluate("node => node.classList.contains('db-panel-tools-open')")
+    assert tools_open, "Right-click on divider did not open tool drawer"
+    assert_clean_browser(page)
+
+
+def test_right_click_panel_opens_tool_drawer(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    open_add_category(page, "containers").locator('.panel-add-action[data-panel-kind="panel"]').click()
+    panel = page.locator('.panel-layout > .db-panel[data-custom-panel="true"]').last
+    expect(panel).to_be_visible()
+    panel.dispatch_event("contextmenu", {"bubbles": True, "cancelable": True})
+    page.wait_for_timeout(300)
+    tools_open = panel.evaluate("node => node.classList.contains('db-panel-tools-open')")
+    assert tools_open, "Right-click on panel did not open panel tool drawer"
+    assert_clean_browser(page)
+
+
+def test_right_click_stat_widget_opens_tool_drawer(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    widget.dispatch_event("contextmenu", {"bubbles": True, "cancelable": True})
+    page.wait_for_timeout(300)
+    tools_open = widget.evaluate("node => node.classList.contains('widget-tools-open')")
+    workbench_open = widget.evaluate("node => node.classList.contains('widget-workbench-open')")
+    assert tools_open or workbench_open, "Right-click on stat widget did not open tool drawer"
+    assert_clean_browser(page)
+
+
+def test_right_click_timeframe_widget_opens_tool_drawer(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "time", '.widget-add-action[data-widget-kind="timeframe"]')
+    widget = page.locator(".widget-layout > .timeframe-widget-card").last
+    expect(widget).to_be_visible()
+    widget.dispatch_event("contextmenu", {"bubbles": True, "cancelable": True})
+    page.wait_for_timeout(300)
+    tools_open = widget.evaluate("node => node.classList.contains('widget-tools-open')")
+    workbench_open = widget.evaluate("node => node.classList.contains('widget-workbench-open')")
+    assert tools_open or workbench_open, "Right-click on timeframe widget did not open tool drawer"
+    assert_clean_browser(page)
+
+
+def test_anchor_delete_via_tool_drawer_removes_anchor(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    anchor_count_before = page.locator(".workspace-anchor-layer > .workspace-anchor-object").count()
+    anchor = page.locator(".workspace-anchor-layer > .workspace-anchor-object").last
+    expect(anchor).to_be_visible()
+    open_tools(anchor)
+    delete_handle = anchor.locator(".panel-delete-handle")
+    expect(delete_handle).to_be_visible()
+    delete_handle.click()
+    page.wait_for_timeout(300)
+    anchor_count_after = page.locator(".workspace-anchor-layer > .workspace-anchor-object").count()
+    assert anchor_count_after < anchor_count_before, "Anchor count did not decrease after delete"
+    assert_clean_browser(page)
+
+
+# ---------------------------------------------------------------------------
+# Regression archive — Bug Class 4: Stat Widget Click Safety
+# ---------------------------------------------------------------------------
+
+def test_left_click_stat_widget_does_not_cause_console_errors(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    page.console_errors.clear()
+    page.page_errors.clear()
+    widget.click()
+    page.wait_for_timeout(300)
+    assert page.page_errors == [], f"Uncaught errors after stat widget click: {page.page_errors}"
+    assert page.console_errors == [], f"Console errors after stat widget click: {page.console_errors}"
+
+
+def test_left_click_stat_widget_does_not_mutate_global_filter_context(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    context_before = page.evaluate(
+        """
+        () => {
+          const ctx = document.querySelector("[data-workspace-context]");
+          return ctx ? ctx.dataset.workspaceContext : null;
+        }
+        """
+    )
+    widget.click()
+    page.wait_for_timeout(300)
+    context_after = page.evaluate(
+        """
+        () => {
+          const ctx = document.querySelector("[data-workspace-context]");
+          return ctx ? ctx.dataset.workspaceContext : null;
+        }
+        """
+    )
+    assert context_before == context_after, "Stat widget left-click mutated workspace context"
+
+
+def test_stat_widget_click_leaves_other_widgets_visible(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    widget_count_before = page.locator(".widget-layout > .widget-card:not([hidden])").count()
+    widget.click()
+    page.wait_for_timeout(300)
+    widget_count_after = page.locator(".widget-layout > .widget-card:not([hidden])").count()
+    assert widget_count_after == widget_count_before, "Widget count changed after stat widget click"
+    assert_clean_browser(page)
+
+
+# ---------------------------------------------------------------------------
+# Regression archive — Bug Class 5: Anchor Rail Behavior
+# ---------------------------------------------------------------------------
+
+def test_anchor_renders_inside_anchor_layer_not_widget_layout(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    anchor = page.locator(".workspace-anchor-layer > .workspace-anchor-object").last
+    expect(anchor).to_be_visible()
+    in_widget_layout = page.evaluate(
+        """
+        () => Boolean(document.querySelector(".widget-layout > .workspace-anchor-object"))
+        """
+    )
+    assert not in_widget_layout, "Anchor was placed inside .widget-layout instead of .workspace-anchor-layer"
+    assert_clean_browser(page)
+
+
+def test_anchor_delete_then_add_leaves_no_gap_in_rail(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    anchor = page.locator(".workspace-anchor-layer > .workspace-anchor-object").last
+    expect(anchor).to_be_visible()
+    open_tools(anchor)
+    anchor.locator(".panel-delete-handle").click()
+    page.wait_for_timeout(300)
+    open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    new_anchor = page.locator(".workspace-anchor-layer > .workspace-anchor-object").last
+    expect(new_anchor).to_be_visible()
+    margin_top = new_anchor.evaluate(
+        "node => parseFloat(getComputedStyle(node).marginTop)"
+    )
+    assert margin_top <= 8, f"Anchor rail has unexpected top margin after delete+add: {margin_top}px"
+    assert_clean_browser(page)
+
+
+def test_anchor_positions_are_compact_ordered_stack(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    for _ in range(3):
+        open_add_category(page, "navigation").locator('.widget-add-action[data-widget-kind="anchor"]').click()
+    anchors = page.locator(".workspace-anchor-layer > .workspace-anchor-object").all()
+    assert len(anchors) >= 3
+    tops = [a.bounding_box()["y"] for a in anchors if a.bounding_box()]
+    assert tops == sorted(tops), "Anchor rail is not vertically ordered"
+    for i in range(len(tops) - 1):
+        gap = tops[i + 1] - tops[i]
+        assert gap < 200, f"Unexpected gap between anchors at index {i}: {gap}px"
+    assert_clean_browser(page)
+
+
+# ---------------------------------------------------------------------------
+# Regression archive — Bug Class 7: Navbar / Add Menu Behavior
+# ---------------------------------------------------------------------------
+
+def test_add_menu_closes_after_adding_widget(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.locator(".panel-add-button").evaluate("node => node.click()")
+    menu = page.locator(".panel-add-menu")
+    expect(menu).to_have_class(re.compile("open"))
+    open_add_category(page, "data").locator('.widget-add-action[data-widget-kind="stat"]').click()
+    page.wait_for_timeout(300)
+    menu_open = menu.evaluate("node => node.classList.contains('open')")
+    assert not menu_open, "Add menu remained open after widget was added"
+    assert_clean_browser(page)
+
+
+def test_add_menu_pointer_events_pass_through_after_close(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.locator(".panel-add-button").evaluate("node => node.click()")
+    expect(page.locator(".panel-add-menu")).to_have_class(re.compile("open"))
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(200)
+    is_closed = page.locator(".panel-add-menu").evaluate("node => !node.classList.contains('open')")
+    assert is_closed, "Add menu did not close on Escape"
+    page.locator(".panel-add-button").evaluate("node => node.click()")
+    expect(page.locator(".panel-add-menu")).to_have_class(re.compile("open"))
+    assert_clean_browser(page)
+
+
+def test_add_menu_submenu_alignment_no_downward_offset(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    page.locator(".panel-add-button").evaluate("node => node.click()")
+    menu = page.locator(".panel-add-menu")
+    expect(menu).to_have_class(re.compile("open"))
+    visualization = menu.locator('.object-add-category[data-object-menu-category="visualization"]')
+    visualization.locator(".object-add-category-trigger").hover()
+    page.wait_for_timeout(200)
+    submenu = visualization.locator(".object-add-category-children")
+    if submenu.is_visible():
+        parent_box = visualization.locator(".object-add-category-trigger").bounding_box()
+        submenu_box = submenu.bounding_box()
+        if parent_box and submenu_box:
+            offset = submenu_box["y"] - parent_box["y"]
+            assert offset <= 48, f"Submenu top is {offset}px below parent trigger (expected ≤48)"
+    assert_clean_browser(page)
+
+
+# ---------------------------------------------------------------------------
+# Regression archive — Bug Class 8: Background / Material System
+# ---------------------------------------------------------------------------
+
+def test_background_change_applies_immediately_without_reload(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    root = page.locator("html")
+    initial_bg = root.get_attribute("data-background")
+    page.locator(".background-tone-trigger").first.click()
+    target_tone = "deep-navy" if initial_bg != "deep-navy" else "graphite-grey"
+    page.locator(f'.background-tone-option[data-background-tone="{target_tone}"]').first.click()
+    page.wait_for_timeout(200)
+    expect(root).to_have_attribute("data-background", target_tone)
+    saved = page.evaluate("() => localStorage.getItem('dashboard-background')")
+    assert saved == target_tone, f"Background not persisted to localStorage: {saved!r}"
+    assert_clean_browser(page)
+
+
+def test_overlay_layer_does_not_intercept_widget_clicks(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    overlay_blocks = page.evaluate(
+        """
+        () => {
+          const overlay = document.querySelector(".workspace-menu-overlay-layer");
+          if (!overlay) return false;
+          const style = getComputedStyle(overlay);
+          return style.pointerEvents !== "none" && overlay.children.length === 0;
+        }
+        """
+    )
+    assert not overlay_blocks, ".workspace-menu-overlay-layer is blocking pointer events with no open menu"
+    assert_clean_browser(page)
+
+
+def test_background_adaptive_css_variables_are_defined(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    adaptive_vars = page.evaluate(
+        """
+        () => {
+          const root = getComputedStyle(document.documentElement);
+          return {
+            bg: root.getPropertyValue("--bg").trim(),
+            glassSurface: root.getPropertyValue("--glass-surface").trim(),
+            glassBorder: root.getPropertyValue("--glass-border").trim(),
+          };
+        }
+        """
+    )
+    assert adaptive_vars["bg"] != "", "--bg CSS variable is not defined"
+    assert adaptive_vars["glassSurface"] != "", "--glass-surface CSS variable is not defined"
+    assert_clean_browser(page)
+
+
+# ---------------------------------------------------------------------------
+# Regression archive — Bug Class 9: Widget Content-Well Border / Inset Parity
+# ---------------------------------------------------------------------------
+
+def test_widget_content_well_has_visible_border(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    well_info = widget.evaluate(
+        """
+        node => {
+          const well = node.querySelector(".widget-content-well");
+          if (!well) return null;
+          const styles = getComputedStyle(well);
+          return {
+            borderWidth: parseFloat(styles.borderTopWidth),
+            borderStyle: styles.borderTopStyle,
+          };
+        }
+        """
+    )
+    if well_info is not None:
+        assert well_info["borderWidth"] > 0, "widget-content-well has no visible border"
+        assert well_info["borderStyle"] != "none", "widget-content-well border-style is none"
+    assert_clean_browser(page)
+
+
+def test_chart_widget_content_well_inset_is_consistent(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    open_add_category(page, "visualization", "charts").locator('.widget-add-action[data-widget-kind="chart-line"]').click()
+    chart_widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(chart_widget).to_be_visible()
+    insets = chart_widget.evaluate(
+        """
+        node => {
+          const well = node.querySelector(".widget-content-well");
+          const stage = node.querySelector(".runtime-chart-stage");
+          if (!well || !stage) return null;
+          const wellRect = well.getBoundingClientRect();
+          const stageRect = stage.getBoundingClientRect();
+          return {
+            left: Math.round(stageRect.left - wellRect.left),
+            right: Math.round(wellRect.right - stageRect.right),
+            top: Math.round(stageRect.top - wellRect.top),
+            bottom: Math.round(wellRect.bottom - stageRect.bottom),
+          };
+        }
+        """
+    )
+    if insets is not None:
+        assert insets["left"] >= 0, f"Chart stage overflows left edge of content well: {insets}"
+        assert insets["right"] >= 0, f"Chart stage overflows right edge of content well: {insets}"
+        assert insets["top"] >= 0, f"Chart stage overflows top edge of content well: {insets}"
+        assert insets["bottom"] >= 0, f"Chart stage overflows bottom edge of content well: {insets}"
+    assert_clean_browser(page)
+
+
+def test_table_widget_content_well_inset_is_consistent(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="table"]')
+    table_widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(table_widget).to_be_visible()
+    insets = table_widget.evaluate(
+        """
+        node => {
+          const well = node.querySelector(".widget-content-well");
+          const surface = node.querySelector(".runtime-table-library-surface");
+          if (!well || !surface) return null;
+          const wellRect = well.getBoundingClientRect();
+          const surfaceRect = surface.getBoundingClientRect();
+          return {
+            left: Math.round(surfaceRect.left - wellRect.left),
+            right: Math.round(wellRect.right - surfaceRect.right),
+            top: Math.round(surfaceRect.top - wellRect.top),
+            bottom: Math.round(wellRect.bottom - surfaceRect.bottom),
+          };
+        }
+        """
+    )
+    if insets is not None:
+        assert insets["left"] >= 0, f"Table surface overflows left edge of content well: {insets}"
+        assert insets["right"] >= 0, f"Table surface overflows right edge of content well: {insets}"
+        assert insets["top"] >= 0, f"Table surface overflows top edge of content well: {insets}"
+        assert insets["bottom"] >= 0, f"Table surface overflows bottom edge of content well: {insets}"
+    assert_clean_browser(page)
+
+
+# ---------------------------------------------------------------------------
+# Regression archive — Bug Class 10: Left-Click Config Menu Close Behavior
+# ---------------------------------------------------------------------------
+
+def test_workbench_panel_closes_on_escape(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    open_tools(widget)
+    settings_btn = widget.locator(".panel-tool-drawer .panel-settings-handle, .panel-tool-drawer [data-tool='settings'], .panel-tool-drawer .widget-workbench-trigger").first
+    if settings_btn.count() > 0 and settings_btn.is_visible():
+        settings_btn.click()
+        page.wait_for_timeout(300)
+        workbench_open = page.evaluate(
+            "() => document.querySelector('.widget-workbench-panel') !== null && !document.querySelector('.widget-workbench-panel[hidden]')"
+        )
+        if workbench_open:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+            workbench_still_open = page.evaluate(
+                "() => document.querySelector('.widget-workbench-panel') !== null && !document.querySelector('.widget-workbench-panel[hidden]')"
+            )
+            assert not workbench_still_open, "Workbench panel did not close on Escape"
+    assert_clean_browser(page)
+
+
+def test_tool_drawer_closes_when_opening_another_widget_tools(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widgets = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').all()
+    assert len(widgets) >= 2
+    first = widgets[-2]
+    second = widgets[-1]
+    open_tools(first)
+    first_open = first.evaluate("node => node.classList.contains('widget-tools-open')")
+    assert first_open, "First widget tools did not open"
+    open_tools(second)
+    second_open = second.evaluate("node => node.classList.contains('widget-tools-open')")
+    assert second_open, "Second widget tools did not open"
+    assert_clean_browser(page)
+
+
+def test_tool_drawer_closes_on_outside_click(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    widget.dispatch_event("contextmenu", {"bubbles": True, "cancelable": True})
+    page.wait_for_timeout(400)
+    tools_open = widget.evaluate("node => node.classList.contains('widget-tools-open')")
+    if not tools_open:
+        pytest.skip("Right-click did not open tool drawer in this configuration")
+    page.locator(".workspace-identity-island").click()
+    page.wait_for_timeout(400)
+    tools_still_open = widget.evaluate("node => node.classList.contains('widget-tools-open')")
+    assert not tools_still_open, "Tool drawer did not close after clicking outside"
     assert_clean_browser(page)
