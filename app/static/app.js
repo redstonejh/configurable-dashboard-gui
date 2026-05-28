@@ -1247,7 +1247,10 @@ document.addEventListener("DOMContentLoaded", () => {
       restoreDashboardToolDrawer(item.__dashboardToolDrawer);
       dashboardSettingsToggleForItem(item)?.setAttribute("aria-expanded", "false");
       dashboardColorToggleForItem(item)?.setAttribute("aria-expanded", "false");
-      item.querySelector?.(":scope > .widget-tools .widget-workbench-panel")?.setAttribute("hidden", "");
+      if (item.__widgetWorkbenchPanel) {
+        restoreFloatingMenu(item.__widgetWorkbenchPanel);
+        item.__widgetWorkbenchPanel.setAttribute("hidden", "");
+      }
       setWidgetLinkNavigationSuspended(item, false);
     });
     document.querySelectorAll(".panel-color-menu-open").forEach((menu) => menu.classList.remove("panel-color-menu-open"));

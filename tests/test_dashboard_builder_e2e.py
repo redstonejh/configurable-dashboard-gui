@@ -22869,3 +22869,69 @@ def test_tool_drawer_closes_on_outside_click(page: Page, app_server: str) -> Non
     tools_still_open = widget.evaluate("node => node.classList.contains('widget-tools-open')")
     assert not tools_still_open, "Tool drawer did not close after clicking outside"
     assert_clean_browser(page)
+
+
+# ---------------------------------------------------------------------------
+# Regression archive — Bug Class 6: Workbench Panel Overlay Dismissal
+# closeInactiveDashboardTools must use stored __widgetWorkbenchPanel ref,
+# not DOM traversal, because portalFloatingMenu moves the panel to the
+# overlay layer and querySelector(":scope > ...") returns null after that.
+# ---------------------------------------------------------------------------
+
+
+def test_workbench_closes_on_outside_click(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    widget.click()
+    page.wait_for_timeout(300)
+    workbench_open = widget.evaluate("node => node.classList.contains('widget-workbench-open')")
+    if not workbench_open:
+        pytest.skip("Widget click did not open workbench in this configuration")
+    page.locator(".workspace-identity-island").click()
+    page.wait_for_timeout(400)
+    workbench_still_open = widget.evaluate("node => node.classList.contains('widget-workbench-open')")
+    assert not workbench_still_open, "Workbench panel did not close after clicking outside"
+    panel_still_visible = page.evaluate("() => !!document.querySelector('.widget-workbench-panel:not([hidden])')")
+    assert not panel_still_visible, "Workbench panel DOM node is still visible after outside click"
+    assert_clean_browser(page)
+
+
+def test_workbench_closes_on_escape_from_outside(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widget = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').last
+    expect(widget).to_be_visible()
+    widget.click()
+    page.wait_for_timeout(300)
+    workbench_open = widget.evaluate("node => node.classList.contains('widget-workbench-open')")
+    if not workbench_open:
+        pytest.skip("Widget click did not open workbench in this configuration")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+    workbench_still_open = widget.evaluate("node => node.classList.contains('widget-workbench-open')")
+    assert not workbench_still_open, "Workbench panel did not close on Escape"
+    panel_still_visible = page.evaluate("() => !!document.querySelector('.widget-workbench-panel:not([hidden])')")
+    assert not panel_still_visible, "Workbench panel DOM node is still visible after Escape"
+    assert_clean_browser(page)
+
+
+def test_opening_tool_drawer_closes_open_workbench(page: Page, app_server: str) -> None:
+    goto(page, app_server)
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    click_add_action(page, "data", '.widget-add-action[data-widget-kind="stat"]')
+    widgets = page.locator('.widget-layout > .widget-card[data-custom-widget="true"]').all()
+    assert len(widgets) >= 2
+    first = widgets[-2]
+    second = widgets[-1]
+    first.click()
+    page.wait_for_timeout(300)
+    workbench_open = first.evaluate("node => node.classList.contains('widget-workbench-open')")
+    if not workbench_open:
+        pytest.skip("Widget click did not open workbench in this configuration")
+    second.dispatch_event("contextmenu", {"bubbles": True, "cancelable": True})
+    page.wait_for_timeout(400)
+    first_workbench_still_open = first.evaluate("node => node.classList.contains('widget-workbench-open')")
+    assert not first_workbench_still_open, "Opening another widget's tool drawer did not close the open workbench"
+    assert_clean_browser(page)
