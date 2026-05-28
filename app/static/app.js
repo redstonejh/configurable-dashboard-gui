@@ -304,12 +304,226 @@ document.addEventListener("DOMContentLoaded", () => {
   const portalFloatingMenu = (menu, trigger, options = {}) => dashboardMenuOverlayRuntime?.portal?.(menu, trigger, options);
   const restoreFloatingMenu = (menu) => dashboardMenuOverlayRuntime?.restore?.(menu);
   const originalMenuParent = (menu) => dashboardMenuOverlayRuntime?.originalParent?.(menu);
+  const menuOverlayLayer = () => dashboardMenuOverlayRuntime?.ensureLayer?.() || document.body;
+  const dashboardToolDrawerVars = [
+    "--panel-lock-bg",
+    "--panel-lock-fg",
+    "--panel-lock-border",
+    "--panel-lock-glow",
+    "--panel-drawer-bg",
+    "--panel-drawer-border",
+    "--panel-drawer-shadow",
+    "--panel-control-rest-shadow",
+    "--panel-control-hover-border",
+    "--panel-control-hover-shadow",
+    "--panel-control-active-shadow",
+    "--widget-control-bg",
+    "--widget-control-hover-bg",
+    "--widget-control-active-bg",
+    "--widget-drawer-bg",
+  ];
+  const portalDashboardToolDrawer = (drawer, trigger) => {
+    if (!drawer || !trigger) return;
+    const drawerStyles = window.getComputedStyle(drawer);
+    dashboardToolDrawerVars.forEach((name) => {
+      const value = drawerStyles.getPropertyValue(name);
+      if (value) drawer.style.setProperty(name, value);
+    });
+    portalFloatingMenu(drawer, trigger, { skipPosition: true });
+    drawer.classList.add("dashboard-tool-drawer-portaled", "dashboard-tool-drawer-open");
+  };
+  const restoreDashboardToolDrawer = (drawer) => {
+    if (!drawer) return;
+    drawer.classList.remove("dashboard-tool-drawer-portaled", "dashboard-tool-drawer-open");
+    drawer.style.removeProperty("--dashboard-tool-drawer-fixed-left");
+    drawer.style.removeProperty("--dashboard-tool-drawer-fixed-top");
+    dashboardToolDrawerVars.forEach((name) => drawer.style.removeProperty(name));
+    restoreFloatingMenu(drawer);
+  };
   const closeBackgroundToneMenu = (menu) => {
     if (!menu) return;
     const popover = menu.querySelector(".background-tone-popover") || document.querySelector(".workspace-menu-overlay-layer > .background-tone-popover");
     popover?.classList.remove("open");
     restoreFloatingMenu(popover);
     menu.removeAttribute("open");
+  };
+  const linearizeChannel = (value) => {
+    const channel = value / 255;
+    return channel <= 0.03928 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+  };
+  const parseRgbFromColorValue = (value) => {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return null;
+    if (trimmed.startsWith("#")) {
+      const hex = trimmed.replace("#", "");
+      if (hex.length === 3 || hex.length === 4) {
+        const normalized = hex
+          .split("")
+          .slice(0, 3)
+          .map((digit) => parseInt(`${digit}${digit}`, 16))
+          .filter((number) => !Number.isNaN(number));
+        if (normalized.length !== 3) return null;
+        return { r: normalized[0], g: normalized[1], b: normalized[2] };
+      }
+      if (hex.length >= 6) {
+        const r = parseInt(hex.slice(0, 2), 16);
+        const g = parseInt(hex.slice(2, 4), 16);
+        const b = parseInt(hex.slice(4, 6), 16);
+        if ([r, g, b].some((channel) => Number.isNaN(channel))) return null;
+        return { r, g, b };
+      }
+      return null;
+    }
+    const rgbMatch = trimmed.match(/^rgba?\(([^)]+)\)/);
+    if (!rgbMatch) return null;
+    const channels = rgbMatch[1]
+      .split(",")
+      .slice(0, 3)
+      .map((channel) => parseFloat(channel.trim()))
+      .filter((channel) => Number.isFinite(channel));
+    if (channels.length !== 3) return null;
+    return {
+      r: Math.max(0, Math.min(255, channels[0])),
+      g: Math.max(0, Math.min(255, channels[1])),
+      b: Math.max(0, Math.min(255, channels[2])),
+    };
+  };
+  const computeRelativeLuminance = (color) => {
+    if (!color) return 0;
+    const { r, g, b } = color;
+    const linearR = linearizeChannel(r);
+    const linearG = linearizeChannel(g);
+    const linearB = linearizeChannel(b);
+    return (0.2126 * linearR) + (0.7152 * linearG) + (0.0722 * linearB);
+  };
+  const clamp01 = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    if (numeric <= 0) return 0;
+    if (numeric >= 1) return 1;
+    return numeric;
+  };
+  const getBackgroundThemeRoots = () => {
+    const roots = [document.documentElement, document.body];
+    return roots.filter((element) => element instanceof HTMLElement);
+  };
+  const backgroundToneLuminanceCache = new Map();
+  const backgroundTonePaletteCache = new Map();
+  const getBackgroundTonePalette = (tone) => {
+    if (!tone) return null;
+    if (backgroundTonePaletteCache.has(tone)) return backgroundTonePaletteCache.get(tone);
+    const option = document.querySelector(`.background-tone-option[data-background-tone="${tone}"]`);
+    if (!option) {
+      backgroundTonePaletteCache.set(tone, null);
+      return null;
+    }
+    const optionStyle = getComputedStyle(option);
+    const bg = optionStyle.getPropertyValue("--tone-swatch-start")?.trim();
+    const bgEnd = optionStyle.getPropertyValue("--tone-swatch-end")?.trim();
+    const palette = bg ? { bg, bgEnd: bgEnd || bg } : null;
+    backgroundTonePaletteCache.set(tone, palette);
+    return palette;
+  };
+  const getBackgroundToneLuminance = (button) => {
+    const tone = button?.dataset?.backgroundTone || "";
+    if (!tone) return 0;
+    if (backgroundToneLuminanceCache.has(tone)) return backgroundToneLuminanceCache.get(tone);
+    const buttonStyle = getComputedStyle(button);
+    const toneColor = parseRgbFromColorValue(buttonStyle.getPropertyValue("--tone-swatch-start")) || parseRgbFromColorValue(buttonStyle.getPropertyValue("--tone-swatch-end"));
+    const computed = toneColor ? computeRelativeLuminance(toneColor) : 0;
+    backgroundToneLuminanceCache.set(tone, computed);
+    return computed;
+  };
+  const setBackgroundExposureCompensation = (tone, palette, targets = getBackgroundThemeRoots()) => {
+    const root = targets[0] || document.documentElement;
+    const rootStyle = getComputedStyle(root);
+    const paletteBg = parseRgbFromColorValue(palette?.bg);
+    const backgroundColor = paletteBg || parseRgbFromColorValue(rootStyle.getPropertyValue("--bg"));
+    const effectiveColor = backgroundColor || parseRgbFromColorValue(String(tone || ""));
+    const fallbackLuminance = clamp01(parseFloat(rootStyle.getPropertyValue("--workspace-bg-luminance")) || 0.78);
+    // Absolute mapping — purely a function of target luminance, no baseline-relative delta.
+    // whiteMixCompensation: scales highlight and accent-wash alphas. Increases slightly on
+    //   dark bgs so white inset highlights stay visible, but starts lower than before.
+    // saturationCompensation: exceeds 1.0 on bright bgs (up to ~1.08) for stained-glass depth;
+    //   drops to ~0.78 on very dark bgs for calmer objects. Drives accent-wash intensity.
+    // surfaceGlassAlpha: new — reduces glass-surface opacity on dark bgs so widgets don't
+    //   appear blown-out against a very dark workspace.
+    const getCompensation = (targetLuminance) => {
+      const d = clamp01(1 - targetLuminance);
+      return {
+        exposureCompensation:     clamp01(0.24 - d * 0.22),
+        whiteMixCompensation:     clamp01(0.70 + d * 0.22),
+        saturationCompensation:   Math.min(1.10, 1.08 - Math.max(0, d - 0.10) * 0.34),
+        surfaceGlassAlpha:        clamp01(0.68 - d * 0.18),
+      };
+    };
+    if (!effectiveColor) {
+      const fallbackDarkness = clamp01(1 - fallbackLuminance);
+      const {
+        exposureCompensation: targetExposureCompensation,
+        whiteMixCompensation: targetWhiteMixCompensation,
+        saturationCompensation: targetSaturationCompensation,
+        surfaceGlassAlpha: targetSurfaceGlassAlpha,
+      } = getCompensation(fallbackLuminance);
+      targets.forEach((themeRoot) => {
+        themeRoot.style.setProperty("--workspace-bg-luminance", fallbackLuminance.toFixed(4));
+        themeRoot.style.setProperty("--workspace-bg-darkness", fallbackDarkness.toFixed(4));
+        themeRoot.style.setProperty("--surface-exposure-compensation", targetExposureCompensation.toFixed(4));
+        themeRoot.style.setProperty("--surface-white-mix-compensation", targetWhiteMixCompensation.toFixed(4));
+        themeRoot.style.setProperty("--surface-saturation-compensation", targetSaturationCompensation.toFixed(4));
+        themeRoot.style.setProperty("--surface-glass-alpha", targetSurfaceGlassAlpha.toFixed(4));
+      });
+      return;
+    }
+
+    const luminance = clamp01(computeRelativeLuminance(effectiveColor));
+    const darkness = clamp01(1 - luminance);
+    const {
+      exposureCompensation,
+      whiteMixCompensation,
+      saturationCompensation,
+      surfaceGlassAlpha,
+    } = getCompensation(luminance);
+    targets.forEach((themeRoot) => {
+      themeRoot.style.setProperty("--workspace-bg-luminance", luminance.toFixed(4));
+      themeRoot.style.setProperty("--workspace-bg-darkness", darkness.toFixed(4));
+      themeRoot.style.setProperty("--surface-exposure-compensation", exposureCompensation.toFixed(4));
+      themeRoot.style.setProperty("--surface-white-mix-compensation", whiteMixCompensation.toFixed(4));
+      themeRoot.style.setProperty("--surface-saturation-compensation", saturationCompensation.toFixed(4));
+      themeRoot.style.setProperty("--surface-glass-alpha", surfaceGlassAlpha.toFixed(4));
+    });
+  };
+  const sortBackgroundToneMenuOptionsByBrightness = () => {
+    document.querySelectorAll(".background-tone-menu").forEach((menu) => {
+      const popover = menu.querySelector(".background-tone-popover");
+      if (!popover) return;
+      const options = [...popover.querySelectorAll(".background-tone-option")];
+      if (!options.length) return;
+      const sortedOptions = options.sort((a, b) => {
+        const aLuminance = getBackgroundToneLuminance(a);
+        const bLuminance = getBackgroundToneLuminance(b);
+        if (aLuminance === bLuminance) return 0;
+        return bLuminance - aLuminance;
+      });
+      const groups = [...popover.querySelectorAll(".background-tone-group")];
+      const primaryGroup = groups[0] || (() => {
+        const fallbackGroup = document.createElement("div");
+        fallbackGroup.className = "background-tone-group";
+        popover.appendChild(fallbackGroup);
+        return fallbackGroup;
+      })();
+      const groupLabel = primaryGroup.querySelector(".background-tone-label");
+      if (groupLabel) {
+        primaryGroup.replaceChildren(groupLabel);
+      } else {
+        primaryGroup.replaceChildren();
+      }
+      sortedOptions.forEach((option) => {
+        primaryGroup.appendChild(option);
+      });
+      groups.slice(1).forEach((group) => group.remove());
+    });
   };
   const backgroundDefault = "frosted-light";
   const savedBackgroundTone = () => {
@@ -321,12 +535,25 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   let previewBackgroundTone = null;
   const applyBackgroundTone = (tone = savedBackgroundTone(), options = {}) => {
+    const themeRoots = getBackgroundThemeRoots();
     const selectedTone = options.preview ? savedBackgroundTone() : tone;
-    if (tone) {
-      document.documentElement.dataset.background = tone;
-    } else {
-      delete document.documentElement.dataset.background;
+    const palette = getBackgroundTonePalette(tone);
+    if (palette?.bg) {
+      themeRoots.forEach((themeRoot) => {
+        themeRoot.style.setProperty("--bg", palette.bg);
+        themeRoot.style.setProperty("--bg-end", palette.bgEnd || palette.bg);
+      });
     }
+    if (tone) {
+      themeRoots.forEach((themeRoot) => {
+        themeRoot.dataset.background = tone;
+      });
+    } else {
+      themeRoots.forEach((themeRoot) => {
+        delete themeRoot.dataset.background;
+      });
+    }
+    setBackgroundExposureCompensation(tone, palette, themeRoots);
     document.querySelectorAll(".background-tone-option").forEach((button) => {
       const selected = button.dataset.backgroundTone === selectedTone;
       button.classList.toggle("is-selected", selected);
@@ -336,6 +563,7 @@ document.addEventListener("DOMContentLoaded", () => {
       trigger.setAttribute("aria-label", `Workspace background: ${tone.replace(/-/g, " ")}`);
     });
   };
+  sortBackgroundToneMenuOptionsByBrightness();
   const previewBackgroundOption = (button) => {
     const tone = button?.dataset?.backgroundTone || backgroundDefault;
     if (!tone) return;
@@ -825,7 +1053,6 @@ document.addEventListener("DOMContentLoaded", () => {
     ".panel-color-menu",
     ".anchor-tools",
     ".anchor-link-menu",
-    ".widget-settings-schema-panel",
     ".widget-workbench-panel",
     ".panel-add-menu",
     ".layout-slot-menu",
@@ -853,7 +1080,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     return true;
   };
-  const OBJECT_SURFACE_SINGLE_CLICK_DELAY_MS = 280;
   const isWorkspaceObjectInteractiveSurfaceTarget = (event) => {
     return Boolean(
       event?.target?.closest?.(
@@ -1017,10 +1243,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const closeInactiveDashboardTools = (activeItem = null) => {
     document.querySelectorAll(".widget-tools-open, .widget-workbench-open, .db-panel-tools-open").forEach((item) => {
       if (item === activeItem) return;
-      item.classList.remove("widget-tools-open", "widget-settings-schema-open", "widget-workbench-open", "db-panel-tools-open");
+      item.classList.remove("widget-tools-open", "widget-workbench-open", "db-panel-tools-open");
+      restoreDashboardToolDrawer(item.__dashboardToolDrawer);
       dashboardSettingsToggleForItem(item)?.setAttribute("aria-expanded", "false");
       dashboardColorToggleForItem(item)?.setAttribute("aria-expanded", "false");
-      item.querySelector?.(":scope > .widget-tools .widget-settings-schema-panel")?.setAttribute("hidden", "");
       item.querySelector?.(":scope > .widget-tools .widget-workbench-panel")?.setAttribute("hidden", "");
       setWidgetLinkNavigationSuspended(item, false);
     });
@@ -1031,7 +1257,7 @@ document.addEventListener("DOMContentLoaded", () => {
     Boolean(event?.target?.closest?.(".panel-tool-drawer, .panel-settings-toggle, .widget-workbench-panel"));
   document.addEventListener("pointerdown", (event) => {
     if (isDashboardInteractionActive()) return;
-    if (event.target?.closest?.(".panel-tool-drawer, .panel-settings-toggle, .panel-color-menu, .widget-settings-schema-panel, .widget-workbench-panel")) return;
+    if (event.target?.closest?.(".panel-tool-drawer, .panel-settings-toggle, .panel-color-menu, .widget-workbench-panel")) return;
     closeInactiveDashboardTools();
   }, true);
   let groupMode = false;
@@ -5280,9 +5506,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!colorToggle || !menu) return;
     const rect = colorToggle.getBoundingClientRect();
     const width = menu.offsetWidth || 248;
+    const height = menu.offsetHeight || menu.getBoundingClientRect().height || 0;
     const gutter = 12;
     const left = Math.max(gutter, Math.min(window.innerWidth - width - gutter, rect.right - width + 2));
-    const top = Math.min(window.innerHeight - gutter, rect.bottom + 12);
+    const belowTop = rect.bottom + 12;
+    const aboveTop = rect.top - height - 12;
+    const top = belowTop + height > window.innerHeight - gutter && aboveTop >= gutter
+      ? aboveTop
+      : Math.max(gutter, Math.min(window.innerHeight - height - gutter, belowTop));
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
   };
@@ -5290,8 +5521,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const positionDashboardToolDrawer = (item, settingsButton, drawer) => {
     if (!item || !settingsButton || !drawer) return;
     const settingsRect = settingsButton.getBoundingClientRect();
-    const anchor = drawer.offsetParent || item;
-    const anchorRect = anchor.getBoundingClientRect();
     const drawerWidth = drawer.offsetWidth || drawer.getBoundingClientRect().width;
     const drawerHeight = drawer.offsetHeight || drawer.getBoundingClientRect().height;
     if (!drawerWidth || !drawerHeight) return;
@@ -5300,6 +5529,23 @@ document.addEventListener("DOMContentLoaded", () => {
     const padding = parseFloat(drawerStyles.paddingTop || "0") || 0;
     const clearance = Math.max(4, padding || gap || 4);
     const anchorGap = Math.max(4, gap || padding || 4);
+    if (drawer.classList.contains("dashboard-tool-drawer-portaled")) {
+      const viewportGutter = Math.max(8, clearance);
+      let left = settingsRect.left - anchorGap - drawerWidth;
+      let top = settingsRect.top + (settingsRect.height / 2) - (drawerHeight / 2);
+      const header = item.querySelector(":scope > .db-panel-hd");
+      if (header?.contains(settingsButton)) {
+        const headerRect = header.getBoundingClientRect();
+        top = Math.min(top, headerRect.bottom - drawerHeight - clearance);
+      }
+      left = Math.max(viewportGutter, Math.min(left, window.innerWidth - viewportGutter - drawerWidth));
+      top = Math.max(viewportGutter, Math.min(top, window.innerHeight - viewportGutter - drawerHeight));
+      drawer.style.setProperty("--dashboard-tool-drawer-fixed-left", `${Math.round(left)}px`);
+      drawer.style.setProperty("--dashboard-tool-drawer-fixed-top", `${Math.round(top)}px`);
+      return;
+    }
+    const anchor = drawer.offsetParent || item;
+    const anchorRect = anchor.getBoundingClientRect();
     const right = Math.max(0, anchorRect.right - settingsRect.left + anchorGap);
     let top = settingsRect.top + (settingsRect.height / 2) - anchorRect.top - (drawerHeight / 2);
 
@@ -5319,12 +5565,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const positionDashboardToolDrawerAtPointer = (item, drawer, clientX, clientY) => {
     if (!item || !drawer || clientX == null || clientY == null) return;
-    const anchor = drawer.offsetParent || item;
-    const anchorRect = anchor.getBoundingClientRect();
     const drawerWidth = drawer.offsetWidth || drawer.getBoundingClientRect().width;
     const drawerHeight = drawer.offsetHeight || drawer.getBoundingClientRect().height;
     if (!drawerWidth || !drawerHeight) return;
     const viewportGutter = 8;
+    if (drawer.classList.contains("dashboard-tool-drawer-portaled")) {
+      const left = Math.max(viewportGutter, Math.min(clientX - drawerWidth, window.innerWidth - viewportGutter - drawerWidth));
+      const top = Math.max(viewportGutter, Math.min(clientY, window.innerHeight - viewportGutter - drawerHeight));
+      drawer.style.setProperty("--dashboard-tool-drawer-fixed-left", `${Math.round(left)}px`);
+      drawer.style.setProperty("--dashboard-tool-drawer-fixed-top", `${Math.round(top)}px`);
+      return;
+    }
+    const anchor = drawer.offsetParent || item;
+    const anchorRect = anchor.getBoundingClientRect();
     let right = Math.max(0, anchorRect.right - clientX);
     const maxRight = Math.max(0, anchorRect.right - viewportGutter - drawerWidth);
     right = Math.min(right, maxRight);
@@ -5405,7 +5658,7 @@ document.addEventListener("DOMContentLoaded", () => {
     addGroup("Theme color", panelThemePresets, (color) => applyPanelColor(panel, color), "theme");
     menu.addEventListener("click", (event) => event.stopPropagation());
     menu.addEventListener("keydown", (event) => event.stopPropagation());
-    document.body.appendChild(menu);
+    menuOverlayLayer().appendChild(menu);
     colorToggle.__panelColorMenu = menu;
     return menu;
   };
@@ -6013,28 +6266,6 @@ document.addEventListener("DOMContentLoaded", () => {
       button.type = "button";
     });
   };
-  const ensureWidgetSettingsSchemaPanel = (widget) => {
-    const tools = widget?.querySelector(":scope > .widget-tools");
-    if (!tools) return null;
-    let panel = tools.querySelector(":scope > .widget-settings-schema-panel");
-    if (!panel) {
-      panel = document.createElement("div");
-      panel.className = "widget-settings-schema-panel";
-      panel.setAttribute("role", "menu");
-      panel.setAttribute("aria-label", "Widget appearance");
-      panel.hidden = true;
-      tools.appendChild(panel);
-    }
-    const isOpen = widget.classList.contains("widget-settings-schema-open");
-    const renderedMarkup = renderWidgetSettingsSchemaPanel(widget, "appearance");
-    if (isOpen) {
-      panel.innerHTML = renderedMarkup;
-      normalizeWidgetMenuFormControls(panel);
-    }
-    else panel.replaceChildren();
-    panel.hidden = !isOpen || !renderedMarkup?.trim();
-    return panel;
-  };
   const renderWidgetWorkbenchPanel = (widget) => {
     const definition = widgetDefinitionForElement(widget);
     const resolvedContext = resolveWorkspaceContextForItem(widget);
@@ -6341,7 +6572,6 @@ document.addEventListener("DOMContentLoaded", () => {
         status: queryState?.status || widget.dataset.widgetRuntimeStatus || "empty",
       });
     }
-    ensureWidgetSettingsSchemaPanel(widget);
     return true;
   };
   window.dashboardAssetRuntime = {
@@ -7079,6 +7309,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const tools = anchor.querySelector(".anchor-tools");
     const settings = anchor.querySelector(".anchor-settings-toggle");
     const drawer = anchor.querySelector(".anchor-tool-drawer");
+    anchor.__dashboardToolDrawer = drawer;
     const moveHandle = anchor.querySelector(".panel-move-handle");
     const titleButton = anchor.querySelector(".panel-title-handle");
     const colorToggle = anchor.querySelector(".panel-color-toggle");
@@ -7089,6 +7320,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const openTools = (pointerCoords = null) => {
       if (!canOpenDashboardTools(anchor)) return;
       closeInactiveDashboardTools(anchor);
+      portalDashboardToolDrawer(drawer, settings || anchor);
       drawer?.style.removeProperty("--dashboard-tool-drawer-top");
       drawer?.style.removeProperty("--dashboard-tool-drawer-right");
       if (pointerCoords) {
@@ -7106,6 +7338,7 @@ document.addEventListener("DOMContentLoaded", () => {
       linkMenu?.classList.remove("anchor-link-menu-open");
       colorToggle?.setAttribute("aria-expanded", "false");
       colorMenu?.classList.remove("panel-color-menu-open");
+      restoreDashboardToolDrawer(drawer);
       syncLayoutToolsActive();
     };
     const toggleLinkMenu = () => {
@@ -7358,7 +7591,7 @@ document.addEventListener("DOMContentLoaded", () => {
         openTools();
       }
     });
-    anchor.addEventListener("dblclick", (event) => {
+    anchor.__openCustomization = (event) => {
       if (event.target?.closest?.(".anchor-tools, input, textarea, select, button, video, iframe, [contenteditable='true']")) return;
       event.preventDefault();
       event.stopPropagation();
@@ -7367,7 +7600,7 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         openTools({ clientX: event.clientX, clientY: event.clientY });
       }
-    }, true);
+    };
     linkToggle?.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -10517,6 +10750,7 @@ document.addEventListener("DOMContentLoaded", () => {
       bindWidgetRuntimeControls(widget);
       const tools = widget.querySelector(".widget-tools");
       const drawer = widget.querySelector(".widget-tool-drawer");
+      widget.__dashboardToolDrawer = drawer;
       const settings = widget.querySelector(".widget-settings-toggle");
       const moveHandle = widget.querySelector(".panel-move-handle");
       const resizeHandle = widget.querySelector(".panel-resize-handle");
@@ -10525,7 +10759,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const colorToggle = widget.querySelector(".panel-color-toggle");
       const deleteButton = widget.querySelector(".panel-delete-handle");
       const colorMenu = buildPanelColorMenu(widget, layout, colorToggle);
-      const settingsSchemaPanel = ensureWidgetSettingsSchemaPanel(widget);
       const workbenchPanel = ensureWidgetWorkbenchPanel(widget);
       const syncOpenWidgetToolPosition = () => {
         if (!widget.classList.contains("widget-tools-open") && !widget.classList.contains("widget-workbench-open")) return;
@@ -10544,7 +10777,6 @@ document.addEventListener("DOMContentLoaded", () => {
         });
       }
       let closeTimer;
-      let widgetSingleClickTimer = null;
       let suppressToolOpenUntil = 0;
       let suppressWidgetClickUntil = 0;
       let dragging = false;
@@ -10555,6 +10787,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const releaseToolLeaveClose = (event = null) => {
         const closeRestoredTools = (event?.type === "pointerdown" || event?.type === "pointermove") &&
           !tools?.contains(event.target) &&
+          !drawer?.contains(event.target) &&
           !colorMenu?.contains(event.target);
         ignoreToolLeaveCloseUntilPointerActivity = false;
         if (!releaseToolLeaveCloseResume) return;
@@ -10574,11 +10807,16 @@ document.addEventListener("DOMContentLoaded", () => {
         if (performance.now() < suppressToolOpenUntil) return;
         if (!canOpenDashboardTools(widget)) return;
         window.clearTimeout(closeTimer);
+        portalDashboardToolDrawer(drawer, settings || widget);
         if (pointerCoords) {
           positionDashboardToolDrawerAtPointer(widget, drawer, pointerCoords.clientX, pointerCoords.clientY);
         } else {
           positionDashboardToolDrawer(widget, settings, drawer);
         }
+        const _openToolsTop = drawer?.style?.getPropertyValue("--dashboard-tool-drawer-top");
+        const _openToolsRight = drawer?.style?.getPropertyValue("--dashboard-tool-drawer-right");
+        if (_openToolsTop) tools?.style?.setProperty("--dashboard-tool-drawer-top", _openToolsTop);
+        if (_openToolsRight) tools?.style?.setProperty("--dashboard-tool-drawer-right", _openToolsRight);
         setWidgetLinkNavigationSuspended(widget, true);
         widget.classList.add("widget-tools-open");
         settings?.setAttribute("aria-expanded", "true");
@@ -10589,13 +10827,12 @@ document.addEventListener("DOMContentLoaded", () => {
         toolsOpenedByApproach = false;
         if (tools?.contains(document.activeElement)) document.activeElement?.blur?.();
         widget.classList.remove("widget-tools-open");
-        widget.classList.remove("widget-settings-schema-open");
         widget.classList.remove("widget-workbench-open");
         settings?.setAttribute("aria-expanded", "false");
-        settingsSchemaPanel?.setAttribute("hidden", "");
         workbenchPanel?.setAttribute("hidden", "");
         colorMenu?.classList.remove("panel-color-menu-open");
         colorToggle?.setAttribute("aria-expanded", "false");
+        restoreDashboardToolDrawer(drawer);
         setWidgetLinkNavigationSuspended(widget, false);
         syncLayoutToolsActive();
       };
@@ -10610,9 +10847,7 @@ document.addEventListener("DOMContentLoaded", () => {
         closeInactiveDashboardTools(widget);
         window.clearTimeout(closeTimer);
         widget.classList.remove("widget-tools-open");
-        widget.classList.remove("widget-settings-schema-open");
         settings?.setAttribute("aria-expanded", "false");
-        settingsSchemaPanel?.setAttribute("hidden", "");
         colorMenu?.classList.remove("panel-color-menu-open");
         colorToggle?.setAttribute("aria-expanded", "false");
         setWidgetLinkNavigationSuspended(widget, true);
@@ -10633,7 +10868,6 @@ document.addEventListener("DOMContentLoaded", () => {
         closeWorkbench();
         if (!canOpenDashboardTools(widget)) return;
         const shouldClose = widget.classList.contains("widget-tools-open") &&
-          widget.classList.contains("widget-settings-schema-open") &&
           !toolsOpenedByApproach;
         toolsOpenedByApproach = false;
         if (shouldClose) {
@@ -10645,15 +10879,6 @@ document.addEventListener("DOMContentLoaded", () => {
         openTools(pointerCoords);
         colorMenu?.classList.remove("panel-color-menu-open");
         colorToggle?.setAttribute("aria-expanded", "false");
-        widget.classList.add("widget-settings-schema-open");
-        const panel = ensureWidgetSettingsSchemaPanel(widget);
-        if (panel) {
-          if (pointerCoords) {
-            positionDashboardToolDrawerAtPointer(widget, drawer, pointerCoords.clientX, pointerCoords.clientY);
-          } else {
-            positionDashboardToolDrawer(widget, settings, drawer);
-          }
-        }
       };
       const pointerIntersectsSettingsToggle = (event) => {
         if (!settings || event?.clientX == null || event?.clientY == null) return false;
@@ -10666,7 +10891,13 @@ document.addEventListener("DOMContentLoaded", () => {
         closeTimer = window.setTimeout(() => {
           if (isDashboardInteractionActive()) return;
           if (ignoreToolLeaveCloseUntilPointerActivity) return;
-          if (!tools?.matches(":hover") && !colorMenu?.matches(":hover")) closeTools();
+          const activeElement = document.activeElement;
+          if (
+            !tools?.matches(":hover") &&
+            !drawer?.matches(":hover") &&
+            !drawer?.contains(activeElement) &&
+            !colorMenu?.matches(":hover")
+          ) closeTools();
         }, 260);
       };
       const resumeToolHoverClose = () => {
@@ -10700,32 +10931,24 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
         if (event.target?.closest?.(".widget-tools")) return;
-        if (event.detail > 1) {
-          window.clearTimeout(widgetSingleClickTimer);
-          return;
-        }
         if (isInteractiveWidgetSurfaceTarget(event)) return;
         event.preventDefault();
         event.stopPropagation();
         if (performance.now() < suppressWidgetClickUntil) return;
         suppressToolOpenUntil = 0;
-        window.clearTimeout(widgetSingleClickTimer);
-        widgetSingleClickTimer = window.setTimeout(() => {
-          openWorkbench();
-          try {
-            widget.focus?.({ preventScroll: true });
-          } catch {
-            widget.focus?.();
-          }
-        }, OBJECT_SURFACE_SINGLE_CLICK_DELAY_MS);
+        openWorkbench();
+        try {
+          widget.focus?.({ preventScroll: true });
+        } catch {
+          widget.focus?.();
+        }
       }, true);
-      widget.addEventListener("dblclick", (event) => {
+      widget.__openCustomization = (event) => {
         if (event.target?.closest?.(".widget-tools") || isInteractiveWidgetSurfaceTarget(event)) return;
         event.preventDefault();
         event.stopPropagation();
-        window.clearTimeout(widgetSingleClickTimer);
         toggleAppearanceSettings({ clientX: event.clientX, clientY: event.clientY });
-      }, true);
+      };
       widget.addEventListener("pointermove", (event) => {
         if (event.target?.closest?.(".widget-tools")) return;
         if (!pointerIntersectsSettingsToggle(event)) return;
@@ -10733,34 +10956,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }, { passive: true });
       tools?.addEventListener("mouseenter", resumeToolHoverClose);
       tools?.addEventListener("mouseleave", scheduleClose);
-      settingsSchemaPanel?.addEventListener("mouseenter", resumeToolHoverClose);
-      settingsSchemaPanel?.addEventListener("mouseleave", scheduleClose);
-      settingsSchemaPanel?.addEventListener("click", (event) => {
-        event.stopPropagation();
-      });
-      settingsSchemaPanel?.addEventListener("submit", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      });
-      settingsSchemaPanel?.addEventListener("input", (event) => {
-        event.stopPropagation();
-      });
-      settingsSchemaPanel?.addEventListener("change", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const input = event.target?.closest?.(".widget-setting-input");
-        if (!input || !widget.contains(input)) return;
-        applyWidgetSettingsSchemaChange(widget, input, { history: true });
-      });
-      settingsSchemaPanel?.addEventListener("keydown", (event) => {
-        event.stopPropagation();
-        if (event.key === "Escape") {
-          event.preventDefault();
-          widget.classList.remove("widget-settings-schema-open");
-          settingsSchemaPanel.hidden = true;
-          settings?.focus?.({ preventScroll: true });
-        }
-      });
       workbenchPanel?.addEventListener("click", (event) => {
         event.stopPropagation();
       });
@@ -10803,8 +10998,6 @@ document.addEventListener("DOMContentLoaded", () => {
       colorToggle?.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        widget.classList.remove("widget-settings-schema-open");
-        settingsSchemaPanel?.setAttribute("hidden", "");
         const nextOpen = !colorMenu?.classList.contains("panel-color-menu-open");
         if (nextOpen) {
           syncPanelThemeVars(widget, colorMenu);
@@ -10822,11 +11015,6 @@ document.addEventListener("DOMContentLoaded", () => {
       document.addEventListener("pointerdown", (event) => {
         if (!colorMenu?.classList.contains("panel-color-menu-open")) return;
         if (widget.contains(event.target) || colorMenu.contains(event.target)) return;
-        closeTools();
-      });
-      document.addEventListener("pointerdown", (event) => {
-        if (!widget.classList.contains("widget-settings-schema-open")) return;
-        if (widget.contains(event.target) || colorMenu?.contains(event.target)) return;
         closeTools();
       });
       document.addEventListener("pointerdown", (event) => {
@@ -11344,6 +11532,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const settingsButton = header?.querySelector(".panel-settings-toggle");
       const panelTools = header?.querySelector(".panel-tools");
       const panelToolDrawer = panelTools?.querySelector(":scope > .panel-tool-drawer");
+      panel.__dashboardToolDrawer = panelToolDrawer;
       const capabilities = workspaceObjectCapabilities(panel);
       if (panelToolDrawer && !panelToolDrawer.querySelector(".panel-delete-handle")) {
         panelToolDrawer.insertAdjacentHTML("beforeend", '<button class="panel-tool-button panel-delete-handle" type="button" aria-label="Delete panel" title="Delete panel"><span class="trash-icon" aria-hidden="true"></span></button>');
@@ -11394,13 +11583,13 @@ document.addEventListener("DOMContentLoaded", () => {
       let toolPointerCapture = false;
       let suppressHeaderToggleUntil = 0;
       let suppressToolOpenUntil = 0;
-      let panelToggleTimer = null;
       let ignorePanelToolLeaveCloseUntilPointerActivity = false;
       let releasePanelToolLeaveCloseResume = null;
       let panelToolsOpenedByApproach = false;
       const releasePanelToolLeaveClose = (event = null) => {
         const closeRestoredTools = (event?.type === "pointerdown" || event?.type === "pointermove") &&
           !panelTools?.contains(event.target) &&
+          !panelToolDrawer?.contains(event.target) &&
           !colorMenu?.contains(event.target);
         ignorePanelToolLeaveCloseUntilPointerActivity = false;
         if (!releasePanelToolLeaveCloseResume) return;
@@ -11420,6 +11609,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (performance.now() < suppressToolOpenUntil) return;
         if (!canOpenDashboardTools(panel)) return;
         window.clearTimeout(toolsCloseTimer);
+        portalDashboardToolDrawer(panelToolDrawer, settingsButton || panel);
         if (pointerCoords) {
           positionDashboardToolDrawerAtPointer(panel, panelToolDrawer, pointerCoords.clientX, pointerCoords.clientY);
         } else {
@@ -11438,6 +11628,7 @@ document.addEventListener("DOMContentLoaded", () => {
         settingsButton?.setAttribute("aria-expanded", "false");
         colorToggle?.setAttribute("aria-expanded", "false");
         colorMenu?.classList.remove("panel-color-menu-open");
+        restoreDashboardToolDrawer(panelToolDrawer);
         syncLayoutToolsActive();
       };
 
@@ -11453,6 +11644,7 @@ document.addEventListener("DOMContentLoaded", () => {
             settingsButton?.matches(":hover") ||
             panelToolDrawer?.matches(":hover") ||
             colorMenu?.matches(":hover") ||
+            panelToolDrawer?.contains(activeElement) ||
             (panelTools?.contains(activeElement) && activeElement !== colorToggle);
           if (!stillUsingTools) closePanelTools();
         }, 300);
@@ -11666,24 +11858,18 @@ document.addEventListener("DOMContentLoaded", () => {
       };
       header.addEventListener("click", (event) => {
         if (event.target?.closest?.(".panel-tools")) return;
-        if (event.detail > 1) {
-          window.clearTimeout(panelToggleTimer);
-          return;
-        }
         if (performance.now() < suppressHeaderToggleUntil) return;
-        window.clearTimeout(panelToggleTimer);
-        panelToggleTimer = window.setTimeout(togglePanel, OBJECT_SURFACE_SINGLE_CLICK_DELAY_MS);
+        togglePanel();
       });
-      panel.addEventListener("dblclick", (event) => {
+      panel.__openCustomization = (event) => {
         if (event.target?.closest?.(".panel-tools") || isInteractivePanelSurfaceTarget(event)) return;
         event.preventDefault();
         event.stopPropagation();
-        window.clearTimeout(panelToggleTimer);
         releasePanelToolLeaveClose();
         if (!canOpenDashboardTools(panel)) return;
         closeInactiveDashboardTools(panel);
         openPanelTools({ clientX: event.clientX, clientY: event.clientY });
-      }, true);
+      };
       header.addEventListener("keydown", (event) => {
         if (event.target?.closest?.(".panel-tools")) return;
         if (event.target?.isContentEditable) return;
@@ -12001,6 +12187,9 @@ document.addEventListener("DOMContentLoaded", () => {
   ])].forEach(restoreLoadedExpansionBaseline);
 
   document.querySelectorAll(".workspace-anchor-layer").forEach(initFloatingAnchorLayer);
+  document.addEventListener("contextmenu", (event) => {
+    event.target?.closest?.(surfaceResponseSelector)?.__openCustomization?.(event);
+  }, true);
   document.querySelectorAll(".workspace-minimap-layer").forEach(initWorkspaceMinimapLayer);
   window.addEventListener("scroll", () => refreshWorkspaceMiniMaps(), { passive: true });
   window.addEventListener("resize", () => refreshWorkspaceMiniMaps(), { passive: true });
@@ -14052,8 +14241,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const openMenu = () => {
       window.clearTimeout(closeTimer);
       renderLayoutSourceMenus();
-      menu?.classList.add("open");
       portalFloatingMenu(menu, trigger, { align: "left", offset: 8 });
+      if (!menu?.classList.contains("open")) {
+        menu?.classList.remove("open");
+        void menu?.offsetHeight;
+        window.requestAnimationFrame(() => {
+          menu?.classList.add("open");
+        });
+      }
       trigger?.setAttribute("aria-expanded", "true");
     };
     const scheduleClose = () => {
@@ -14065,6 +14260,19 @@ document.addEventListener("DOMContentLoaded", () => {
     const closeMenu = () => {
       window.clearTimeout(closeTimer);
       menu?.classList.remove("open");
+      const restoreAfterAnimation = () => {
+        if (menu?.classList?.contains("open")) return;
+        restoreFloatingMenu(menu);
+        trigger?.setAttribute("aria-expanded", "false");
+      };
+      if (menu?.classList.contains("menu-portaled")) {
+        const duration = parseFloat(getComputedStyle(menu).transitionDuration || "0");
+        if (duration > 0) {
+          trigger?.setAttribute("aria-expanded", "false");
+          menu?.addEventListener("transitionend", restoreAfterAnimation, { once: true });
+          return;
+        }
+      }
       restoreFloatingMenu(menu);
       trigger?.setAttribute("aria-expanded", "false");
     };
@@ -14396,13 +14604,19 @@ document.addEventListener("DOMContentLoaded", () => {
       closeObjectAddSubmenus(menu);
       window.clearTimeout(closeTimer);
       syncMenuViewportSize();
-      menu?.classList.add("open");
       portalFloatingMenu(menu, trigger, { align: "left", offset: 8 });
+      if (!menu?.classList.contains("open")) {
+        menu?.classList.remove("open");
+        void menu?.offsetHeight;
+        window.requestAnimationFrame(() => {
+          menu?.classList.add("open");
+          requestAnimationFrame(() => {
+            syncMenuViewportSize();
+            positionPortaledMenu(menu, trigger, { align: "left", offset: 8 });
+          });
+        });
+      }
       trigger?.setAttribute("aria-expanded", "true");
-      requestAnimationFrame(() => {
-        syncMenuViewportSize();
-        positionPortaledMenu(menu, trigger, { align: "left", offset: 8 });
-      });
     };
     const scheduleClose = () => {
       window.clearTimeout(closeTimer);
@@ -14416,6 +14630,17 @@ document.addEventListener("DOMContentLoaded", () => {
       menu?.classList.remove("open");
       menu?.classList.remove("menu-scroll");
       menu?.classList.remove("submenu-active");
+      const restoreAfterAnimation = () => {
+        if (menu?.classList?.contains("open")) return;
+        restoreFloatingMenu(menu);
+      };
+      if (menu?.classList.contains("menu-portaled")) {
+        const duration = parseFloat(getComputedStyle(menu).transitionDuration || "0");
+        if (duration > 0) {
+          menu?.addEventListener("transitionend", restoreAfterAnimation, { once: true });
+          return;
+        }
+      }
       restoreFloatingMenu(menu);
       trigger?.setAttribute("aria-expanded", "false");
     };

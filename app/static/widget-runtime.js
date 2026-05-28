@@ -453,7 +453,6 @@
           <div class="panel-tool-drawer widget-tool-drawer">
             ${deps.panelToolButtonsMarkup?.(theme, true) || ""}
           </div>
-          <div class="widget-settings-schema-panel" role="menu" aria-label="Widget settings" hidden></div>
           <div class="widget-workbench-panel" role="dialog" aria-label="Widget workbench" hidden></div>
         </div>`);
     };

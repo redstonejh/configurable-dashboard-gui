@@ -72,10 +72,17 @@
     if (menu.parentElement !== layer) layer.appendChild(menu);
     menu.classList.add("menu-portaled");
     menu.dataset.menuPortaled = "true";
+    menu.style.position = "fixed";
+    menu.style.right = "auto";
+    menu.style.bottom = "auto";
+    if (!options?.skipPosition) {
+      menu.style.left = "0px";
+      menu.style.top = "0px";
+      position(menu, trigger, options);
+    }
     if (interactionState?.state) {
       interactionState.state.activeMenuState = { menu, trigger, options };
     }
-    position(menu, trigger, options);
     return true;
   };
 
@@ -112,8 +119,10 @@
   const originalParent = (menu) => portalState.get(menu)?.parent || null;
 
   const repositionOpen = () => {
-    ensureLayer().querySelectorAll(":scope > .nav-menu-shell").forEach((menu) => {
-      if (menu.__menuPortalTrigger) position(menu, menu.__menuPortalTrigger, menu.__menuPortalOptions || {});
+    ensureLayer().querySelectorAll(":scope > [data-menu-portaled='true']").forEach((menu) => {
+      if (menu.__menuPortalTrigger && !menu.__menuPortalOptions?.skipPosition) {
+        position(menu, menu.__menuPortalTrigger, menu.__menuPortalOptions || {});
+      }
     });
   };
 

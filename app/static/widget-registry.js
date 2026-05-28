@@ -653,17 +653,12 @@
     row,
     value: numberValue(row?.[field]),
   })).filter((entry) => entry.value != null);
-  const chartFrame = ({ instance, definition, density, body, meta = "", legend = "", data = null, resolvedContext = null }) => {
-    const title = instance.config?.title || definition.displayName || "Chart";
+  const chartFrame = ({ instance, definition, density, body, legend = "", data = null, resolvedContext = null }) => {
     const densityTier = normalizeDensity(instance?.density, resolveWidgetDensity(instance));
     const contextLabel = chartContextLabel(resolvedContext || {}, data);
     const traceable = Boolean(resolvedContext?.dataSourceId || data?.sourceId || data?.metadata?.lineage);
     return `
       <div class="runtime-chart-widget runtime-chart-density-${density} widget-density-${densityTier}" data-density="${escapeHtml(densityTier)}" data-runtime-state="ready" data-runtime-source="${escapeHtml(runtimeSource(data))}" data-runtime-traceable="${traceable ? "true" : "false"}" data-runtime-context="${escapeHtml(contextLabel)}" data-chart-type="${escapeHtml(definition.chartType)}" data-chart-category="${escapeHtml(definition.category || "general")}">
-        <div class="runtime-chart-header">
-          <span class="stat-lbl">${escapeHtml(title)}</span>
-          ${meta ? `<span class="runtime-chart-meta">${escapeHtml(meta)}</span>` : ""}
-        </div>
         <div class="runtime-chart-stage">${body}</div>
         ${contextLabel ? `<div class="runtime-chart-context">${escapeHtml(contextLabel)}</div>` : ""}
         ${legend}
@@ -674,16 +669,10 @@
     const density = chartDensityFor(instance);
     const title = config.title || definition.displayName || "Chart";
     const points = groupedChartData(rows, config, resolvedContext, { series: ["grouped-bar", "stacked-bar"].includes(definition.chartType) });
-    const meta = ["pie", "donut"].includes(definition.chartType)
-      ? runtimeMeta(`${points.filter((point) => point.value > 0).length} slices`, data)
-      : ["scatter", "bubble"].includes(definition.chartType)
-        ? runtimeMeta(`${Math.min(rows.length, chartLimit(config, 80))} points`, data)
-        : runtimeMeta(`${rows.length} rows`, data);
     return chartFrame({
       instance,
       definition,
       density,
-      meta,
       body: `<div class="widget-content-well widget-library-surface runtime-chart-library-surface"><div class="runtime-chart-echarts" data-chart-renderer="echarts" data-chart-type="${escapeHtml(definition.chartType)}" role="img" aria-label="${escapeHtml(title)}"></div></div>`,
       legend: "",
       data,
@@ -1379,8 +1368,7 @@
     const footer = widgetShellFooter(definition, instance, props);
     const hideHeaderDensities = new Set(Array.isArray(shellConfig.hideHeaderDensities) ? shellConfig.hideHeaderDensities : []);
     const contentState = widgetShellStateFromMarkup(content, props.status || "empty");
-    const headerAllowedForState = !(shellConfig.hideHeaderForRuntimeStates === true && contentState !== "ready");
-    const showHeader = shellConfig.showHeader === true && headerAllowedForState && !hideHeaderDensities.has(density) && (title || metadata.length);
+    const showHeader = false;
     const titleClass = ["widget-shell-title", shellConfig.titleClass].filter(Boolean).join(" ");
     const metadataClass = ["widget-shell-meta", shellConfig.metadataClass].filter(Boolean).join(" ");
     const state = contentState;
@@ -2000,10 +1988,6 @@
       const visibleControls = controls.slice(0, density === "small" ? 1 : density === "medium" ? 3 : controls.length);
       return `
         <div class="filter-widget-content filter-widget-density-${density}" data-filter-control-count="${controls.length}">
-          <div class="filter-widget-header">
-            <span class="stat-lbl">${escapeHtml(config.title || "Filters")}</span>
-            ${resolvedContext?.dataSourceId ? `<span class="filter-widget-meta">${escapeHtml(`${visibleControls.length} active controls`)}</span>` : ""}
-          </div>
           <div class="filter-widget-controls">
             ${visibleControls.map(renderFilterControl).join("")}
           </div>
@@ -2058,8 +2042,7 @@
         <div class="text-widget-content text-widget-density-${density}">
           ${density === "small"
             ? `<div class="text-widget-preview" aria-label="${escapeHtml(config.title || "Note")}">${escapeHtml(body || config.placeholder || "Write a note")}</div>`
-            : `<div class="text-widget-header"><span class="stat-lbl">${escapeHtml(config.title || "Note")}</span></div>
-              <textarea class="text-widget-editor" aria-label="${escapeHtml(config.title || "Note")}" spellcheck="true" placeholder="${escapeHtml(config.placeholder || "Write a note")}">${escapeHtml(body)}</textarea>`}
+            : `<textarea class="text-widget-editor" aria-label="${escapeHtml(config.title || "Note")}" spellcheck="true" placeholder="${escapeHtml(config.placeholder || "Write a note")}">${escapeHtml(body)}</textarea>`}
         </div>`;
     },
   });
@@ -2109,10 +2092,6 @@
         : `Rows ${summary.startRow || 1}+`;
       return `
         <div class="region-summary-widget region-summary-density-${density}" data-region-id="${escapeHtml(summary.id || resolvedContext?.regionId || "")}">
-          <div class="region-summary-header">
-            <span class="stat-lbl">${escapeHtml(instance.config.title || "Region Summary")}</span>
-            <span class="region-summary-range">${escapeHtml(rowRange)}</span>
-          </div>
           <strong class="region-summary-title">${escapeHtml(regionLabel)}</strong>
           <div class="region-summary-metrics" aria-label="Region object counts">
             <span><b>${Number(summary.widgets) || 0}</b> Widgets</span>
@@ -2183,12 +2162,8 @@
       const density = normalizeDensity(instance.density || resolveWidgetDensity(instance), "standard");
       const compact = compactDensity(density);
       if (!allDatasets.length) {
-        return `
-          <div class="dataset-origin-widget dataset-origin-density-${escapeHtml(density)}" data-origin-state="empty">
-            <div class="dataset-origin-header">
-              <span class="stat-lbl">${escapeHtml(title)}</span>
-              <span class="dataset-origin-kicker">Substrate</span>
-            </div>
+      return `
+        <div class="dataset-origin-widget dataset-origin-density-${escapeHtml(density)}" data-origin-state="empty">
             ${runtimeState("No datasets", "Substrate is empty", {
               state: "empty",
               expected: "Datasets registered in the universal data substrate.",
@@ -2198,12 +2173,8 @@
           </div>`;
       }
       if (!datasets.length) {
-        return `
-          <div class="dataset-origin-widget dataset-origin-density-${escapeHtml(density)}" data-origin-state="unselected">
-            <div class="dataset-origin-header">
-              <span class="stat-lbl">${escapeHtml(title)}</span>
-              <span class="dataset-origin-kicker">Substrate</span>
-            </div>
+      return `
+        <div class="dataset-origin-widget dataset-origin-density-${escapeHtml(density)}" data-origin-state="unselected">
             ${runtimeState(String(allDatasets.length), "Datasets available", {
               state: "configure",
               expected: "One or more selected datasets exposed as typed output streams.",
@@ -2215,10 +2186,6 @@
       const visibleDatasets = datasets.slice(0, compact ? 2 : 4);
       return `
         <div class="dataset-origin-widget dataset-origin-density-${escapeHtml(density)}" data-origin-state="ready" data-origin-dataset-count="${datasets.length}">
-          <div class="dataset-origin-header">
-            <span class="stat-lbl">${escapeHtml(title)}</span>
-            <span class="dataset-origin-kicker">${escapeHtml(`${datasets.length} stream${datasets.length === 1 ? "" : "s"}`)}</span>
-          </div>
           <div class="dataset-origin-list" role="list" aria-label="Exposed substrate datasets">
             ${visibleDatasets.map((dataset) => {
               const fields = (dataset.fields || []).slice(0, compact ? 3 : 6);
@@ -2393,10 +2360,6 @@
       const density = normalizeDensity(instance.density || resolveWidgetDensity(instance), "standard");
       return `
         <div class="data-filter-widget data-filter-density-${escapeHtml(density)}" data-filter-mode="${escapeHtml(mode)}" data-filter-operator="${escapeHtml(operator)}" data-filter-target-type="${escapeHtml(targetType)}" data-invert-output="${config.invertOutput ? "true" : "false"}">
-          <div class="data-filter-header">
-            <span class="stat-lbl">${escapeHtml(title)}</span>
-            <span class="data-filter-kicker">${escapeHtml(kicker)}</span>
-          </div>
           <div class="data-filter-core" aria-label="${escapeHtml(ariaLabel)}">
             <strong>${escapeHtml(primaryLabel)}</strong>
             ${config.invertOutput && mode === "logic" ? `<span class="data-filter-modifier">NOT</span>` : ""}
@@ -2495,10 +2458,6 @@
       const reason = connected ? `${active ? "Engaged by" : "Listening to"} ${sourceLabel || "dataflow"}` : "Waiting for dataflow input";
       return `
         <div class="shift-widget shift-widget-density-${escapeHtml(density)}" data-shift-state="${active ? "on" : "off"}" data-shift-connected="${connected ? "true" : "false"}" data-shift-reason="${escapeHtml(reason)}">
-          <div class="shift-widget-header">
-            <span class="stat-lbl">${escapeHtml(title)}</span>
-            <span class="shift-widget-kicker">${connected ? "Signal input" : "No input"}</span>
-          </div>
           <div class="shift-widget-core" aria-label="${escapeHtml(`${title}: ${label}`)}">
             <strong>${escapeHtml(label)}</strong>
             <span class="shift-widget-state-dot" aria-hidden="true"></span>
@@ -2559,10 +2518,6 @@
       }) || [];
       return `
         <div class="meta-widget activity-feed-widget meta-density-${density}" data-meta-widget="activity-feed" data-event-count="${events.length}">
-          <div class="meta-widget-header">
-            <span class="stat-lbl">${escapeHtml(config.title || "Activity Feed")}</span>
-            <span class="meta-widget-kicker">${escapeHtml(config.scope || "workspace")}</span>
-          </div>
           <div class="activity-feed-list" role="log" aria-label="${escapeHtml(config.title || "Activity Feed")}">
             ${events.map((event) => `<article class="activity-feed-item" tabindex="0" role="button" aria-expanded="false" data-event-id="${escapeHtml(event.id || "")}" data-event-type="${escapeHtml(event.type || "")}" data-event-severity="${escapeHtml(runtimeEventSeverity(event))}" data-event-freshness="${escapeHtml(runtimeEventFreshness(event))}" data-event-traceable="${event.traceable || event.objectId || event.payload?.linkId ? "true" : "false"}">
               <span class="activity-feed-dot" aria-hidden="true"></span>
@@ -2634,10 +2589,6 @@
       const planId = String(config.lastPlanId || "").trim();
       return `
         <div class="meta-widget ai-assistant-widget meta-density-${density}" data-meta-widget="ai-assistant" data-assistant-scope="${escapeHtml(scope.scope || config.scope || "region")}">
-          <div class="meta-widget-header">
-            <span class="stat-lbl">${escapeHtml(config.title || "AI Assistant")}</span>
-            <span class="meta-widget-kicker">Operator</span>
-          </div>
           <div class="ai-assistant-panel">
             <strong>${escapeHtml(scope.regionLabel || contextScopeLabel(resolvedContext))}</strong>
             ${lastQuestion ? "" : "<p>Ask for an analytical workspace. The operator inspects data, creates a plan, and builds registry-backed widgets through safe actions.</p>"}
@@ -2731,10 +2682,6 @@
       const density = metaDensity(instance);
       return `
         <div class="meta-widget context-inspector-widget meta-density-${density}" data-meta-widget="context-inspector" data-inspector-target="${escapeHtml(config.target || "currentRegion")}">
-          <div class="meta-widget-header">
-            <span class="stat-lbl">${escapeHtml(config.title || "Context Inspector")}</span>
-            <span class="meta-widget-kicker">Engineer</span>
-          </div>
           <div class="context-inspector-grid">
             ${config.showDataSource !== false ? `<section>
               <span>Data source</span>
@@ -2848,9 +2795,6 @@
       const alt = String(config.alt || caption || title || "Image").trim();
       return `
         <div class="media-widget media-widget-image-wrap media-fit-${escapeHtml(fit)}" data-media-kind="image" data-media-status="ready">
-          <div class="media-widget-header">
-            <span class="stat-lbl">${escapeHtml(title)}</span>
-          </div>
           <figure class="media-widget-stage image-widget-stage">
             <img class="media-widget-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="lazy" draggable="false">
           </figure>
@@ -2918,9 +2862,6 @@
       }
       return `
         <div class="media-widget media-widget-video-wrap" data-media-kind="video" data-media-status="ready">
-          <div class="media-widget-header">
-            <span class="stat-lbl">${escapeHtml(title)}</span>
-          </div>
           <div class="media-widget-stage video-widget-stage">${stage}</div>
           ${mediaCaptionMarkup(caption)}
         </div>`;
@@ -2972,7 +2913,6 @@
       if (content && (kind === "text" || kind === "markdown" || kind === "unknown")) {
         return `
           <div class="media-widget document-widget document-widget-text-mode" data-media-kind="document" data-document-type="${escapeHtml(kind)}" data-media-status="ready">
-            <div class="media-widget-header"><span class="stat-lbl">${escapeHtml(title)}</span></div>
             <div class="widget-content-well widget-library-surface runtime-monaco-library-surface">
               <div class="runtime-monaco-editor" data-editor-language="${escapeHtml(kind)}" role="region" aria-label="${escapeHtml(title)}"></div>
             </div>
@@ -2990,10 +2930,6 @@
       const previewLabel = kind === "pdf" ? `Page ${page}` : kind === "html" ? "Sandboxed preview" : "Document preview";
       return `
         <div class="media-widget document-widget" data-media-kind="document" data-document-type="${escapeHtml(kind)}" data-media-status="ready">
-          <div class="media-widget-header">
-            <span class="stat-lbl">${escapeHtml(title)}</span>
-            <span class="media-widget-meta">${escapeHtml(previewLabel)}</span>
-          </div>
           <div class="media-widget-stage document-widget-stage">
             <iframe class="media-widget-frame document-widget-frame" src="${escapeHtml(frameSrc)}" title="${escapeHtml(title)}" loading="lazy" sandbox=""></iframe>
           </div>
@@ -3088,10 +3024,6 @@
       const total = Number.isFinite(Number(data?.total)) ? Number(data.total) : rows.length;
       return `
         <div class="runtime-table-widget runtime-table-density-${tableDensity} widget-density-${densityTier}" data-density="${escapeHtml(densityTier)}" data-runtime-state="ready" data-runtime-source="${escapeHtml(runtimeSource(data))}" data-visible-rows="${visibleRows.length}" data-visible-columns="${visibleFields.length}">
-          <div class="runtime-table-header">
-            <span class="stat-lbl">${escapeHtml(title)}</span>
-            <span class="runtime-table-meta">${escapeHtml(runtimeMeta(`${visibleRows.length} of ${total} rows`, data))}</span>
-          </div>
           <div class="widget-content-well widget-library-surface runtime-table-library-surface">
             <div class="runtime-table-tanstack" data-table-renderer="tanstack" role="region" aria-label="${escapeHtml(title)}"></div>
           </div>
@@ -3351,10 +3283,6 @@
       const labels = points.slice(0, density === "large" ? 4 : 2).map((point) => `<span>${escapeHtml(point.label)}</span>`).join("");
       return `
         <div class="runtime-map-widget runtime-map-density-${escapeHtml(density)}" data-runtime-state="ready" data-runtime-source="${escapeHtml(runtimeSource(data))}" data-map-layer="${escapeHtml(config.layerType || "points")}" data-map-demo="${data?.demo ? "true" : "false"}">
-          <div class="runtime-map-header">
-            <span class="stat-lbl">${escapeHtml(title)}</span>
-            <span class="runtime-map-meta">${escapeHtml(runtimeMeta(`${points.length} point${points.length === 1 ? "" : "s"}`, data))}</span>
-          </div>
           <div class="widget-content-well widget-library-surface runtime-map-leaflet-surface">
             <div class="runtime-map-leaflet" role="region" aria-label="${escapeHtml(title)}"></div>
           </div>
@@ -3512,10 +3440,6 @@
       const initialDate = first.toISOString().split("T")[0];
       return `
         <div class="runtime-calendar-widget" data-runtime-state="ready" data-runtime-source="${escapeHtml(runtimeSource(data))}" data-calendar-demo="${data?.demo ? "true" : "false"}">
-          <div class="runtime-calendar-header">
-            <span class="stat-lbl">${escapeHtml(title)}</span>
-            <span class="runtime-calendar-meta">${escapeHtml(runtimeMeta(monthName, data))}</span>
-          </div>
           <div class="widget-content-well widget-library-surface runtime-calendar-fullcalendar-surface">
             <div class="runtime-calendar-fullcalendar" data-calendar-initial="${escapeHtml(initialDate)}" role="region" aria-label="${escapeHtml(monthName)}"></div>
           </div>
